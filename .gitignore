@@ -127,8 +127,6 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-scripts/calibration/.DS_Store
-.DS_Store
-.DS_Store
-.DS_Store
-scripts/.DS_Store
+
+# DS store
+**/.DS_Store
