@@ -97,8 +97,7 @@ def wavelength_calibration_cube(osiris_data, num_threads = 16, verbose=False, fr
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
     params = np.reshape(np.dstack((row_inputs, col_inputs)), (nx * ny, 2))
     args = zip(repeat(osiris_data), params, repeat(relevant_OH), repeat(verbose), repeat(frac_error))
-    print(0)
     offsets = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
     # frac error of 1e-3 corresponds to 3 sig figs
-#     offsets = np.reshape(offsets, (nx, ny)) * offsets[0].unit
-    return offsets
+    off_values = np.array(list(map(lambda x: x.value, offsets)))
+    return (np.reshape(off_values, (nx, ny)), offsets[0].unit)
