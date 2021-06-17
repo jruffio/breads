@@ -9,7 +9,7 @@ from itertools import repeat
 import sys # for printing in mp
 import dill # needed for mp on lambda functions
 
-def import_OH_line_data(filename = "../../data/OH_line_data.dat"):
+def import_OH_line_data(filename = "../data/OH_line_data.dat"):
     """
     Obtains wavelength-intensity data for OH lines using a given data file
     """
