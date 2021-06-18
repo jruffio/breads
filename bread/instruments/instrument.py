@@ -30,5 +30,10 @@ class Instrument:
         print("Instruments Implemented Yet:", self.instruments_implemented())
         raise NotImplementedError(
             "Import derived class corresponding to your instrument. You are currently using the base class.")
+        
+    def valid_data_check(self):
+        print("Instruments Implemented Yet:", self.instruments_implemented())
+        raise NotImplementedError(
+            "Import derived class corresponding to your instrument. You are currently using the base class.")
      
     
