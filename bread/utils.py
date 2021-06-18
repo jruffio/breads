@@ -18,6 +18,7 @@ from astropy import constants as const
 from scipy.interpolate import interpn
 from scipy.interpolate import interp1d
 from scipy.special import loggamma
+from py.path import local
 
 def read_osiris(filename,skip_baryrv=False):
     """
@@ -56,7 +57,7 @@ def read_osiris(filename,skip_baryrv=False):
 
 
 def return_64x19(cube):
-    #cube should be nz,ny,nx
+    # cube should be nz,ny,nx
     if np.size(cube.shape) == 3:
         _,ny,nx = cube.shape
     else:
@@ -81,3 +82,6 @@ def return_64x19(cube):
             return cube[dk:(dk+64),dl:(dl+19)]
     else:
         return cube
+
+def file_directory(file):
+    return os.path.dirname(local(file))
