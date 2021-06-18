@@ -17,6 +17,7 @@ from astropy import constants as const
 from scipy.interpolate import interpn
 from scipy.interpolate import interp1d
 from scipy.special import loggamma
+from py.path import local
 
 def return_64x19(cube):
     # cube should be nz,ny,nx

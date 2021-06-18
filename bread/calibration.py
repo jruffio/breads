@@ -2,6 +2,7 @@ import numpy as np
 import astropy.units as u
 import matplotlib.pyplot as plt
 import bread.utils as utils
+from bread.instruments.instrument import Instrument
 from scipy.optimize import curve_fit, lsq_linear
 from copy import copy
 import multiprocessing as mp
@@ -9,10 +10,12 @@ from itertools import repeat
 import sys # for printing in mp
 import dill # needed for mp on lambda functions
 
-def import_OH_line_data(filename = "../data/OH_line_data.dat"):
+def import_OH_line_data(filename = None):
     """
     Obtains wavelength-intensity data for OH lines using a given data file
     """
+    if filename is None:
+        filename = str(utils.file_directory(__file__) + "/../data/OH_line_data.dat")
     OH_lines_file = open(filename, 'r')
     OH_lines = [x for x in OH_lines_file.readlines() if x[0] != "#"]
     OH_wavelengths = np.array([]) * u.angstrom
@@ -62,7 +65,7 @@ def const_offset_initial_guess(wavs, one_pixel):
     offset = 0
     return G, offset, a, b, c
 
-def wavelength_calibration_one_pixel(osiris_data, location, relevant_OH, verbose=True, frac_error=1e-3):
+def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, verbose=True, frac_error=1e-3):
     """
     returns needed calibration for one spatial pixel
     """    
@@ -70,16 +73,16 @@ def wavelength_calibration_one_pixel(osiris_data, location, relevant_OH, verbose
     print(f"row: {row}, col: {col}")
     sys.stdout.flush()
     R = 4000
-    wavs = osiris_data[0] * u.micron
+    wavs = data.wavelengths * u.micron
     sky_model = np.zeros_like(wavs.value)
-    cube = osiris_data[1]
+    cube = data.spaxel_cube
     one_pixel = cube[:, row, col]
     fit_wrapper = lambda *p : const_offset_fitter(*p, one_pixel, relevant_OH, verbose=verbose)
     p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0], xtol=frac_error)
     return (p0[0] * u.nm, p0)
 
-def relevant_OH_line_data(osiris_data, OH_wavelengths, OH_intensity):
-    wavs = osiris_data[0] * u.micron
+def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
+    wavs = data.wavelengths * u.micron
     wav_low, wav_high = np.where(OH_wavelengths >= wavs[0])[0][0], np.where(OH_wavelengths <= wavs[-1])[0][-1]
     relevant_OH = OH_wavelengths[wav_low:wav_high], OH_intensity[wav_low:wav_high]
     return relevant_OH
@@ -87,16 +90,16 @@ def relevant_OH_line_data(osiris_data, OH_wavelengths, OH_intensity):
 def wavelength_calibration_one_pixel_wrapper(param):
     return wavelength_calibration_one_pixel(*param)[0]
 
-def wavelength_calibration_cube(osiris_data, num_threads = 16, verbose=False, frac_error=1e-3):
+def wavelength_calibration_cube(data: Instrument, num_threads = 16, verbose=False, frac_error=1e-3):
     # mp code
     my_pool = mp.Pool(processes=num_threads)
-    nz, nx, ny = osiris_data[1].shape
+    nz, nx, ny = data.spaxel_cube.shape
     OH_wavelengths, OH_intensity = import_OH_line_data()
-    relevant_OH = relevant_OH_line_data(osiris_data, OH_wavelengths, OH_intensity)
+    relevant_OH = relevant_OH_line_data(data, OH_wavelengths, OH_intensity)
     row_inputs = np.reshape(np.array(list(range(nx)) * ny), (nx, ny), order = 'F')
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
     params = np.reshape(np.dstack((row_inputs, col_inputs)), (nx * ny, 2))
-    args = zip(repeat(osiris_data), params, repeat(relevant_OH), repeat(verbose), repeat(frac_error))
+    args = zip(repeat(data), params, repeat(relevant_OH), repeat(verbose), repeat(frac_error))
     offsets = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
     # frac error of 1e-3 corresponds to 3 sig figs
     off_values = np.array(list(map(lambda x: x.value, offsets)))
