@@ -1,36 +1,37 @@
-from instrument import Instrument
+from bread.instruments.instrument import Instrument
 import bread.utils as utils
+from warnings import warn
+import astropy.io.fits as pyfits
+import numpy as np
+import ctypes
+from astropy.coordinates import SkyCoord, EarthLocation
+import astropy.units as u
+from astropy.time import Time
 
 class OSIRIS(Instrument):
-    def __init__(self, ins_type):
-        super(ins_type)
+    def __init__(self):
+        super().__init__('OSIRIS')
         
-    def __init__(self, filename):
-        super(ins_type)
-        self.read_data(filename)
-        self.check_valid_data()
-        
-    def __init__(self, wavelengths, spaxel_cube, noise_cube, bad_pixel_cube, bary_RV):
+    def manual_data_entry(self, wavelengths, spaxel_cube, noise_cube, bad_pixel_cube, bary_RV):
+        warn("when feeding data manually, ensure correct units")
         self.wavelengths = wavelengths
         self.spaxel_cube = spaxel_cube
         self.noise_cube = noise_cube
         self.bad_pixel_cube = bad_pixel_cube
-        self.bary_RV = bary_RV
+        self.bary_RV = bary_RV # in km/s
         self.valid_data_check()
-        
-    def valid_data_check(self):
 
-    def read_data(self, filename):
+    def read_data_file(self, filename, skip_baryrv=False):
         """
-        Read OSIRIS spectral cube
+        Read OSIRIS spectral cube, also checks validity at the end
         """
         with pyfits.open(filename) as hdulist:
             prihdr = hdulist[0].header
             curr_mjdobs = prihdr["MJD-OBS"]
             cube = np.rollaxis(np.rollaxis(hdulist[0].data,2),2,1)
-            cube = return_64x19(cube)
+            cube = utils.return_64x19(cube)
             noisecube = np.rollaxis(np.rollaxis(hdulist[1].data,2),2,1)
-            noisecube = return_64x19(noisecube)
+            noisecube = utils.return_64x19(noisecube)
             # cube = np.moveaxis(cube,0,2)
             badpixcube = np.rollaxis(np.rollaxis(hdulist[2].data,2),2,1)
             badpixcube = utils.return_64x19(badpixcube)
@@ -59,7 +60,16 @@ class OSIRIS(Instrument):
         self.bad_pixel_cube = badpixcube
         self.bary_RV = baryrv
         
+        self.valid_check_data()
+        
     def valid_check_data(self):
-        pass
+        assert self.spaxel_cube.ndim == 3, "Spaxel Cube Data must be 3-dimensional"
+        assert self.wavelengths.ndim == 1, "Wavelength Array must be 1-dimensional"
+        assert self.spaxel_cube.shape[0] == self.wavelengths.shape[0], \
+                        "Wavelength dimension of the spaxel data must be equal to size to wavelength array"
+        assert self.noise_cube is None or self.noise_cube.shape == self.spaxel_cube.shape, \
+                            "If present, noise cube must be of same size as spaxel data"
+        assert self.bad_pixel_cube is None or self.bad_pixel_cube.shape == self.spaxel_cube.shape, \
+                            "If present, bad pixel cube must be of same size as spaxel data"
         
     
