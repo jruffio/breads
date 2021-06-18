@@ -35,12 +35,16 @@ def gaussian1D(Xs, wavelength, fwhm):
     gauss = np.exp(- (Xs - mu) ** 2 / (2 * sig * sig))
     return gauss / (sig * np.sqrt(2 * np.pi))
 
-def sky_model_linear_parameters(wavs_val, sky_model, one_pixel):
+def sky_model_linear_parameters(wavs_val, sky_model, one_pixel, bad_pixel_threshold = 5):
     A = np.transpose(np.vstack([sky_model, wavs_val ** 2, wavs_val, np.ones_like(wavs_val)]))
     b = one_pixel
-    return lsq_linear(A, b)['x']
+    best_x = lsq_linear(A, b)['x']
+    best_model = np.dot(A, best_x)
+    res = b - best_model
+    good_pixels = np.where(np.abs(res) < bad_pixel_threshold * np.nanstd(res))[0] #find outliers
+    return lsq_linear(A[good_pixels, :], b[good_pixels])['x']
 
-def const_offset_fitter(wavs, offset, one_pixel, relevant_OH, verbose=True):
+def const_offset_fitter(wavs, offset, one_pixel, relevant_OH, verbose=True, bad_pixel_threshold = 5):
     """
     Fitter used for obtaining a constant offset correction for wavelength calibration
     """
@@ -50,7 +54,8 @@ def const_offset_fitter(wavs, offset, one_pixel, relevant_OH, verbose=True):
         fwhm = wav / 4000
         sky_model += relevant_OH[1][i] * \
                     (gaussian1D(wavs, wav+offset*u.nm, fwhm) * (wavs[1]-wavs[0])).to('').value 
-    G, a, b, c = sky_model_linear_parameters(wavs.value, sky_model, one_pixel)
+    G, a, b, c = sky_model_linear_parameters(wavs.value, sky_model, one_pixel,
+                                             bad_pixel_threshold = bad_pixel_threshold)
     if verbose:
         print(G, offset, a, b, c)
     return G * sky_model + (a * (wavs.value ** 2) + b * wavs.value + c)
@@ -65,7 +70,8 @@ def const_offset_initial_guess(wavs, one_pixel):
     offset = 0
     return G, offset, a, b, c
 
-def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, verbose=True, frac_error=1e-3):
+def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, verbose=True, 
+                                     frac_error=1e-3, bad_pixel_threshold=5):
     """
     returns needed calibration for one spatial pixel
     """    
@@ -77,7 +83,8 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, ve
     sky_model = np.zeros_like(wavs.value)
     cube = data.spaxel_cube
     one_pixel = cube[:, row, col]
-    fit_wrapper = lambda *p : const_offset_fitter(*p, one_pixel, relevant_OH, verbose=verbose)
+    fit_wrapper = lambda *p : const_offset_fitter(*p, one_pixel, relevant_OH,
+                                                  verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
     p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0], xtol=frac_error)
     return (p0[0] * u.nm, p0)
 
@@ -90,7 +97,8 @@ def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
 def wavelength_calibration_one_pixel_wrapper(param):
     return wavelength_calibration_one_pixel(*param)[0]
 
-def wavelength_calibration_cube(data: Instrument, num_threads = 16, verbose=False, frac_error=1e-3):
+def wavelength_calibration_cube(data: Instrument, num_threads = 16, 
+                                verbose=False, frac_error=1e-3, bad_pixel_threshold = 5):
     # mp code
     my_pool = mp.Pool(processes=num_threads)
     nz, nx, ny = data.spaxel_cube.shape
@@ -99,7 +107,8 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, verbose=Fals
     row_inputs = np.reshape(np.array(list(range(nx)) * ny), (nx, ny), order = 'F')
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
     params = np.reshape(np.dstack((row_inputs, col_inputs)), (nx * ny, 2))
-    args = zip(repeat(data), params, repeat(relevant_OH), repeat(verbose), repeat(frac_error))
+    args = zip(repeat(data), params, repeat(relevant_OH), 
+               repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold))
     offsets = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
     # frac error of 1e-3 corresponds to 3 sig figs
     off_values = np.array(list(map(lambda x: x.value, offsets)))
