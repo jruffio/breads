@@ -87,11 +87,17 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
     if R is None:
         fit_wrapper = lambda *p : const_offset_fitter(*p, one_pixel, relevant_OH,
                                                       verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
-        p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0, 4000], xtol=frac_error)
+        try:
+            p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0, 4000], xtol=frac_error)
+        except e:
+            return ((np.nan, np.nan), u.nm)
     else:
         fit_wrapper = lambda *p : const_offset_fitter(*p, R, one_pixel, relevant_OH,
                                                       verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
-        p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0], xtol=frac_error)
+        try:
+            p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0], xtol=frac_error)
+        except e:
+            return ((np.nan, np.nan), u.nm)
     return (tuple(p0), u.nm)
 
 def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
