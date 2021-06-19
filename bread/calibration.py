@@ -79,9 +79,7 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
     """    
     row, col = location
     print(f"row: {row}, col: {col}")
-    sys.stdout.flush()
     wavs = data.wavelengths * u.micron
-    sky_model = np.zeros_like(wavs.value)
     cube = data.spaxel_cube
     one_pixel = cube[:, row, col]
     if R is None:
