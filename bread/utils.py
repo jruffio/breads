@@ -37,7 +37,8 @@ def return_64x19(cube):
         ccmap =np.zeros((3,3))
         for dk in range(3):
             for dl in range(3):
-                ccmap[dk,dl] = np.nansum(im[dk:np.min([dk+64,ny]),dl:np.min([dl+19,nx])]*onesmask[0:(np.min([dk+64,ny])-dk),0:(np.min([dl+19,nx])-dl)])
+                ccmap[dk,dl] = np.nansum(im[dk:np.min([dk+64,ny]),dl:np.min([dl+19,nx])]
+                                         *onesmask[0:(np.min([dk+64,ny])-dk),0:(np.min([dl+19,nx])-dl)])
         dk,dl = np.unravel_index(np.nanargmax(ccmap),ccmap.shape)
         if np.size(cube.shape) == 3:
             return cube[:,dk:(dk+64),dl:(dl+19)]

@@ -9,17 +9,14 @@ import astropy.units as u
 from astropy.time import Time
 
 class OSIRIS(Instrument):
-    def __init__(self):
+    def __init__(self, filename=None, skip_baryrv=False):
         super().__init__('OSIRIS')
-        
-    def manual_data_entry(self, wavelengths, spaxel_cube, noise_cube, bad_pixel_cube, bary_RV):
-        warn("when feeding data manually, ensure correct units")
-        self.wavelengths = wavelengths
-        self.spaxel_cube = spaxel_cube
-        self.noise_cube = noise_cube
-        self.bad_pixel_cube = bad_pixel_cube
-        self.bary_RV = bary_RV # in km/s
-        self.valid_data_check()
+        if filename is None:
+            warning_text = "No data file provided. " + \
+            "Please manually add data using OSIRIS.manual_data_entry() or add data using OSIRIS.read_data_file()"
+            warn(warning_text)
+        else:
+            self.read_data_file(filename, skip_baryrv=skip_baryrv)
 
     def read_data_file(self, filename, skip_baryrv=False):
         """
@@ -60,16 +57,6 @@ class OSIRIS(Instrument):
         self.bad_pixel_cube = badpixcube
         self.bary_RV = baryrv
         
-        self.valid_check_data()
-        
-    def valid_check_data(self):
-        assert self.spaxel_cube.ndim == 3, "Spaxel Cube Data must be 3-dimensional"
-        assert self.wavelengths.ndim == 1, "Wavelength Array must be 1-dimensional"
-        assert self.spaxel_cube.shape[0] == self.wavelengths.shape[0], \
-                        "Wavelength dimension of the spaxel data must be equal to size to wavelength array"
-        assert self.noise_cube is None or self.noise_cube.shape == self.spaxel_cube.shape, \
-                            "If present, noise cube must be of same size as spaxel data"
-        assert self.bad_pixel_cube is None or self.bad_pixel_cube.shape == self.spaxel_cube.shape, \
-                            "If present, bad pixel cube must be of same size as spaxel data"
+        self.valid_data_check()
         
     
