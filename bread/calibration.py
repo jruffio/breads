@@ -116,5 +116,6 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000,
     args = zip(repeat(data), params, repeat(relevant_OH), repeat(R),
                repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold))
     p0s = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
-    p0s_values = p0s_values = np.array(list(map(lambda x: x[0], p0s)))
-    return (np.reshape(p0s, (nx, ny, len(p0s[0][0]))), p0s[0][1])
+    print(p0s)
+    p0s_values = np.array(list(map(lambda x: x[0], p0s)))
+    return (np.reshape(p0s_values, (nx, ny, len(p0s[0][0]))), p0s[0][1])
