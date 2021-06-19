@@ -94,8 +94,8 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
                                                       verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
         try:
             p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0], xtol=frac_error)
-        except e:
-            return ((np.nan, np.nan), u.nm)
+        except:
+            return ((np.nan,), u.nm)
     return (tuple(p0), u.nm)
 
 def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
@@ -120,6 +120,5 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000,
     args = zip(repeat(data), params, repeat(relevant_OH), repeat(R),
                repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold))
     p0s = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
-    print(p0s)
     p0s_values = np.array(list(map(lambda x: x[0], p0s)))
     return (np.reshape(p0s_values, (nx, ny, len(p0s[0][0]))), p0s[0][1])
