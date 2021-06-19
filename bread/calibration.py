@@ -92,7 +92,7 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
         fit_wrapper = lambda *p : const_offset_fitter(*p, R, one_pixel, relevant_OH,
                                                       verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
         p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0], xtol=frac_error)
-    return (p0, u.nm)
+    return (tuple(p0), u.nm)
 
 def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
     wavs = data.wavelengths * u.micron
@@ -101,7 +101,7 @@ def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
     return relevant_OH
 
 def wavelength_calibration_one_pixel_wrapper(param):
-    return wavelength_calibration_one_pixel(*param)[0]
+    return wavelength_calibration_one_pixel(*param)
 
 def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000,
                                 verbose=False, frac_error=1e-3, bad_pixel_threshold = 5):
@@ -116,7 +116,5 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000,
     args = zip(repeat(data), params, repeat(relevant_OH), repeat(R),
                repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold))
     p0s = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
-    print(p0s)
-    # frac error of 1e-3 corresponds to 3 sig figs
-    p0s_values = np.array(list(map(lambda x: x[0], p0s)))
-    return (np.reshape(p0s_values, (nx, ny)), u.nm)
+    p0s_values = p0s_values = np.array(list(map(lambda x: x[0], p0s)))
+    return (np.reshape(p0s, (nx, ny, len(p0s[0][0]))), p0s[0][1])
