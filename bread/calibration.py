@@ -38,6 +38,8 @@ def gaussian1D(Xs, wavelength, fwhm):
 def sky_model_linear_parameters(wavs_val, sky_model, one_pixel, bad_pixel_threshold = 5):
     A = np.transpose(np.vstack([sky_model, wavs_val ** 2, wavs_val, np.ones_like(wavs_val)]))
     b = one_pixel
+    good_pixels = np.where(~np.isclose(b, 0))[0] #find edge pixels
+    A, b = A[good_pixels, :], b[good_pixels]
     best_x = lsq_linear(A, b)['x']
     best_model = np.dot(A, best_x)
     res = b - best_model
