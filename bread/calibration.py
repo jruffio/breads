@@ -89,6 +89,8 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
     
     good_pixels = np.where(~np.isclose(one_pixel, 0))[0] #find edge pixels
     
+#     print(good_pixels)
+    
     if len(good_pixels) == 0:
         # if data is all zero
         warn(f"data at row: {row}, col: {col} is all 0")
@@ -97,7 +99,8 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
         else:
             return ((np.nan, ), u.nm, None)
     
-    wavs, one_pixel, relevant_OH = wavs[good_pixels], one_pixel[good_pixels], relevant_OH[good_pixels]
+#     wavs, one_pixel = wavs[good_pixels], one_pixel[good_pixels]
+#     relevant_OH = relevant_OH[0][good_pixels], relevant_OH[1][good_pixels]
     
     if R is None:
         fit_wrapper = lambda *p : const_offset_fitter(*p, one_pixel, relevant_OH,
