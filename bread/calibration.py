@@ -7,8 +7,9 @@ from scipy.optimize import curve_fit, lsq_linear
 from copy import copy
 import multiprocessing as mp
 from itertools import repeat
-import sys # for printing in mp
+import sys # for printing in mp, and error prints
 import dill # needed for mp on lambda functions
+from warnings import warn
 
 def import_OH_line_data(filename = None):
     """
@@ -36,10 +37,9 @@ def gaussian1D(Xs, wavelength, fwhm):
     return gauss / (sig * np.sqrt(2 * np.pi))
 
 def sky_model_linear_parameters(wavs_val, sky_model, one_pixel, bad_pixel_threshold = 5):
-    A = np.transpose(np.vstack([sky_model, wavs_val ** 2, wavs_val, np.ones_like(wavs_val)]))
+    A = np.transpose(np.vstack([sky_model, wavs_val ** 4, wavs_val ** 3, wavs_val ** 2,  
+                                wavs_val, np.ones_like(wavs_val)]))
     b = one_pixel
-    good_pixels = np.where(~np.isclose(b, 0))[0] #find edge pixels
-    A, b = A[good_pixels, :], b[good_pixels]
     best_x = lsq_linear(A, b)['x']
     best_model = np.dot(A, best_x)
     res = b - best_model
@@ -58,11 +58,13 @@ def const_offset_fitter(wavs, offset, R, one_pixel, relevant_OH,
         fwhm = wav / R
         sky_model += relevant_OH[1][i] * \
                     (gaussian1D(wavs, wav+offset*u.nm, fwhm) * (wavs[1]-wavs[0])).to('').value 
-    G, a, b, c = sky_model_linear_parameters(wavs.value, sky_model, one_pixel,
+    G, a, b, c, d, e = sky_model_linear_parameters(wavs.value, sky_model, one_pixel,
                                              bad_pixel_threshold = bad_pixel_threshold)
     if verbose:
-        print(G, offset, R, a, b, c)
-    return G * sky_model + (a * (wavs.value ** 2) + b * wavs.value + c)
+        print(G, offset, R, a, b, c, d, e)
+    x = wavs.value
+    return G * sky_model + (a * (x ** 4) + b * (x ** 3) + 
+                            c * (x ** 2) + d * x + e)
 
 def const_offset_initial_guess(wavs, one_pixel):
     roll_avg = np.zeros_like(one_pixel)
@@ -84,27 +86,51 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
     wavs = data.wavelengths * u.micron
     cube = data.spaxel_cube
     one_pixel = cube[:, row, col]
+    
+    good_pixels = np.where(~np.isclose(one_pixel, 0))[0] #find edge pixels
+    
+    if len(good_pixels) == 0:
+        # if data is all zero
+        warn(f"data at row: {row}, col: {col} is all 0")
+        if R is None:
+            return ((np.nan, np.nan), u.nm, None)
+        else:
+            return ((np.nan, ), u.nm, None)
+    
+    wavs, one_pixel, relevant_OH = wavs[good_pixels], one_pixel[good_pixels], relevant_OH[good_pixels]
+    
     if R is None:
         fit_wrapper = lambda *p : const_offset_fitter(*p, one_pixel, relevant_OH,
                                                       verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
         try:
-            p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0, 4000], xtol=frac_error)
-        except e:
-            return ((np.nan, np.nan), u.nm)
+            p0, pCov = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0, 4000], xtol=frac_error)
+            bad_fit = ((np.isinf(pCov)).any()) \
+                        or (abs(p0[0]) < abs(np.sqrt(pCov[0, 0]))) or (abs(p0[1]) < abs(np.sqrt(pCov[1, 1])))
+            if bad_fit: # fit is not great
+                warn(f"data at row: {row}, col: {col} did not give a good fit")
+                return ((np.nan, np.nan), u.nm, (p0, pCov))
+        except Exception as e:
+            warn(f"data at row: {row}, col: {col} did not fit: \n" + str(e))
+            return ((np.nan, np.nan), u.nm, None)
     else:
         fit_wrapper = lambda *p : const_offset_fitter(*p, R, one_pixel, relevant_OH,
                                                       verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
         try:
-            p0, _ = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0], xtol=frac_error)
-        except:
-            return ((np.nan,), u.nm)
-    return (tuple(p0), u.nm)
+            p0, pCov = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0], xtol=frac_error)
+            bad_fit = ((np.isinf(pCov)).any()) or (abs(p0[0]) < abs(np.sqrt(pCov[0, 0])))
+            if bad_fit: # fit is not great
+                warn(f"data at row: {row}, col: {col} did not give a good fit")
+                return ((np.nan,), u.nm, (p0, pCov))
+        except Exception as e:
+            warn(f"data at row: {row}, col: {col} did not fit: \n" + str(e))
+            return ((np.nan,), u.nm, None)
+    return (tuple(p0), u.nm, pCov)
 
 def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
     wavs = data.wavelengths * u.micron
     wav_low, wav_high = np.where(OH_wavelengths >= wavs[0])[0][0], np.where(OH_wavelengths <= wavs[-1])[0][-1]
     relevant_OH = OH_wavelengths[wav_low:wav_high], OH_intensity[wav_low:wav_high]
-    return relevant_OH
+    return np.array(relevant_OH)
 
 def wavelength_calibration_one_pixel_wrapper(param):
     return wavelength_calibration_one_pixel(*param)
@@ -115,6 +141,7 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000,
     my_pool = mp.Pool(processes=num_threads)
     nz, nx, ny = data.spaxel_cube.shape
     OH_wavelengths, OH_intensity = import_OH_line_data()
+    data = remove_zeroes(data)
     relevant_OH = relevant_OH_line_data(data, OH_wavelengths, OH_intensity)
     row_inputs = np.reshape(np.array(list(range(nx)) * ny), (nx, ny), order = 'F')
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
