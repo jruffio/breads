@@ -127,6 +127,9 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
     return (tuple(p0), u.nm, pCov)
 
 def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
+    """
+    returns the relevant OH line data based on wavelength range of instrument
+    """
     wavs = data.wavelengths * u.micron
     wav_low, wav_high = np.where(OH_wavelengths >= wavs[0])[0][0], np.where(OH_wavelengths <= wavs[-1])[0][-1]
     relevant_OH = OH_wavelengths[wav_low:wav_high], OH_intensity[wav_low:wav_high]
