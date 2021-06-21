@@ -53,7 +53,6 @@ def const_offset_fitter(wavs, offset, R, one_pixel, relevant_OH,
     """
     wavs = wavs.astype(float) * u.micron
     sky_model = np.zeros_like(wavs.value)
-    
     for i, wav in enumerate(relevant_OH[0]):
         fwhm = wav / R
         sky_model += relevant_OH[1][i] * \
@@ -89,8 +88,6 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
     
     good_pixels = np.where(~np.isclose(one_pixel, 0))[0] #find edge pixels
     
-#     print(good_pixels)
-    
     if len(good_pixels) == 0:
         # if data is all zero
         warn(f"data at row: {row}, col: {col} is all 0")
@@ -98,7 +95,7 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
             return ((np.nan, np.nan), u.nm, None)
         else:
             return ((np.nan, ), u.nm, None)
-    
+        
     wavs, one_pixel = wavs[good_pixels], one_pixel[good_pixels]
     
     if R is None:
@@ -125,6 +122,7 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
                 return ((np.nan,), u.nm, (p0, pCov))
         except Exception as e:
             warn(f"data at row: {row}, col: {col} did not fit: \n" + str(e))
+            raise e
             return ((np.nan,), u.nm, None)
     return (tuple(p0), u.nm, pCov)
 
@@ -132,7 +130,7 @@ def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
     wavs = data.wavelengths * u.micron
     wav_low, wav_high = np.where(OH_wavelengths >= wavs[0])[0][0], np.where(OH_wavelengths <= wavs[-1])[0][-1]
     relevant_OH = OH_wavelengths[wav_low:wav_high], OH_intensity[wav_low:wav_high]
-    return np.array(relevant_OH)
+    return relevant_OH
 
 def wavelength_calibration_one_pixel_wrapper(param):
     return wavelength_calibration_one_pixel(*param)
@@ -143,7 +141,6 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000,
     my_pool = mp.Pool(processes=num_threads)
     nz, nx, ny = data.spaxel_cube.shape
     OH_wavelengths, OH_intensity = import_OH_line_data()
-    data = remove_zeroes(data)
     relevant_OH = relevant_OH_line_data(data, OH_wavelengths, OH_intensity)
     row_inputs = np.reshape(np.array(list(range(nx)) * ny), (nx, ny), order = 'F')
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
