@@ -99,8 +99,7 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
         else:
             return ((np.nan, ), u.nm, None)
     
-#     wavs, one_pixel = wavs[good_pixels], one_pixel[good_pixels]
-#     relevant_OH = relevant_OH[0][good_pixels], relevant_OH[1][good_pixels]
+    wavs, one_pixel = wavs[good_pixels], one_pixel[good_pixels]
     
     if R is None:
         fit_wrapper = lambda *p : const_offset_fitter(*p, one_pixel, relevant_OH,
