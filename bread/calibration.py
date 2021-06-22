@@ -91,7 +91,7 @@ def bounds_Rp0(R, zero_order, margin):
     return (bounds, Rp0)
 
 def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=4000.0, zero_order=False,
-                                     verbose=True, frac_error=1e-3, bad_pixel_threshold=5, margin=1e-10):
+                                     verbose=True, frac_error=1e-3, bad_pixel_threshold=5, margin=1e-12):
     """
     returns needed calibration for one spatial pixel
     """    
