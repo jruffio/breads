@@ -10,6 +10,7 @@ from itertools import repeat
 import sys # for printing in mp, and error prints
 import dill # needed for mp on lambda functions
 from warnings import warn
+import astropy.constants as const
 
 def import_OH_line_data(filename = None):
     """
@@ -51,7 +52,8 @@ def offset_fitter(wavs, off0, off1, R, one_pixel, relevant_OH,
     """
     Fitter used for obtaining a constant offset correction for wavelength calibration
     """
-    wavs = wavs.astype(float) * u.micron + off0*u.nm + off1*wavs.astype(float)*u.nm 
+    wavs = wavs.astype(float)
+    wavs = (wavs*u.micron-off0*u.nm) * (1 - (off1 * (u.km/u.s) / const.c).to(''))
     sky_model = np.zeros_like(wavs.value)
     for i, wav in enumerate(relevant_OH[0]):
         fwhm = wav / R
@@ -108,12 +110,12 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
     if len(good_pixels) == 0:
         # if data is all zero
         warn(f"data at row: {row}, col: {col} is all 0")
-        return ((np.nan, np.nan, np.nan), u.nm, None)
+        return ((np.nan, np.nan, np.nan), (u.nm, (u.km/u.s), None), None)
         
     wavs, one_pixel = wavs[good_pixels], one_pixel[good_pixels]
 
     fit_wrapper = lambda *p : offset_fitter(*p, one_pixel, relevant_OH,
-                                                    verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
+                                                verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
     try:
         p0, pCov = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0., 0., Rp0], xtol=frac_error, bounds=bounds)
         # bad_fit = ((np.isinf(pCov)).any()) \
@@ -125,9 +127,9 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
         #     return ((np.nan, np.nan, np.nan), u.nm, (p0, pCov))
     except Exception as e:
         warn(f"data at row: {row}, col: {col} did not fit: \n" + str(e))
-        return ((np.nan, np.nan, np.nan), u.nm, None)
+        return ((np.nan, np.nan, np.nan), (u.nm, (u.km/u.s), None), None)
     
-    return (tuple(p0), u.nm, pCov)
+    return (tuple(p0), (u.nm, (u.km/u.s), None), pCov)
 
 def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
     """
