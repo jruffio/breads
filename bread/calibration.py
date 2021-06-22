@@ -143,7 +143,7 @@ def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
 def wavelength_calibration_one_pixel_wrapper(param):
     return wavelength_calibration_one_pixel(*param)
 
-def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000,
+def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero_order=False,
                                 verbose=False, frac_error=1e-3, bad_pixel_threshold = 5):
     # mp code
     my_pool = mp.Pool(processes=num_threads)
@@ -153,7 +153,7 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000,
     row_inputs = np.reshape(np.array(list(range(nx)) * ny), (nx, ny), order = 'F')
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
     params = np.reshape(np.dstack((row_inputs, col_inputs)), (nx * ny, 2))
-    args = zip(repeat(data), params, repeat(relevant_OH), repeat(R),
+    args = zip(repeat(data), params, repeat(relevant_OH), repeat(R), repeat(zero_order),
                repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold))
     p0s = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
     p0s_values = np.array(list(map(lambda x: x[0], p0s)))
