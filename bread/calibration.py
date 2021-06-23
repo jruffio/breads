@@ -53,7 +53,7 @@ def offset_fitter(wavs, off0, off1, R, one_pixel, relevant_OH,
     Fitter used for obtaining a constant offset correction for wavelength calibration
     """
     wavs = wavs.astype(float)
-    wavs = (wavs*u.micron-off0*u.nm) * (1 - (off1 * (u.km/u.s) / const.c).to(''))
+    wavs = wavs * u.micron * (1 + off1) + off0 * u.angstrom
     sky_model = np.zeros_like(wavs.value)
     for i, wav in enumerate(relevant_OH[0]):
         fwhm = wav / R
@@ -110,7 +110,7 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
     if len(good_pixels) == 0:
         # if data is all zero
         warn(f"data at row: {row}, col: {col} is all 0")
-        return ((np.nan, np.nan, np.nan), (u.nm, (u.km/u.s), None), None)
+        return ((np.nan, np.nan, np.nan), (u.angstrom, None, None), None)
         
     wavs, one_pixel = wavs[good_pixels], one_pixel[good_pixels]
 
@@ -124,12 +124,12 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
         #                     or (abs(p0[2]) < abs(np.sqrt(pCov[2, 2])))
         # if bad_fit: # fit is not great
         #     warn(f"data at row: {row}, col: {col} did not give a good fit")
-        #     return ((np.nan, np.nan, np.nan), u.nm, (p0, pCov))
+        #     return ((np.nan, np.nan, np.nan), u.angstrom, (p0, pCov))
     except Exception as e:
         warn(f"data at row: {row}, col: {col} did not fit: \n" + str(e))
-        return ((np.nan, np.nan, np.nan), (u.nm, (u.km/u.s), None), None)
+        return ((np.nan, np.nan, np.nan), (u.angstrom, None, None), None)
     
-    return (tuple(p0), (u.nm, (u.km/u.s), None), pCov)
+    return (tuple(p0), (u.angstrom, None, None), pCov)
 
 def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
     """
