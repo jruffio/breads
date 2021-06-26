@@ -96,17 +96,13 @@ def bounds_Rp0(R, zero_order, margin):
         Rp0 = R
     return (bounds, Rp0)
 
-def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=4000.0, zero_order=False,
+def wavelength_calibration_one_pixel(wavs, one_pixel, location, relevant_OH, R=4000.0, zero_order=False,
                                      verbose=True, frac_error=1e-3, bad_pixel_threshold=5, margin=1e-12, center_data=False):
     """
     returns needed calibration for one spatial pixel
-    """    
+    """
     row, col = location
     print(f"row: {row}, col: {col}")
-    wavs = data.wavelengths * u.micron
-    cube = data.spaxel_cube
-    one_pixel = cube[:, row, col]
-
     bounds, Rp0 = bounds_Rp0(R, zero_order, margin)
 
     good_pixels = np.where(~np.isclose(one_pixel, 0))[0] #find edge pixels
@@ -159,9 +155,10 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero
     row_inputs = np.reshape(np.array(list(range(nx)) * ny), (nx, ny), order = 'F')
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
     params = np.reshape(np.dstack((row_inputs, col_inputs)), (nx * ny, 2))
-    args = zip(repeat(data), params, repeat(relevant_OH), repeat(R), repeat(zero_order),
-               repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold), 
-               repeat(margin), repeat(center_data))
+    args = zip(repeat(data.wavelengths), np.transpose(data.spaxel_cube.reshape((nz, nx * ny), order='C')), 
+                params, repeat(relevant_OH), repeat(R), repeat(zero_order),
+                repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold), 
+                repeat(margin), repeat(center_data))
     p0s = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
     p0s_values = np.array(list(map(lambda x: x[0], p0s)))
     return (np.reshape(p0s_values, (nx, ny, len(p0s[0][0]))), p0s[0][1])
