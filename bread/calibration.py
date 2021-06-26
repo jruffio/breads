@@ -48,12 +48,16 @@ def sky_model_linear_parameters(wavs_val, sky_model, one_pixel, bad_pixel_thresh
     return lsq_linear(A[good_pixels, :], b[good_pixels])['x']
 
 def offset_fitter(wavs, off0, off1, R, one_pixel, relevant_OH,
-                        verbose=True, bad_pixel_threshold = 5):
+                        verbose=True, bad_pixel_threshold = 5, center_data = False):
     """
     Fitter used for obtaining a constant offset correction for wavelength calibration
     """
-    wavs = wavs.astype(float)
-    wavs = wavs * u.micron * (1 + off1) + off0 * u.angstrom
+    wavs = wavs.astype(float) * u.micron
+    if center_data:
+        wavs = wavs + (wavs - np.mean(wavs)) * off1 + off0 * u.angstrom
+    else:
+        wavs = wavs * (1 + off1) + off0 * u.angstrom
+    
     sky_model = np.zeros_like(wavs.value)
     for i, wav in enumerate(relevant_OH[0]):
         fwhm = wav / R
@@ -93,7 +97,7 @@ def bounds_Rp0(R, zero_order, margin):
     return (bounds, Rp0)
 
 def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=4000.0, zero_order=False,
-                                     verbose=True, frac_error=1e-3, bad_pixel_threshold=5, margin=1e-12):
+                                     verbose=True, frac_error=1e-3, bad_pixel_threshold=5, margin=1e-12, center_data = False):
     """
     returns needed calibration for one spatial pixel
     """    
@@ -115,7 +119,8 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
     wavs, one_pixel = wavs[good_pixels], one_pixel[good_pixels]
 
     fit_wrapper = lambda *p : offset_fitter(*p, one_pixel, relevant_OH,
-                                                verbose=verbose, bad_pixel_threshold = bad_pixel_threshold)
+                                                verbose=verbose, bad_pixel_threshold = bad_pixel_threshold, 
+                                                center_data = center_data)
     try:
         p0, pCov = curve_fit(fit_wrapper, wavs, one_pixel, p0=[0., 0., Rp0], xtol=frac_error, bounds=bounds)
         # bad_fit = ((np.isinf(pCov)).any()) \
@@ -144,8 +149,7 @@ def wavelength_calibration_one_pixel_wrapper(param):
     return wavelength_calibration_one_pixel(*param)
 
 def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero_order=False,
-                                verbose=False, frac_error=1e-3, bad_pixel_threshold = 5):
-    # mp code
+                                verbose=False, frac_error=1e-3, bad_pixel_threshold = 5, center_data=False):
     my_pool = mp.Pool(processes=num_threads)
     nz, nx, ny = data.spaxel_cube.shape
     OH_wavelengths, OH_intensity = import_OH_line_data()
@@ -154,7 +158,7 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
     params = np.reshape(np.dstack((row_inputs, col_inputs)), (nx * ny, 2))
     args = zip(repeat(data), params, repeat(relevant_OH), repeat(R), repeat(zero_order),
-               repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold))
+               repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold), repeat(center_data))
     p0s = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
     p0s_values = np.array(list(map(lambda x: x[0], p0s)))
     return (np.reshape(p0s_values, (nx, ny, len(p0s[0][0]))), p0s[0][1])
