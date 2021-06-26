@@ -97,7 +97,7 @@ def bounds_Rp0(R, zero_order, margin):
     return (bounds, Rp0)
 
 def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=4000.0, zero_order=False,
-                                     verbose=True, frac_error=1e-3, bad_pixel_threshold=5, margin=1e-12, center_data = False):
+                                     verbose=True, frac_error=1e-3, bad_pixel_threshold=5, margin=1e-12, center_data=False):
     """
     returns needed calibration for one spatial pixel
     """    
@@ -132,6 +132,7 @@ def wavelength_calibration_one_pixel(data: Instrument, location, relevant_OH, R=
         #     return ((np.nan, np.nan, np.nan), u.angstrom, (p0, pCov))
     except Exception as e:
         warn(f"data at row: {row}, col: {col} did not fit: \n" + str(e))
+        raise e
         return ((np.nan, np.nan, np.nan), (u.angstrom, None, None), None)
     
     return (tuple(p0), (u.angstrom, None, None), pCov)
@@ -149,7 +150,8 @@ def wavelength_calibration_one_pixel_wrapper(param):
     return wavelength_calibration_one_pixel(*param)
 
 def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero_order=False,
-                                verbose=False, frac_error=1e-3, bad_pixel_threshold = 5, center_data=False):
+                                verbose=False, frac_error=1e-3, bad_pixel_threshold = 5, 
+                                margin=1e-12, center_data=False):
     my_pool = mp.Pool(processes=num_threads)
     nz, nx, ny = data.spaxel_cube.shape
     OH_wavelengths, OH_intensity = import_OH_line_data()
@@ -158,7 +160,8 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
     params = np.reshape(np.dstack((row_inputs, col_inputs)), (nx * ny, 2))
     args = zip(repeat(data), params, repeat(relevant_OH), repeat(R), repeat(zero_order),
-               repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold), repeat(center_data))
+               repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold), 
+               repeat(margin), repeat(center_data))
     p0s = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
     p0s_values = np.array(list(map(lambda x: x[0], p0s)))
     return (np.reshape(p0s_values, (nx, ny, len(p0s[0][0]))), p0s[0][1])
