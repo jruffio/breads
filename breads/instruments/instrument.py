@@ -1,5 +1,5 @@
 import os
-import bread.utils as utils
+import breads.utils as utils
 from warnings import warn
 
 class Instrument:

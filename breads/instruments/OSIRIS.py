@@ -1,5 +1,5 @@
-from bread.instruments.instrument import Instrument
-import bread.utils as utils
+from breads.instruments.instrument import Instrument
+import breads.utils as utils
 from warnings import warn
 import astropy.io.fits as pyfits
 import numpy as np

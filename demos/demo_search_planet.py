@@ -1,4 +1,4 @@
-from bread.instruments.OSIRIS import OSIRIS
+from breads.instruments.OSIRIS import OSIRIS
 import numpy as np
 import matplotlib.pyplot as plt
 
