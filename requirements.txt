@@ -1,0 +1,7 @@
+astropy>=4
+dill
+matplotlib
+numpy
+pip
+py
+scipy
