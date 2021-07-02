@@ -1,10 +1,13 @@
 from setuptools import setup, find_packages
 from pkg_resources import parse_requirements
+from os.path import dirname
+from py.path import local
 
-with open("./README.md", "r", encoding="utf-8") as fh:
+directory_name = dirname(local(__file__))
+with open(directory_name + "/README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-with open('./requirements.txt') as requirements:
+with open(directory_name + '/requirements.txt') as requirements:
     setup(
         name='breads',
         version='0.0.1',
@@ -19,3 +22,4 @@ with open('./requirements.txt') as requirements:
         include_package_data=True,
         package_data={'': ['data/*']},
     )
+    
