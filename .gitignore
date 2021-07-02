@@ -128,6 +128,9 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# DS store
+# DS store, VS code
 **/.DS_Store
 .vscode/*
+
+# fits data files
+**/*.fits
