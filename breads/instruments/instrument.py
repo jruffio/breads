@@ -11,6 +11,7 @@ class Instrument:
         self.noise_cube = None
         self.bad_pixel_cube = None
         self.bary_RV = None
+        self.refpos = [0,0]
         
     def check_instrument_type(self):
         implemented = self.instruments_implemented()
