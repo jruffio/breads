@@ -52,9 +52,9 @@ class OSIRIS(Instrument):
             baryrv = None
 
         self.wavelengths = wvs
-        self.spaxel_cube = cube
-        self.noise_cube = noisecube
-        self.bad_pixel_cube = badpixcube
+        self.data = cube
+        self.noise = noisecube
+        self.bad_pixels = badpixcube
         self.bary_RV = baryrv
         
         self.valid_data_check()

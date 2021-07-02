@@ -149,13 +149,13 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero
                                 verbose=False, frac_error=1e-3, bad_pixel_threshold = 5, 
                                 margin=1e-12, center_data=False):
     my_pool = mp.Pool(processes=num_threads)
-    nz, nx, ny = data.spaxel_cube.shape
+    nz, nx, ny = data.data.shape
     OH_wavelengths, OH_intensity = import_OH_line_data()
     relevant_OH = relevant_OH_line_data(data, OH_wavelengths, OH_intensity)
     row_inputs = np.reshape(np.array(list(range(nx)) * ny), (nx, ny), order = 'F')
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
     params = np.reshape(np.dstack((row_inputs, col_inputs)), (nx * ny, 2))
-    args = zip(repeat(data.wavelengths), np.transpose(data.spaxel_cube.reshape((nz, nx * ny), order='C')), 
+    args = zip(repeat(data.wavelengths), np.transpose(data.data.reshape((nz, nx * ny), order='C')), 
                 params, repeat(relevant_OH), repeat(R), repeat(zero_order),
                 repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold), 
                 repeat(margin), repeat(center_data))
