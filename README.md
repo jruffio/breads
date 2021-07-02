@@ -1,2 +1,2 @@
 # breads
-Broad Repository for Exoplanet Analysis and DiscoverieS
+Broad Repository for Exoplanet Analysis, Discovery, and Spectroscopy

@@ -17,7 +17,7 @@ def import_OH_line_data(filename = None):
     Obtains wavelength-intensity data for OH lines using a given data file
     """
     if filename is None:
-        filename = str(utils.file_directory(__file__) + "/../data/OH_line_data.dat")
+        filename = str(utils.file_directory(__file__) + "/data/OH_line_data.dat")
     OH_lines_file = open(filename, 'r')
     OH_lines = [x for x in OH_lines_file.readlines() if x[0] != "#"]
     OH_wavelengths = np.array([]) * u.angstrom
