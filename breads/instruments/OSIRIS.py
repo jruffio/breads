@@ -26,12 +26,12 @@ class OSIRIS(Instrument):
             prihdr = hdulist[0].header
             curr_mjdobs = prihdr["MJD-OBS"]
             cube = np.rollaxis(np.rollaxis(hdulist[0].data,2),2,1)
-            cube = utils.return_64x19(cube)
+            cube = return_64x19(cube)
             noisecube = np.rollaxis(np.rollaxis(hdulist[1].data,2),2,1)
-            noisecube = utils.return_64x19(noisecube)
+            noisecube = return_64x19(noisecube)
             # cube = np.moveaxis(cube,0,2)
             badpixcube = np.rollaxis(np.rollaxis(hdulist[2].data,2),2,1)
-            badpixcube = utils.return_64x19(badpixcube)
+            badpixcube = return_64x19(badpixcube)
             # badpixcube = np.moveaxis(badpixcube,0,2)
             badpixcube = badpixcube.astype(dtype=ctypes.c_double)
             badpixcube[np.where(badpixcube!=0)] = 1
@@ -58,5 +58,32 @@ class OSIRIS(Instrument):
         self.bary_RV = baryrv
         
         self.valid_data_check()
-        
-    
+
+def return_64x19(cube):
+    # cube should be nz,ny,nx
+    if np.size(cube.shape) == 3:
+        _, ny, nx = cube.shape
+    else:
+        ny, nx = cube.shape
+    onesmask = np.ones((64, 19))
+    if (ny != 64 or nx != 19):
+        mask = copy(cube).astype(np.float)
+        mask[np.where(mask == 0)] = np.nan
+        mask[np.where(np.isfinite(mask))] = 1
+        if np.size(cube.shape) == 3:
+            im = np.nansum(mask, axis=0)
+        else:
+            im = mask
+        ccmap = np.zeros((3, 3))
+        for dk in range(3):
+            for dl in range(3):
+                ccmap[dk, dl] = np.nansum(im[dk:np.min([dk + 64, ny]), dl:np.min([dl + 19, nx])]
+                                          * onesmask[0:(np.min([dk + 64, ny]) - dk),
+                                            0:(np.min([dl + 19, nx]) - dl)])
+        dk, dl = np.unravel_index(np.nanargmax(ccmap), ccmap.shape)
+        if np.size(cube.shape) == 3:
+            return cube[:, dk:(dk + 64), dl:(dl + 19)]
+        else:
+            return cube[dk:(dk + 64), dl:(dl + 19)]
+    else:
+        return cube
