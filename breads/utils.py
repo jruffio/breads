@@ -37,20 +37,24 @@ def broaden(wvs,spectrum,R,mppool=None):
         Broadened spectrum
     """
     if mppool is None:
+        # Each wavelength processed sequentially
         return _task_broaden((np.arange(np.size(spectrum)).astype(np.int),wvs,spectrum,R))
     else:
         conv_spectrum = np.zeros(spectrum.shape)
 
+        # Divide the spectrum into 100 chunks to be parallelized
         chunk_size=100
         N_chunks = np.size(spectrum)//chunk_size
         indices_list = []
         for k in range(N_chunks-1):
             indices_list.append(np.arange(k*chunk_size,(k+1)*chunk_size).astype(np.int))
         indices_list.append(np.arange((N_chunks-1)*chunk_size,np.size(spectrum)).astype(np.int))
+        # Start parallelization
         outputs_list = mppool.map(_task_broaden, zip(indices_list,
                                                                itertools.repeat(wvs),
                                                                itertools.repeat(spectrum),
                                                                itertools.repeat(R)))
+        # Retrieve results
         for indices,out in zip(indices_list,outputs_list):
             conv_spectrum[indices] = out
 
@@ -66,24 +70,23 @@ def _task_broaden(paras):
     if type(R) is np.ndarray:
         Rvec = R
     else:
-        Rvec = np.zeros(wvs.shape) + R
+        Rvec = np.zeros(wvs.shape) + R # Resolution is assumed constant
 
     conv_spectrum = np.zeros(np.size(indices))
     dwvs = wvs[1::] - wvs[0:(np.size(wvs) - 1)]
-    med_dwv = np.median(dwvs)
+    dwvs = np.append(dwvs,dwvs[-1])    # Size of each wavelength bin
     for l, k in enumerate(indices):
-        pwv = wvs[k]
-        FWHM = pwv / Rvec[k]
+        FWHM = wvs[k] / Rvec[k] # Full width at half maximum of the LSF at current wavelength
+        sig = FWHM / (2 * np.sqrt(2 * np.log(2))) # standard deviation of the LSF (1D gaussian)
+        w = int(np.round(sig / dwvs[k] * 10.)) # Number of bins on each side defining the spec window
 
-        sig = FWHM / (2 * np.sqrt(2 * np.log(2)))
-        w = int(np.round(sig / med_dwv * 10.))
-
+        # Extract a smaller a small window around the current wavelength
         stamp_spec = spectrum[np.max([0, k - w]):np.min([np.size(spectrum), k + w])]
         stamp_wvs = wvs[np.max([0, k - w]):np.min([np.size(wvs), k + w])]
-        stamp_dwvs = stamp_wvs[1::] - stamp_wvs[0:(np.size(stamp_spec) - 1)]
+        stamp_dwvs = dwvs[np.max([0, k - w]):np.min([np.size(wvs), k + w])]
 
-        gausskernel = 1 / (np.sqrt(2 * np.pi) * sig) * np.exp(-0.5 * (stamp_wvs - pwv) ** 2 / sig ** 2)
-        conv_spectrum[l] = np.nansum(gausskernel[1::]*stamp_spec[1::]*stamp_dwvs)/np.nansum(gausskernel[1::]*stamp_dwvs)
+        gausskernel = 1 / (np.sqrt(2 * np.pi) * sig) * np.exp(-0.5 * (stamp_wvs - wvs[k]) ** 2 / sig ** 2)
+        conv_spectrum[l] = np.nansum(gausskernel*stamp_spec*stamp_dwvs) / np.nansum(gausskernel*stamp_dwvs)
 
     return conv_spectrum
 
