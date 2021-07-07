@@ -3,14 +3,18 @@ import astropy.units as u
 import matplotlib.pyplot as plt
 import breads.utils as utils
 from breads.instruments.instrument import Instrument
-from scipy.optimize import curve_fit, lsq_linear
-from copy import copy
+from scipy.optimize import curve_fit, lsq_linear, minimize
+from copy import deepcopy
 import multiprocessing as mp
 from itertools import repeat
 import sys # for printing in mp, and error prints
-import dill # needed for mp on lambda functions
 from warnings import warn
 import astropy.constants as const
+from photutils.aperture import EllipticalAperture, aperture_photometry
+import astropy.io.fits as pyfits
+
+#############################
+# OH line calibration code
 
 def import_OH_line_data(filename = None):
     """
@@ -145,9 +149,9 @@ def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
 def wavelength_calibration_one_pixel_wrapper(param):
     return wavelength_calibration_one_pixel(*param)
 
-def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero_order=False,
+def sky_calibration(data: Instrument, num_threads = 16, R=4000, zero_order=False,
                                 verbose=False, frac_error=1e-3, bad_pixel_threshold = 5, 
-                                margin=1e-12, center_data=False):
+                                margin=1e-12, center_data=False, calib_filename=None):
     my_pool = mp.Pool(processes=num_threads)
     nz, nx, ny = data.data.shape
     OH_wavelengths, OH_intensity = import_OH_line_data()
@@ -161,4 +165,124 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero
                 repeat(margin), repeat(center_data))
     p0s = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
     p0s_values = np.array(list(map(lambda x: x[0], p0s)))
-    return (np.reshape(p0s_values, (nx, ny, len(p0s[0][0]))), p0s[0][1])
+    return SkyCalibration(data, np.reshape(p0s_values, (nx, ny, len(p0s[0][0]))), \
+        p0s[0][1], calib_filename, center_data)
+
+def corrected_wavelengths(data, off0, off1, center_data):
+    wavs = data.wavelengths.astype(float) * u.micron
+    if center_data:
+        wavs = wavs + (wavs - np.mean(wavs)) * off1 + off0 * u.angstrom
+    else:
+        wavs = wavs * (1 + off1) + off0 * u.angstrom
+    return wavs
+
+class SkyCalibration:
+    def __init__(self, data: Instrument, fit_values, unit, calib_filename, center_data):
+        if calib_filename is None:
+            calib_filename = "./calib_file.fits"
+        self.calib_filename = calib_filename
+        self.unit = unit
+        self.fit_values = fit_values
+        corr_wavs = np.zeros_like(data.data)
+        nz, nx, ny = corr_wavs.shape
+        for i in range(nx):
+            for j in range(ny):
+                corr_wavs[:, i, j] = \
+                    corrected_wavelengths(data, fit_values[i, j, 0], fit_values[i, j, 1], center_data)
+        self.corrected_wavelengths = corr_wavs
+        hdulist = pyfits.HDUList()
+        hdulist.append(pyfits.PrimaryHDU(data=corr_wavs,
+                                        header=pyfits.Header(cards={"TYPE": "corrected_wavelengths"})))
+        hdulist.append(pyfits.ImageHDU(data=fit_values[:, :, 0],
+                                        header=pyfits.Header(cards={"TYPE": "const"})))
+        hdulist.append(pyfits.ImageHDU(data=fit_values[:, :, 1],
+                                        header=pyfits.Header(cards={"TYPE": "RV"})))                         
+        hdulist.append(pyfits.ImageHDU(data=fit_values[:, :, 2],
+                                        header=pyfits.Header(cards={"TYPE": "R"})))                 
+        try:
+            hdulist.writeto(calib_filename, overwrite=True)
+        except TypeError:
+            hdulist.writeto(calib_filename, clobber=True)
+        hdulist.close()
+
+#############################
+# Telluric Calibration code
+
+def mask_sky_remnant(slice, sigma=0.3, n_sigmas=2):
+    """
+    Given a slice of data cube at particular wavelength, 
+    sets values below threshold to np.nan. 
+    Deepcopys passed in argument.
+
+    Useful for when the sky subtracted to get standard star image 
+    was itself an image of the star at an offset.
+
+    Default for threshold set to standard deviation of noise in 
+    s161106_a007002_Kbb_020 far from star
+    """
+    slice = deepcopy(slice)
+    slice[slice < (-sigma * n_sigmas)] = np.nan
+    return slice
+
+def gaussian2D(nx, ny, sig_x, sig_y, A, mu_x, mu_y):
+    """
+    Two Dimensional Gaussian for getting PSF for different wavelength slices
+    """
+    x_vals, y_vals = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+    gauss = A * np.exp(-((x_vals - mu_x) ** 2) / (2 * sig_x * sig_x)) * \
+        np.exp(-((y_vals - mu_y) ** 2) / (2 * sig_y * sig_y))
+    return gauss
+
+def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
+    residual=False, mask=False, minimize_method='nelder-mead', sigma=0.3, n_sigmas=2):
+    """
+    psf_func should be such that the first four arguments are nx, ny, sig_x, sig_y
+    if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters
+    """
+    if mask:
+        img_slice = mask_sky_remnant(img_slice, sigma, n_sigmas)
+    if psf_func == gaussian2D and x0 is None:
+        x0 = [2, 2, np.nanmax(img_slice), *np.unravel_index(np.nanargmax(img_slice), img_slice.shape)]
+    else:
+        assert (x0 is not None), \
+            "if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters"
+    nx, ny = img_slice.shape
+    wrapper = lambda params: np.nansum((psf_func(nx, ny, *params) - img_slice) ** 2)
+    fit = minimize(wrapper, x0, method=minimize_method)
+    if fit.success:
+        fit_values = fit.x
+    else:
+        return(np.nan, np.nan, fit.x * np.nan, np.nan * np.zeros((nx, ny)))
+    if residual:
+        residuals = img_slice - psf_func(nx, ny, *fit_values)
+    else:
+        residual = None
+    return (fit_values[0], fit_values[1], fit_values, residuals)
+
+def telluric_calibration(data: Instrument, star_spectrum,
+        psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
+        aperture_sigmas=5):
+    """
+    aperture using for aperture photometry is of the size: 
+    sig_x * aperture_sigmas, sig_y * aperture_sigmas
+    """
+    sig_xs, sig_ys, all_fit_values, residuals, fluxs = [], [], [], [], []
+    if x0 is None:
+        img_mean = np.nanmean(data.data, axis=0)
+        x0 = [2, 2, np.nanmax(img_mean), *np.unravel_index(np.nanargmax(img_mean), img_mean.shape)]
+    for i, img_slice in enumerate(data.data):
+        if verbose and (i % 200 == 0):
+            print(f'index {i} wavelength {data.wavelengths[i]}')
+        sig_x, sig_y, fit_vals, resid = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
+            residual=residual, mask=mask, sigma=sigma, n_sigmas=n_sigmas)
+        sig_xs += [sig_x]
+        sig_ys += [sig_y]
+        all_fit_values += [fit_vals]
+        residuals += [resid]
+        aper_photo = aperture_photometry(img_slice, \
+            EllipticalAperture(fit_vals[3:][::-1], aperture_sigmas*sig_y, aperture_sigmas*sig_x)) 
+        # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
+        fluxs += [aper_photo['aperture_sum'][0]]
+
+    return tuple(map(np.array, (sig_xs, sig_ys, all_fit_values, residuals, fluxs)))
+

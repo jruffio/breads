@@ -1,5 +1,5 @@
 astropy>=4
-dill
+photutils
 matplotlib
 numpy
 pip
