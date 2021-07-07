@@ -34,8 +34,8 @@ class OSIRIS(Instrument):
             badpixcube = utils.return_64x19(badpixcube)
             # badpixcube = np.moveaxis(badpixcube,0,2)
             badpixcube = badpixcube.astype(dtype=ctypes.c_double)
-            badpixcube[np.where(badpixcube==0)] = np.nan
             badpixcube[np.where(badpixcube!=0)] = 1
+            badpixcube[np.where(badpixcube==0)] = np.nan
 
         nz,ny,nx = cube.shape
         init_wv = prihdr["CRVAL1"]/1000. # wv for first slice in mum
