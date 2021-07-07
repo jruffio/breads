@@ -1,6 +1,5 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from glob import glob
 import os
 from copy import copy
 import ctypes
@@ -11,10 +10,8 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 import multiprocessing as mp
 import pandas as pd
 import itertools
-from scipy.optimize import lsq_linear
 from scipy import interpolate
 from astropy import constants as const
-from scipy.interpolate import interpn
 from scipy.interpolate import interp1d
 from scipy.special import loggamma
 from py.path import local

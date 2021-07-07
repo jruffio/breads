@@ -3,14 +3,16 @@ import astropy.units as u
 import matplotlib.pyplot as plt
 import breads.utils as utils
 from breads.instruments.instrument import Instrument
-from scipy.optimize import curve_fit, lsq_linear
-from copy import copy
+from scipy.optimize import curve_fit, lsq_linear, minimize
+from copy import deepcopy
 import multiprocessing as mp
 from itertools import repeat
 import sys # for printing in mp, and error prints
-import dill # needed for mp on lambda functions
 from warnings import warn
 import astropy.constants as const
+
+#############################
+# OH line calibration code
 
 def import_OH_line_data(filename = None):
     """
@@ -162,3 +164,60 @@ def wavelength_calibration_cube(data: Instrument, num_threads = 16, R=4000, zero
     p0s = my_pool.map(wavelength_calibration_one_pixel_wrapper, args)
     p0s_values = np.array(list(map(lambda x: x[0], p0s)))
     return (np.reshape(p0s_values, (nx, ny, len(p0s[0][0]))), p0s[0][1])
+
+class SkyCalibration:
+    pass
+
+#############################
+# Telluric Calibration code
+
+def mask_sky_remnant(slice, sigma=0.3, n_sigmas=2):
+    """
+    Given a slice of data cube at particular wavelength, 
+    sets values below threshold to np.nan. 
+    Deepcopys passed in argument.
+
+    Useful for when the sky subtracted to get standard star image 
+    was itself an image of the star at an offset.
+
+    Default for threshold set to standard deviation of noise in 
+    s161106_a007002_Kbb_020 far from star
+    """
+    slice = deepcopy(slice)
+    slice[slice < (-sigma * n_sigmas)] = np.nan
+    return slice
+
+def gaussian2D(nx, ny, sig_x, sig_y, A, mu_x, mu_y):
+    """
+    Two Dimensional Gaussian for getting PSF for different wavelength slices
+    """
+    x_vals, y_vals = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+    gauss = A * np.exp(-((x_vals - mu_x) ** 2) / (2 * sig_x * sig_x)) * \
+        np.exp(-((y_vals - mu_y) ** 2) / (2 * sig_y * sig_y))
+    return gauss
+
+def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2):
+    """
+    psf_func should be such that the first four arguments are nx, ny, sig_x, sig_y
+    if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters
+    """
+    if mask:
+        img_slice = mask_sky_remnant(img_slice, sigma, n_sigmas)
+    if psf_func == gaussian2D and x0 is None:
+        x0 = [2, 2, np.nanmax(img_slice), *np.unravel_index(np.nanargmax(img_slice), img_slice.shape)]
+    else:
+        assert (x0 is not None), \
+            "if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters"
+    nx, ny = img_slice.shape
+    wrapper = lambda params: np.nansum((psf_func(nx, ny, *params) - img_slice) ** 2)
+    fit_values = minimize(wrapper, x0).x
+    if residual:
+        residuals = img_slice - psf_func(nx, ny, *fit_values)
+    else:
+        residual = None
+    return (fit_values[0], fit_values[1], fit_values[2:], residuals)
+
+
+        
+
+
