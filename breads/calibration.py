@@ -10,6 +10,7 @@ from itertools import repeat
 import sys # for printing in mp, and error prints
 from warnings import warn
 import astropy.constants as const
+from photutils.aperture import EllipticalAperture, aperture_photometry
 
 #############################
 # OH line calibration code
@@ -196,7 +197,8 @@ def gaussian2D(nx, ny, sig_x, sig_y, A, mu_x, mu_y):
         np.exp(-((y_vals - mu_y) ** 2) / (2 * sig_y * sig_y))
     return gauss
 
-def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2):
+def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
+    residual=False, mask=False, minimize_method='nelder-mead', sigma=0.3, n_sigmas=2):
     """
     psf_func should be such that the first four arguments are nx, ny, sig_x, sig_y
     if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters
@@ -210,14 +212,37 @@ def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, residual=False, mask=Fal
             "if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters"
     nx, ny = img_slice.shape
     wrapper = lambda params: np.nansum((psf_func(nx, ny, *params) - img_slice) ** 2)
-    fit_values = minimize(wrapper, x0).x
+    fit = minimize(wrapper, x0, method=minimize_method)
+    if fit.success:
+        fit_values = fit.x
+    else:
+        return(np.nan, np.nan, fit.x * np.nan, np.nan * np.zeros((nx, ny)))
     if residual:
         residuals = img_slice - psf_func(nx, ny, *fit_values)
     else:
         residual = None
-    return (fit_values[0], fit_values[1], fit_values[2:], residuals)
+    return (fit_values[0], fit_values[1], fit_values, residuals)
 
+def telluric_calibration(data: Instrument,
+        psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
+        aperture_sigmas=5):
+    sig_xs, sig_ys, all_fit_values, residuals, fluxs = [], [], [], [], []
+    if x0 is None:
+        img_mean = np.nanmean(data.data, axis=0)
+        x0 = [2, 2, np.nanmax(img_mean), *np.unravel_index(np.nanargmax(img_mean), img_mean.shape)]
+    for i, img_slice in enumerate(data.data):
+        if verbose and (i % 200 == 0):
+            print(f'index {i} wavelength {data.wavelengths[i]}')
+        sig_x, sig_y, fit_vals, resid = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
+            residual=residual, mask=mask, sigma=sigma, n_sigmas=n_sigmas)
+        sig_xs += [sig_x]
+        sig_ys += [sig_y]
+        all_fit_values += [fit_vals]
+        residuals += [resid]
+        aper_photo = aperture_photometry(img_slice, \
+            EllipticalAperture(fit_vals[3:][::-1], aperture_sigmas*sig_y, aperture_sigmas*sig_x)) 
+        # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
+        fluxs += [aper_photo['aperture_sum'][0]]
 
-        
-
+    return tuple(map(np.array, (sig_xs, sig_ys, all_fit_values, residuals, fluxs)))
 
