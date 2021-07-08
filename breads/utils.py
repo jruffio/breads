@@ -85,6 +85,8 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
 
     N_valid_pix = ny*nx
     if med_spec is None:
+        _cube = copy(cube)
+        _cube[np.where(_cube<=0)] = np.nan
         med_spec = np.nanmedian(cube,axis=(1,2))
     new_badpixcube[np.where(cube==0)] = np.nan
 
