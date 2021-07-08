@@ -280,12 +280,12 @@ def parse_star_spectrum(wavs, star_spectrum, R):
             spec = np.array(hdulist[0].data)
     else:
         spec = star_spectrum[1]
-
-    # reduce to ~1 OoM
-    spec = spec / (10 ** (np.floor(np.log10(np.median(spec)))))
     
     indices = np.logical_and(wavs[0] < wavs_spec, wavs_spec < wavs[-1])
     wavs_spec, spec = wavs_spec[indices], spec[indices]
+
+    # reduce to ~1 OoM
+    spec = spec / (10 ** (np.floor(np.log10(np.median(spec)))))
 
     return np.interp(wavs, wavs_spec, utils.broaden(wavs_spec, spec, R))
 
