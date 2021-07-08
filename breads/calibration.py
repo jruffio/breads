@@ -1,6 +1,5 @@
 import numpy as np
 import astropy.units as u
-import matplotlib.pyplot as plt
 import breads.utils as utils
 from breads.instruments.instrument import Instrument
 from scipy.optimize import curve_fit, lsq_linear, minimize
@@ -20,6 +19,8 @@ def import_OH_line_data(filename = None):
     """
     Obtains wavelength-intensity data for OH lines using a given data file
     """
+    # would be worthwhile to, in future, add this to __init__ of breads.calibration
+    # and make a global (OH_wavelengths, OH_intensity)
     if filename is None:
         filename = str(utils.file_directory(__file__) + "/data/OH_line_data.dat")
     OH_lines_file = open(filename, 'r')
@@ -259,10 +260,45 @@ def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
         residual = None
     return (fit_values[0], fit_values[1], fit_values, residuals)
 
+def parse_star_spectrum(wavs, star_spectrum, R):
+    # would be worthwhile to, in future, add this to __init__ of breads.calibration
+    # and make a global scipy.interpolate.interp1d function for using always
+    # (have it work over all filters for OSIRIS, etc.) 
+    assert(len(star_spectrum) == 2), \
+        "incorrect star_spectrum format, run \"help(telluric_calibration)\""
+
+    if type(star_spectrum[0]) == str:
+        assert(star_spectrum[0].endswith(".fits")), "file must be of .fits format"
+        with pyfits.open(star_spectrum[0]) as hdulist:
+            wavs_spec = np.array(hdulist[0].data / 1e4) # angstroms to microns
+    else:
+        wavs_spec = star_spectrum[0]
+
+    if type(star_spectrum[1]) == str:
+        assert(star_spectrum[0].endswith(".fits")), "file must be of .fits format"
+        with pyfits.open(star_spectrum[1]) as hdulist:
+            spec = np.array(hdulist[0].data)
+    else:
+        spec = star_spectrum[1]
+
+    # reduce to ~1 OoM
+    spec = spec / (10 ** (np.floor(np.log10(np.median(spec)))))
+    
+    indices = np.logical_and(wavs[0] < wavs_spec, wavs_spec < wavs[-1])
+    wavs_spec, spec = wavs_spec[indices], spec[indices]
+
+    return np.interp(wavs, wavs_spec, utils.broaden(wavs_spec, spec, R))
+
 def telluric_calibration(data: Instrument, star_spectrum,
         psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
-        aperture_sigmas=5):
+        aperture_sigmas=5, R=4000):
     """
+    star_spectrum needs to be a 2-tuple or array-like of length 2. 
+    It can either be (wavelength data-array, flux data-array) or (wavelength datafile, flux datafile). 
+    The file must be .fits, probably downloaded from Vizier. 
+    Units of wavelengths must be angstroms for files (default for Vizier), and angstroms for array.
+    star_spectrum need not be of the same resolution, length, or in any way related to data.
+
     aperture using for aperture photometry is of the size: 
     sig_x * aperture_sigmas, sig_y * aperture_sigmas
     """
@@ -284,5 +320,6 @@ def telluric_calibration(data: Instrument, star_spectrum,
         # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
         fluxs += [aper_photo['aperture_sum'][0]]
 
-    return tuple(map(np.array, (sig_xs, sig_ys, all_fit_values, residuals, fluxs)))
+    transmission = fluxs / parse_star_spectrum(data.wavelengths, star_spectrum, R)
+    return tuple(map(np.array, (sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission)))
 

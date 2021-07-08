@@ -7,6 +7,7 @@ import ctypes
 from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
 from astropy.time import Time
+from copy import copy
 
 class OSIRIS(Instrument):
     def __init__(self, filename=None, skip_baryrv=False):
