@@ -180,7 +180,7 @@ def corrected_wavelengths(data, off0, off1, center_data):
 class SkyCalibration:
     def __init__(self, data: Instrument, fit_values, unit, calib_filename, center_data):
         if calib_filename is None:
-            calib_filename = "./calib_file.fits"
+            calib_filename = "./sky_calib_file.fits"
         self.calib_filename = calib_filename
         self.unit = unit
         self.fit_values = fit_values
@@ -289,7 +289,7 @@ def parse_star_spectrum(wavs, star_spectrum, R):
 
     return np.interp(wavs, wavs_spec, utils.broaden(wavs_spec, spec, R))
 
-def telluric_calibration(data: Instrument, star_spectrum,
+def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
         psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
         aperture_sigmas=5, R=4000):
     """
@@ -321,5 +321,34 @@ def telluric_calibration(data: Instrument, star_spectrum,
         fluxs += [aper_photo['aperture_sum'][0]]
 
     transmission = fluxs / parse_star_spectrum(data.wavelengths, star_spectrum, R)
-    return tuple(map(np.array, (sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission)))
+    return TelluricCalibration(data, *tuple(map(np.array, \
+        (sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission))), calib_filename)
 
+class TelluricCalibration:
+    def __init__(self, data: Instrument, \
+        sig_xs, sig_ys, fit_values, residuals, fluxs, transmission, calib_filename):
+        if calib_filename is None:
+            calib_filename = "./telluric_calib_file.fits"
+        self.calib_filename = calib_filename
+        self.sig_xs = sig_xs
+        self.sig_ys = sig_ys
+        self.fit_values = fit_values
+        self.residuals = residuals
+        self.fluxs = fluxs
+        self.transmission = transmission
+        self.wavelengths = data.wavelengths
+
+        hdulist = pyfits.HDUList()
+        hdulist.append(pyfits.PrimaryHDU(data=self.transmission,
+                                        header=pyfits.Header(cards={"TYPE": "transmission"})))
+        hdulist.append(pyfits.ImageHDU(data=self.wavelengths,
+                                        header=pyfits.Header(cards={"TYPE": "wavelengths"})))
+        hdulist.append(pyfits.ImageHDU(data=self.sig_xs,
+                                        header=pyfits.Header(cards={"TYPE": "Sigma X"})))
+        hdulist.append(pyfits.ImageHDU(data=self.sig_ys,
+                                        header=pyfits.Header(cards={"TYPE": "Sigma Y"})))                                         
+        try:
+            hdulist.writeto(calib_filename, overwrite=True)
+        except TypeError:
+            hdulist.writeto(calib_filename, clobber=True)
+        hdulist.close()
