@@ -45,29 +45,29 @@ if __name__ == "__main__":
     # Definition of the (extra) parameters for splinefm()
     fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
                 "boxw":1,"nodes":20,"psfw":1.2,"nodes":20,"badpixfraction":0.75}
-    if 0: # Test your forward model
-        # Example code to test the forward model
+
+    if 0: # Example code to test the forward model
+        nonlin_paras = [-15,14,18] # x (pix),y (pix), rv (km/s)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
         # s is the vector of uncertainties corresponding to d
-        nonlin_paras = [-15,14,18] # x (pix),y (pix), rv (km/s)
         d, M, s = splinefm(nonlin_paras,dataobj,**fm_paras)
 
-        # plt.imshow(M,interpolation="nearest",aspect="auto")
-        # plt.show()
-        #
-        # validpara = np.where(np.sum(M,axis=0)!=0)
-        # M = M[:,validpara[0]]
-        # d = d / s
-        # M = M / s[:, None]
-        # paras = lsq_linear(M, d).x
+        validpara = np.where(np.sum(M,axis=0)!=0)
+        M = M[:,validpara[0]]
+        d = d / s
+        M = M / s[:, None]
+        from scipy.optimize import lsq_linear
+        paras = lsq_linear(M, d).x
+        m = np.dot(M,paras)
 
-        print(np.sum(M,axis=0))
-        print(np.where(np.sum(M,axis=0)==0))
-        plt.plot(d/np.nanmean(d),label="data")
-        plt.plot(M[:,0]/np.nanmean(M[:,0]),label="planet model")
-        # starlight_model = np.dot(M[:, 1::],np.ones(M.shape[1]-1))
-        # plt.plot(starlight_model/np.nanmean(starlight_model),label="sum starlight model")
+        plt.subplot(2,1,1)
+        plt.plot(d,label="data")
+        plt.plot(m,label="model")
+        plt.plot(paras[0]*M[:,0],label="planet model")
+        plt.plot(m-paras[0]*M[:,0],label="starlight model")
+        plt.subplot(2,1,2)
+        plt.plot(M[:,0]/np.max(M[:,0]),label="planet model")
         for k in range(M.shape[-1]-1):
             plt.plot(M[:,k+1]/np.nanmax(M[:,k+1]),label="starlight model {0}".format(k+1))
         plt.legend()
@@ -81,8 +81,6 @@ if __name__ == "__main__":
     rvs = np.array([-15])
     ys = np.arange(ny)
     xs = np.arange(nx)
-    # ys = np.array([31])
-    # xs = np.array([11])
     out = search_planet([rvs,ys,xs],dataobj,splinefm,fm_paras,numthreads=32)
     N_linpara = (out.shape[-1]-2)//2
     print(out.shape)

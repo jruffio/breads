@@ -60,7 +60,7 @@ def splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spect
     """
     Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
     The spline are defined with a linear model. Each spaxel (if applicable) is independently modeled which means the
-    number of linear parameters increases as nodes*boxw^2+1.
+    number of linear parameters increases as N_nodes*boxw^2+1.
 
     Args:
         nonlin_paras: [rv,y,x], Non-linear parameters of the model, which are the radial velocity and the position of
@@ -80,6 +80,11 @@ def splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spect
         badpixfraction: Max fraction of bad pixels in data.
 
     Returns:
+        d: Data as a 1d vector with bad pixels removed (no nans)
+        M: Linear model as a matrix of shape (Nd,Np) with bad pixels removed (no nans). Nd is the size of the data
+            vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
+        s: Noise vector (standard deviation) as a 1d vector matching d.
+
     """
     rv,y,x = nonlin_paras
     nz, ny, nx = cubeobj.data.shape

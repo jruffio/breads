@@ -4,6 +4,26 @@ from scipy.optimize import lsq_linear
 from scipy.special import loggamma
 
 def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
+    """
+    Fit a forard model to data returning probabilities and best fit linear parameters.
+
+    Args:
+        nonlin_paras: [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
+            parameters depends on the forward model defined.
+        dataobj: A data object of type breads.instruments.instrument.Instrument to be analyzed.
+        fm_func: A forward model function. See breads.fm.template.template() for an example.
+        fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
+        computeH0: If true (default), compute the probability of the model removing the first element of the linear
+            model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
+            non-linear parameters
+
+    Returns:
+        log_prob: Probability of the model marginalized over linear parameters.
+        log_prob_H0: Probability of the model without the planet marginalized over linear parameters.
+        rchi2: noise scaling factor
+        linparas: Best fit linear parameters
+        linparas_err: Uncertainties of best fit linear parameters
+    """
     print(nonlin_paras)
     d,M,s = fm_func(nonlin_paras,dataobj,**fm_paras)
     N_linpara = M.shape[1]

@@ -18,6 +18,9 @@ except ImportError:
 
 
 def process_chunk(args):
+    """
+    Process for search_planet()
+    """
     nonlin_paras_list, dataobj, fm_func, fm_paras = args
 
     for k, nonlin_paras in enumerate(zip(*nonlin_paras_list)):
@@ -34,6 +37,40 @@ def process_chunk(args):
 
 
 def search_planet(para_vecs,dataobj,fm_func,fm_paras,numthreads=None):
+    """
+    Planet detection, CCF, or grid search routine.
+    It fits for the non linear parameters of a forward model over a user-specified grid of values while marginalizing
+    over the linear parameters. For a planet detection or CCF routine, choose a forward model (fm_func) and provide a
+    grid of x,y, and RV values.
+
+    SNR (detection maps or CCFs) can be computed as:
+    N_linpara = (out.shape[-1]-2)//2
+    snr = out[...,3]/out[...,3+N_linpara]
+
+    The natural logarithm of the Bayes factor can be computed as
+    bayes_factor = out[...,0] - out[...,1]
+
+    Args:
+        para_vecs: [vec1,vec2,...] List of 1d arrays defining the sampling of the grid of non-linear parameters such as
+            rv, y, x. The meaning and number of non-linear parameters depends on the forward model defined.
+        dataobj: A data object of type breads.instruments.instrument.Instrument to be analyzed.
+        fm_func: A forward model function. See breads.fm.template.template() for an example.
+        fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
+        numthreads: Number of processes to be used in parallelization. Non parallization if defined as None (default).
+
+    Returns:
+        Out: An array of dimension (Nnl_1,Nnl_2,....,3+Nl*2) containing the marginalized probabilities, the noise
+            scaling factor, and best fit linear parameters with associated uncertainties calculated over the grid of
+            non-linear parameters. (Nnl_1,Nnl_2,..) is the shape of the non linear parameter grid with Nnl_1 the size of
+            para_vecs[1] and so on. Nl is the number of linear parameters in the forward model. The last dimension
+            is defined as follow:
+                Out[:,...,0]: Probability of the model marginalized over linear parameters.
+                Out[:,...,1]: Probability of the model without the planet marginalized over linear parameters.
+                Out[:,...,2]: noise scaling factor
+                Out[:,...,3:3+Nl]: Best fit linear parameters
+                Out[:,...,3+Nl:3+2*Nl]: Uncertainties of best fit linear parameters
+
+    """
     para_grids = [np.ravel(pgrid) for pgrid in np.meshgrid(*para_vecs)]
 
     if numthreads is None:
