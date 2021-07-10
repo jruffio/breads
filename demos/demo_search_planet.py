@@ -7,8 +7,8 @@ import astropy.io.fits as pyfits
 
 from breads.instruments.OSIRIS import OSIRIS
 from breads.search_planet import search_planet
-from breads.fm.splinefm import splinefm
-from breads.utils import broaden
+from breads.fm.hc_splinefm import hc_splinefm
+from breads.fm.iso_hpffm import iso_hpffm
 
 if __name__ == "__main__":
     try:
@@ -45,13 +45,16 @@ if __name__ == "__main__":
     # Definition of the (extra) parameters for splinefm()
     fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
                 "boxw":1,"nodes":20,"psfw":1.2,"nodes":20,"badpixfraction":0.75}
+    fm_func = hc_splinefm
+    # fm_paras = {"planet_f":planet_f,"transmission":transmission,"boxw":1,"res_hpf":100,"psfw":1.2,"badpixfraction":0.75}
+    # fm_func = iso_hpffm
 
     if 0: # Example code to test the forward model
-        nonlin_paras = [-15,14,18] # x (pix),y (pix), rv (km/s)
+        nonlin_paras = [-15,30,9] # x (pix),y (pix), rv (km/s)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
         # s is the vector of uncertainties corresponding to d
-        d, M, s = splinefm(nonlin_paras,dataobj,**fm_paras)
+        d, M, s = fm_func(nonlin_paras,dataobj,**fm_paras)
 
         validpara = np.where(np.sum(M,axis=0)!=0)
         M = M[:,validpara[0]]
@@ -81,15 +84,14 @@ if __name__ == "__main__":
     rvs = np.array([-15])
     ys = np.arange(ny)
     xs = np.arange(nx)
-    out = search_planet([rvs,ys,xs],dataobj,splinefm,fm_paras,numthreads=32)
+    out = search_planet([rvs,ys,xs],dataobj,fm_func,fm_paras,numthreads=32)
     N_linpara = (out.shape[-1]-2)//2
     print(out.shape)
-    print(out)
 
     plt.figure(1)
     plt.imshow(out[0,:,:,3]/out[0,:,:,3+N_linpara],origin="lower")
     # plt.imshow(out[0,:,:,0]-out[0,:,:,1],origin="lower")
-    plt.clim([0,50])
+    # plt.clim([0,20])
     cbar = plt.colorbar()
     cbar.set_label("SNR")
     # plt.plot(out[:,0,0,2])
