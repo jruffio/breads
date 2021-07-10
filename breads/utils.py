@@ -1,8 +1,6 @@
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 from copy import copy
-import ctypes
 from astropy.time import Time
 import astropy.units as u
 from astropy.coordinates import SkyCoord, EarthLocation
@@ -10,12 +8,12 @@ from scipy.interpolate import InterpolatedUnivariateSpline
 import multiprocessing as mp
 import pandas as pd
 import itertools
-from scipy import interpolate
-from astropy import constants as const
-from scipy.interpolate import interp1d
-from scipy.special import loggamma
 from py.path import local
 from scipy.stats import median_absolute_deviation
+from scipy.optimize import lsq_linear
+from scipy.signal import correlate2d
+
+from breads.fm.hc_splinefm import get_spline_model
 
 
 def _task_findbadpix(paras):
@@ -66,7 +64,7 @@ def _remove_edges(paras):
     return cp_slices
 
 
-def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None):
+def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3):
 
 
     if noisecube is None:
@@ -93,9 +91,8 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
     # plt.plot(med_spec)
     # plt.show()
 
-    nan_mask_boxsize = 3
     if mypool is None:
-        new_badpixcube = _remove_edges(new_badpixcube,nan_mask_boxsize)
+        new_badpixcube = _remove_edges((new_badpixcube,nan_mask_boxsize))
     else:
         numthreads = mypool._processes
         chunk_size = nz//(3*numthreads)
@@ -235,6 +232,7 @@ def _task_broaden(paras):
         stamp_dwvs = dwvs[np.max([0, k - w]):np.min([np.size(wvs), k + w])]
 
         gausskernel = 1 / (np.sqrt(2 * np.pi) * sig) * np.exp(-0.5 * (stamp_wvs - wvs[k]) ** 2 / sig ** 2)
+        gausskernel[np.where(np.isnan(stamp_spec))] = np.nan
         conv_spectrum[l] = np.nansum(gausskernel*stamp_spec*stamp_dwvs) / np.nansum(gausskernel*stamp_dwvs)
 
     return conv_spectrum

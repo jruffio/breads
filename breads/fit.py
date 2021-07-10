@@ -24,9 +24,10 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
         linparas: Best fit linear parameters
         linparas_err: Uncertainties of best fit linear parameters
     """
-    print(nonlin_paras)
     d,M,s = fm_func(nonlin_paras,dataobj,**fm_paras)
     N_linpara = M.shape[1]
+    if N_linpara == 1:
+        computeH0 = False
 
     validpara = np.where(np.nansum(M,axis=0)!=0)
     M = M[:,validpara[0]]
