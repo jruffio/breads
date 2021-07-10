@@ -11,7 +11,7 @@ class Instrument:
         self.noise = None
         self.bad_pixels = None
         self.bary_RV = None
-        self.refpos = [0,0]
+        self.refpos = None
         
     def check_instrument_type(self):
         implemented = self.instruments_implemented()
@@ -43,13 +43,16 @@ class Instrument:
             "Import derived class corresponding to your instrument. You are currently using the base class.")
         
     def valid_data_check(self):
-        assert self.data.ndim == 3, "Data must be 3-dimensional"
-        assert self.wavelengths.ndim == 1, "Wavelength Array must be 1-dimensional"
+        # assert self.data.ndim == 3, "Data must be 3-dimensional"
+        # assert self.wavelengths.ndim == 1, "Wavelength Array must be 1-dimensional"
         assert self.data.shape[0] == self.wavelengths.shape[0], \
                         "Wavelength dimension of the spaxel data must be equal to size to wavelength array"
         assert self.noise is None or self.noise.shape == self.data.shape, \
                             "If present, noise must be of same shape as spaxel data"
         assert self.bad_pixels is None or self.bad_pixels.shape == self.data.shape, \
                             "If present, bad pixel must be of same shape as spaxel data"
+
+    def broaden(self, wvs,spectrum):
+        return None
      
     

@@ -8,6 +8,7 @@ from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
 from astropy.time import Time
 from copy import copy
+from breads.utils import broaden
 
 class OSIRIS(Instrument):
     def __init__(self, filename=None, skip_baryrv=False):
@@ -57,8 +58,12 @@ class OSIRIS(Instrument):
         self.noise = noisecube
         self.bad_pixels = badpixcube
         self.bary_RV = baryrv
+        self.R = 4000
         
         self.valid_data_check()
+
+    def broaden(self, wvs,spectrum, loc=None,mppool=None):
+        return broaden(wvs, spectrum, self.R, mppool=mppool)
 
 def return_64x19(cube):
     # cube should be nz,ny,nx
