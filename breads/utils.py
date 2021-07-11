@@ -65,8 +65,6 @@ def _remove_edges(paras):
 
 
 def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3):
-
-
     if noisecube is None:
         noisecube = np.ones(cube.shape)
     if badpixcube is None:
@@ -162,7 +160,7 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
             new_badpixcube[:,row_indices,col_indices] = out_badpix
             res[:,row_indices,col_indices] = out_res
 
-    return new_badpixcube, new_cube,res
+    return new_badpixcube, new_cube, res
 
 
 

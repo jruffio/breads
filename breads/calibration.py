@@ -225,7 +225,7 @@ def mask_sky_remnant(slice, sigma=0.3, n_sigmas=2):
     slice[slice < (-sigma * n_sigmas)] = np.nan
     return slice
 
-def gaussian2D(nx, ny, sig_x, sig_y, A, mu_x, mu_y):
+def gaussian2D(nx, ny, mu_x, mu_y, sig_x, sig_y, A):
     """
     Two Dimensional Gaussian for getting PSF for different wavelength slices
     """
@@ -237,13 +237,13 @@ def gaussian2D(nx, ny, sig_x, sig_y, A, mu_x, mu_y):
 def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
     residual=False, mask=False, minimize_method='nelder-mead', sigma=0.3, n_sigmas=2):
     """
-    psf_func should be such that the first four arguments are nx, ny, sig_x, sig_y
+    psf_func should be such that the first six arguments are nx, ny, mu_x, mu_y, sig_x, sig_y
     if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters
     """
     if mask:
         img_slice = mask_sky_remnant(img_slice, sigma, n_sigmas)
     if psf_func == gaussian2D and x0 is None:
-        x0 = [2, 2, np.nanmax(img_slice), *np.unravel_index(np.nanargmax(img_slice), img_slice.shape)]
+        x0 = [*np.unravel_index(np.nanargmax(img_slice), img_slice.shape), 2, 2, np.nanmax(img_slice)]
     else:
         assert (x0 is not None), \
             "if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters"
@@ -258,7 +258,7 @@ def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
         residuals = img_slice - psf_func(nx, ny, *fit_values)
     else:
         residual = None
-    return (fit_values[0], fit_values[1], fit_values, residuals)
+    return (fit_values[0], fit_values[1], fit_values[2], fit_values[3], fit_values, residuals)
 
 def parse_star_spectrum(wavs, star_spectrum, R):
     # would be worthwhile to, in future, add this to __init__ of breads.calibration
@@ -301,37 +301,45 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
 
     aperture using for aperture photometry is of the size: 
     sig_x * aperture_sigmas, sig_y * aperture_sigmas
+
+    psf_func should be such that the first six arguments are nx, ny, mu_x, mu_y, sig_x, sig_y
+    if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters
     """
-    sig_xs, sig_ys, all_fit_values, residuals, fluxs = [], [], [], [], []
-    if x0 is None:
+    mu_xs, mu_ys, sig_xs, sig_ys, all_fit_values, residuals, fluxs = [], [], [], [], [], [], []
+            
+    if psf_func == gaussian2D and x0 is None:
         img_mean = np.nanmean(data.data, axis=0)
-        x0 = [2, 2, np.nanmax(img_mean), *np.unravel_index(np.nanargmax(img_mean), img_mean.shape)]
+        x0 = [*np.unravel_index(np.nanargmax(img_mean), img_mean.shape), 2, 2, np.nanmax(img_mean)]
+    else:
+        assert (x0 is not None), \
+            "if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters"
+    
     for i, img_slice in enumerate(data.data):
         if verbose and (i % 200 == 0):
             print(f'index {i} wavelength {data.wavelengths[i]}')
-        sig_x, sig_y, fit_vals, resid = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
+        mu_x, mu_y, sig_x, sig_y, fit_vals, resid = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
             residual=residual, mask=mask, sigma=sigma, n_sigmas=n_sigmas)
-        sig_xs += [sig_x]
-        sig_ys += [sig_y]
+        mu_xs += [mu_x]; mu_ys += [mu_y]
+        sig_xs += [sig_x]; sig_ys += [sig_y]
         all_fit_values += [fit_vals]
         residuals += [resid]
         aper_photo = aperture_photometry(img_slice, \
-            EllipticalAperture(fit_vals[3:][::-1], aperture_sigmas*sig_y, aperture_sigmas*sig_x)) 
+            EllipticalAperture((mu_y, mu_x), aperture_sigmas*sig_y, aperture_sigmas*sig_x)) 
         # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
         fluxs += [aper_photo['aperture_sum'][0]]
 
     transmission = fluxs / parse_star_spectrum(data.wavelengths, star_spectrum, R)
-    return TelluricCalibration(data, *tuple(map(np.array, \
+    return TelluricCalibration(data, *tuple(map(np.array, mu_xs, mu_ys, \
         (sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission))), calib_filename)
 
 class TelluricCalibration:
     def __init__(self, data: Instrument, \
-        sig_xs, sig_ys, fit_values, residuals, fluxs, transmission, calib_filename):
+        mu_xs, mu_ys, sig_xs, sig_ys, fit_values, residuals, fluxs, transmission, calib_filename):
         if calib_filename is None:
             calib_filename = "./telluric_calib_file.fits"
         self.calib_filename = calib_filename
-        self.sig_xs = sig_xs
-        self.sig_ys = sig_ys
+        self.mu_xs = mu_xs; self.mu_ys = mu_ys 
+        self.sig_xs = sig_xs; self.sig_ys = sig_ys
         self.fit_values = fit_values
         self.residuals = residuals
         self.fluxs = fluxs
@@ -343,10 +351,14 @@ class TelluricCalibration:
                                         header=pyfits.Header(cards={"TYPE": "transmission"})))
         hdulist.append(pyfits.ImageHDU(data=self.wavelengths,
                                         header=pyfits.Header(cards={"TYPE": "wavelengths"})))
+        hdulist.append(pyfits.ImageHDU(data=self.mu_xs,
+                                        header=pyfits.Header(cards={"TYPE": "Mu X"})))
+        hdulist.append(pyfits.ImageHDU(data=self.mu_ys,
+                                        header=pyfits.Header(cards={"TYPE": "Mu Y"}))) 
         hdulist.append(pyfits.ImageHDU(data=self.sig_xs,
                                         header=pyfits.Header(cards={"TYPE": "Sigma X"})))
         hdulist.append(pyfits.ImageHDU(data=self.sig_ys,
-                                        header=pyfits.Header(cards={"TYPE": "Sigma Y"})))                                         
+                                        header=pyfits.Header(cards={"TYPE": "Sigma Y"})))                                   
         try:
             hdulist.writeto(calib_filename, overwrite=True)
         except TypeError:
