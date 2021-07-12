@@ -39,9 +39,9 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
     linparas = np.ones(N_linpara)+np.nan
     linparas_err = np.ones(N_linpara)+np.nan
     if N_data == 0:
-        log_prob = np.nan
-        log_prob_H0 = np.nan
-        rchi2 = np.nan
+        log_prob = -np.inf
+        log_prob_H0 = -np.inf
+        rchi2 = np.inf
     else:
         logdet_Sigma = np.sum(2 * np.log(s))
         paras = lsq_linear(M, d).x
@@ -54,8 +54,8 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
         covphi = rchi2 * np.linalg.inv(np.dot(M.T, M))
         slogdet_icovphi0 = np.linalg.slogdet(np.dot(M.T, M))
 
-        log_prob = -0.5*logdet_Sigma - 0.5*slogdet_icovphi0[1] - (N_data-1+N_linpara-1)/2*np.log(chi2)+\
-                   loggamma((N_data-1+N_linpara-1)/2)+(N_linpara-N_data)/2*np.log(2*np.pi)
+        log_prob = -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0[1] - (N_data - N_linpara + 2 - 1) / 2 * np.log(chi2) + \
+                    loggamma((N_data - N_linpara + 2 - 1) / 2) + (N_linpara - N_data) / 2 * np.log(2 * np.pi)
         paras_err = np.sqrt(np.diag(covphi))
 
         if computeH0:
@@ -86,5 +86,9 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
 
     return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
-def log_prob(nonlin_paras, dataobj, fm_func, fm_paras):
-    return fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False)[0]
+def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None):
+    if nonlin_lnprior_func is not None:
+        prior = nonlin_lnprior_func(nonlin_paras)
+    else:
+        prior = 0
+    return fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False)[0]+prior

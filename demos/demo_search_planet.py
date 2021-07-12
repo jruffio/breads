@@ -9,6 +9,7 @@ from breads.instruments.OSIRIS import OSIRIS
 from breads.search_planet import search_planet
 from breads.fm.hc_splinefm import hc_splinefm
 from breads.fm.iso_hpffm import iso_hpffm
+from breads.fm.hc_hpffm import hc_hpffm
 
 if __name__ == "__main__":
     try:
@@ -43,13 +44,16 @@ if __name__ == "__main__":
             star_spectrum = hdulist[1].data
 
     # Definition of the (extra) parameters for splinefm()
-    fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
-                "boxw":1,"nodes":20,"psfw":1.2,"nodes":20,"badpixfraction":0.75}
-    fm_func = hc_splinefm
+    # fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
+    #             "boxw":3,"nodes":20,"psfw":1.2,"nodes":20,"badpixfraction":0.75}
+    # fm_func = hc_splinefm
     # fm_paras = {"planet_f":planet_f,"transmission":transmission,"boxw":1,"res_hpf":100,"psfw":1.2,"badpixfraction":0.75}
     # fm_func = iso_hpffm
+    fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
+                "boxw":3,"res_hpf":100,"psfw":1.2,"badpixfraction":0.75}
+    fm_func = hc_hpffm
 
-    if 0: # Example code to test the forward model
+    if 1: # Example code to test the forward model
         nonlin_paras = [-15,30,9] # x (pix),y (pix), rv (km/s)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
@@ -84,7 +88,7 @@ if __name__ == "__main__":
     rvs = np.array([-15])
     ys = np.arange(ny)
     xs = np.arange(nx)
-    out = search_planet([rvs,ys,xs],dataobj,fm_func,fm_paras,numthreads=32)
+    out = search_planet([rvs,ys,xs],dataobj,fm_func,fm_paras,numthreads=16)
     N_linpara = (out.shape[-1]-2)//2
     print(out.shape)
 

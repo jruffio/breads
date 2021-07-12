@@ -237,3 +237,35 @@ def _task_broaden(paras):
 
 def file_directory(file):
     return os.path.dirname(local(file))
+
+def LPFvsHPF(myvec,cutoff):
+    """
+    Ask JB to write documentation!
+    """
+    myvec_cp = copy(myvec)
+    #handling nans:
+    wherenans = np.where(np.isnan(myvec_cp))
+    window = int(round(np.size(myvec_cp)/(cutoff/2.)/2.))#cutoff
+    tmp = np.array(pd.DataFrame(np.concatenate([myvec_cp, myvec_cp[::-1]], axis=0)).interpolate(method="linear").fillna(method="bfill").fillna(method="ffill"))
+    myvec_cp_lpf = np.array(pd.DataFrame(tmp).rolling(window=window, center=True).median().interpolate(method="linear").fillna(method="bfill").fillna(method="ffill"))[0:np.size(myvec), 0]
+    myvec_cp[wherenans] = myvec_cp_lpf[wherenans]
+
+
+    fftmyvec = np.fft.fft(np.concatenate([myvec_cp, myvec_cp[::-1]], axis=0))
+    LPF_fftmyvec = copy(fftmyvec)
+    LPF_fftmyvec[cutoff:(2*np.size(myvec_cp)-cutoff+1)] = 0
+    LPF_myvec = np.real(np.fft.ifft(LPF_fftmyvec))[0:np.size(myvec_cp)]
+    HPF_myvec = myvec_cp - LPF_myvec
+
+
+    LPF_myvec[wherenans] = np.nan
+    HPF_myvec[wherenans] = np.nan
+
+    # plt.figure(10)
+    # plt.plot(myvec_cp,label="fixed")
+    # plt.plot(myvec,label="ori")
+    # plt.plot(myvec_cp_lpf,label="lpf")
+    # plt.plot(LPF_myvec,label="lpf fft")
+    # plt.legend()
+    # plt.show()
+    return LPF_myvec,HPF_myvec

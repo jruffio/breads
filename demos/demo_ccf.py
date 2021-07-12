@@ -8,8 +8,6 @@ from glob import glob
 
 from breads.instruments.KPIC import KPIC
 from breads.search_planet import search_planet
-from breads.fm.hc_splinefm import hc_splinefm
-from breads.fm.iso_hpffm import iso_hpffm
 import multiprocessing as mp
 
 if __name__ == "__main__":
@@ -25,11 +23,9 @@ if __name__ == "__main__":
     spec_filelist,sc_fib = spec_filelist,1 # Selecting fiber 2 because fiber bouncing
     host_filelist = glob("/scr3/kpic/KPIC_Campaign/science/RX_J0342.5_1216/20200928/fluxes/*_fluxes.fits")
     A0_filelist = glob("/scr3/kpic/KPIC_Campaign/science/HIP16322/20200928/fluxes/*_fluxes.fits")
-    planet_btsettl = "/scr3/jruffio/models/BT-Settl/BT-Settl_M-0.0_a+0.0/lte020-3.5-0.0a+0.0.BT-Settl.spec.7"
+    planet_btsettl = "/scr3/jruffio/models/BT-Settl/BT-Settl_M-0.0_a+0.0/lte018-5.0-0.0a+0.0.BT-Settl.spec.7"
     trace_filename = "/scr3/kpic/KPIC_Campaign/calibs/20200928/trace/nspec200928_0024_trace.fits"
     wvs_filename = "/scr3/kpic/KPIC_Campaign/calibs/20200928/wave/20200928_HIP_95771_psg_wvs.fits"
-
-
 
     # 2021 RX_J0342.5_1216B
     # # spec_filelist = glob("/scr3/jruffio/data/kpic/20200928_RX_J0342.5_1216_B/*_fluxes.fits")
@@ -68,7 +64,7 @@ if __name__ == "__main__":
     A0obj = KPIC(A0_filelist,trace_filename,wvs_filename,fiber_scan=True)
     dataobj = KPIC(spec_filelist,trace_filename,wvs_filename,fiber_scan=False)
     hostobj = KPIC(host_filelist,trace_filename,wvs_filename,fiber_scan=True)
-    orders = [6]
+    orders = [8]
     A0obj = A0obj.selec_order(orders)
     hostobj = hostobj.selec_order(orders)
     dataobj = dataobj.selec_order(orders)
@@ -150,13 +146,19 @@ if __name__ == "__main__":
         minwvord = dataobj.wavelengths[order_id*ordersize,sc_fib]
         maxwvord = dataobj.wavelengths[(order_id+1)*ordersize-1,sc_fib]
         nodes.append(np.linspace(minwvord,maxwvord,N_nodes_per_order,endpoint=True))
-    fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":host_spectrum,
-                "boxw":1,"nodes":nodes,"psfw":1.2,"badpixfraction":0.75}
-    fm_func = hc_splinefm
+    # from breads.fm.hc_splinefm import hc_splinefm
+    # fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":host_spectrum,
+    #             "boxw":1,"nodes":nodes,"psfw":1.2,"badpixfraction":0.75}
+    # fm_func = hc_splinefm
+    # from breads.fm.iso_hpffm import iso_hpffm
     # fm_paras = {"planet_f":planet_f,"transmission":transmission,"boxw":1,"res_hpf":100,"psfw":1.2,"badpixfraction":0.75}
     # fm_func = iso_hpffm
+    from breads.fm.hc_hpffm import hc_hpffm
+    fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":host_spectrum,
+                "boxw":1,"psfw":1.2,"badpixfraction":0.75,"hpf_mode":"fft","res_hpf":100,"cutoff":5}
+    fm_func = hc_hpffm
 
-    if 0: # Example code to test the forward model
+    if 1: # Example code to test the forward model
         nonlin_paras = [20,sc_fib] # x (pix),y (pix), rv (km/s)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
@@ -199,14 +201,16 @@ if __name__ == "__main__":
         plt.show()
     # exit()
     # fit rv
-    rvs = np.linspace(-400,400,401)
+    rvs = np.linspace(-400,400,201)
     fibs = np.array([sc_fib])
-    out = search_planet([rvs,fibs],dataobj,fm_func,fm_paras,numthreads=32)
+    out = search_planet([rvs,fibs],dataobj,fm_func,fm_paras,numthreads=16)
     N_linpara = (out.shape[-1]-2)//2
     print(out.shape)
 
     plt.figure(1)
-    plt.plot(rvs,out[:,0,3]/out[:,0,3+N_linpara])
+    snr = out[:,0,3]/out[:,0,3+N_linpara]
+    plt.plot(rvs,snr)
+    plt.plot(rvs,snr-np.nanmedian(snr))
     # plt.plot(out[:,0,0]-out[:,0,1])
     plt.ylabel("SNR")
     plt.xlabel("RV (km/s)")

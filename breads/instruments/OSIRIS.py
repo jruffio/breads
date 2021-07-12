@@ -63,9 +63,30 @@ class OSIRIS(Instrument):
         self.valid_data_check()
 
     def broaden(self, wvs,spectrum, loc=None,mppool=None):
+        """
+        Broaden a spectrum to the resolution of this data object using the resolution attribute (self.R).
+        LSF is assumed to be a 1D gaussian.
+        The broadening is technically fiber dependent so you need to specify which fiber calibration to use.
+
+        Args:
+            wvs: Wavelength sampling of the spectrum to be broadened.
+            spectrum: 1D spectrum to be broadened.
+            loc: To be ignored. Could be used in the future to specify (x,y) position if field dependent resolution is
+                available.
+            mypool: Multiprocessing pool to parallelize the code. If None (default), non parallelization is applied.
+                E.g. mppool = mp.Pool(processes=10) # 10 is the number processes
+
+        Return:
+            Broadened spectrum
+        """
         return broaden(wvs, spectrum, self.R, mppool=mppool)
 
 def return_64x19(cube):
+    """
+    Hacky function. The dimensions of an OSIRIS cube are not always what it should be (64x19) in broadband. I think the
+    problem is in Hbb. So this aligns everything by default.
+    But only works for broadband filters, not the narrowbands ones like Kn3 or Kn5.
+    """
     # cube should be nz,ny,nx
     if np.size(cube.shape) == 3:
         _, ny, nx = cube.shape

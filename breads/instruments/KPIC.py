@@ -124,6 +124,21 @@ class KPIC(Instrument):
         self.valid_data_check()
 
     def broaden(self, wvs,spectrum, loc=None,mppool=None):
+        """
+        Broaden a spectrum to the resolution of this data object using the line spread function (LSF) calibration
+        available. LSF is assumed to be a 1D gaussian.
+        The broadening is technically fiber dependent so you need to specify which fiber calibration to use.
+
+        Args:
+            wvs: Wavelength sampling of the spectrum to be broadened.
+            spectrum: 1D spectrum to be broadened.
+            loc: Fiber index to be used.
+            mypool: Multiprocessing pool to parallelize the code. If None (default), non parallelization is applied.
+                E.g. mppool = mp.Pool(processes=10) # 10 is the number processes
+
+        Return:
+            Broadened spectrum
+        """
         fill_value = (self.resolution[loc][0],self.resolution[loc][-1])
         res_func = interp1d(self.wavelengths[loc], self.resolution[loc], bounds_error=False, fill_value=fill_value)
         return broaden(wvs, spectrum, res_func(wvs), mppool=mppool)

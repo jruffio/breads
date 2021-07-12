@@ -1,43 +1,10 @@
 import numpy as np
-
-from scipy.interpolate import InterpolatedUnivariateSpline
+from copy import copy
+import pandas as pd
 from astropy import constants as const
 
-def get_spline_model(x_knots, x_samples, spline_degree=3):
-    """
-    Compute a spline based linear model.
-    If Y=[y1,y2,..] are the values of the function at the location of the node [x1,x2,...].
-    np.dot(M,Y) is the interpolated spline corresponding to the sampling of the x-axis (x_samples)
-
-
-    Args:
-        x_knots: List of nodes for the spline interpolation as np.ndarray in the same units as x_samples.
-            x_knots can also be a list of ndarrays/list to model discontinous functions.
-        x_samples: Vector of x values. ie, the sampling of the data.
-        spline_degree: Degree of the spline interpolation (default: 3)
-
-    Returns:
-        M: Matrix of size (D,N) with D the size of x_samples and N the total number of nodes.
-    """
-    if type(x_knots[0]) is list or type(x_knots[0]) is np.ndarray:
-        x_knots_list = x_knots
-    else:
-        x_knots_list = [x_knots]
-    M_list = []
-    for nodes in x_knots_list:
-        M = np.zeros((np.size(x_samples), np.size(nodes)))
-        min,max = np.min(nodes),np.max(nodes)
-        inbounds = np.where((min<x_samples)&(x_samples<max))
-        _x = x_samples[inbounds]
-
-        for chunk in range(np.size(nodes)):
-            tmp_y_vec = np.zeros(np.size(nodes))
-            tmp_y_vec[chunk] = 1
-            spl = InterpolatedUnivariateSpline(nodes, tmp_y_vec, k=spline_degree, ext=0)
-            M[inbounds[0], chunk] = spl(_x)
-        M_list.append(M)
-    return np.concatenate(M_list, axis=1)
-
+from breads.utils import broaden
+from breads.utils import LPFvsHPF
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     """
@@ -56,12 +23,11 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     return gaussA + bkg
 
 
-def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,badpixfraction=0.75):
+def hc_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,
+             badpixfraction=0.75,hpf_mode=None,res_hpf=50,cutoff=5):
     """
     For high-contrast companions (planet + speckles).
-    Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
-    The spline are defined with a linear model. Each spaxel (if applicable) is independently modeled which means the
-    number of linear parameters increases as N_nodes*boxw^2+1.
+    Generate forward model removing the continuum with a fourier based high pass filter.
 
     Args:
         nonlin_paras: Non-linear parameters of the model, which are the radial velocity and the position of
@@ -80,16 +46,26 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         boxw: size of the stamp to be extracted and modeled around the (x,y) location of the planet.
             Must be odd. Default is 1.
         psfw: Width (sigma) of the 2d gaussian used to model the planet PSF. This won't matter if boxw=1 however.
-        nodes: If int, number of nodes equally distributed. If list, custom locations of nodes [x1,x2,..].
-            To model discontinous functions, use a list of list [[x1,...],[xn,...]].
         badpixfraction: Max fraction of bad pixels in data.
+        hpf_mode: choose type of high-pass filter to be used.
+            "gauss": the data is broaden to the resolution specified by "res_hpf", which is then subtracted.
+            "fft": a fft based high-pass filter is used using a cutoff frequency specified by "cutoff".
+                This should not be used for (highly) non-uniform wavelength sampling or with gaps.
+        res_hpf: float, if hpf_mode="gauss", resolution of the continuum to be subtracted.
+        cutoff: int, if hpf_mode="fft", the higher the cutoff the more agressive the high pass filter.
+            See breads.utils.LPFvsHPF().
 
     Returns:
         d: Data as a 1d vector with bad pixels removed (no nans)
-        M: Linear model as a matrix of shape (Nd,Np) with bad pixels removed (no nans). Nd is the size of the data
-            vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
+        M: Linear model as a matrix of shape (Nd,1) with bad pixels removed (no nans). Nd is the size of the data
+            vector.
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
+    if hpf_mode is None:
+        hpf_mode = "gauss"
+
+    # Handle the different data dimensions
+    # Convert everything to 3D cubes (wv,y,x) for the followying
     if len(cubeobj.data.shape)==1:
         data = cubeobj.data[:,None,None]
         noise = cubeobj.noise[:,None,None]
@@ -114,6 +90,10 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
 
     nz, ny, nx = data.shape
 
+    # Handle the different dimensions for the wavelength
+    # Only 2 cases are acceptable, anything else is undefined:
+    # -> 1d wavelength and it is assumed to be position independent
+    # -> The same shape as the data in which case the wavelength at each position is specified and can bary.
     if len(cubeobj.wavelengths.shape)==1:
         wvs = cubeobj.wavelengths[:,None,None]
     elif len(cubeobj.wavelengths.shape)==2:
@@ -127,67 +107,34 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
     if boxw > ny or boxw > nx:
         raise ValueError("boxw cannot be bigger than the data in splinefm().")
 
+
     # remove pixels that are bad in the transmission or the star spectrum
     bad_pixels[np.where(np.isnan(star_spectrum*transmission))[0],:,:] = np.nan
 
     # Extract stamp data cube cropping at the edges
     w = int((boxw - 1) // 2)
-    # right, left  = np.min([l+w+1,nx]), np.max([l-w,0])
-    # top, bottom = np.min([k+w+1,ny]), np.max([k-w,0])
+    # Number of linear parameters
+    N_linpara = 2 # planet flux + speckle flux
+
     _paddata =np.pad(data,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     _padnoise =np.pad(noise,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     _padbad_pixels =np.pad(bad_pixels,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     k, l = int(np.round(refpos[1] + y)), int(np.round(refpos[0] + x))
     dx,dy = x-l,y-k
-    k,l = k+w,l+w
-    d = np.ravel(_paddata[:, k-w:k+w+1, l-w:l+w+1])
-    s = np.ravel(_padnoise[:, k-w:k+w+1, l-w:l+w+1])
-    badpixs = np.ravel(_padbad_pixels[:, k-w:k+w+1, l-w:l+w+1])
+    padk,padl = k+w,l+w
 
-
-    # manage all the different cases to define the position of the spline nodes
-    if type(nodes) is int:
-        N_nodes = nodes
-        x_knots = np.linspace(np.min(wvs), np.max(wvs), N_nodes, endpoint=True).tolist()
-    elif type(nodes) is list:
-        x_knots = nodes
-        if type(nodes[0]) is list or type(nodes[0]) is np.ndarray :
-            N_nodes = np.sum([np.size(n) for n in nodes])
-        else:
-            N_nodes = np.size(nodes)
-    else:
-        raise ValueError("Unknown format for nodes.")
-
-    fitback = False
-    if fitback:
-        N_linpara = boxw * boxw * N_nodes +1 + 3*boxw**2
-    else:
-        N_linpara = boxw * boxw * N_nodes +1
+    # high pass filter the data
+    cube_stamp = _paddata[:, padk-w:padk+w+1, padl-w:padl+w+1]
+    badpix_stamp = _padbad_pixels[:, padk-w:padk+w+1, padl-w:padl+w+1]
+    badpixs = np.ravel(_padbad_pixels[:, padk-w:padk+w+1, padl-w:padl+w+1])
+    s = np.ravel(_padnoise[:, padk-w:padk+w+1, padl-w:padl+w+1])
 
     where_finite = np.where(np.isfinite(badpixs))
-    if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(d):
+
+    if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(badpixs):
         # don't bother to do a fit if there are too many bad pixels
         return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
     else:
-        lwvs = wvs[:,np.clip(k-2*w,0,nywv-1),np.clip(l-2*w,0,nxwv-1)]
-        # Get the linear model (ie the matrix) for the spline
-        M_spline = get_spline_model(x_knots, lwvs, spline_degree=3)
-        M_speckles = np.zeros((nz, boxw, boxw, boxw, boxw, N_nodes))
-        for m in range(boxw):
-            for n in range(boxw):
-                M_speckles[:, m, n, m, n, :] = M_spline * star_spectrum[:, None]
-        M_speckles = np.reshape(M_speckles, (nz, boxw, boxw, boxw * boxw * N_nodes))
-
-        if fitback:
-            M_background = np.zeros((nz, boxw, boxw, boxw, boxw,3))
-            for m in range(boxw):
-                for n in range(boxw):
-                    lwvs = wvs[:,np.clip(k-2*w+m,0,nywv-1),np.clip(l-2*w+m,0,nxwv-1)]
-                    M_background[:, m, n, m, n, 0] = 1
-                    M_background[:, m, n, m, n, 1] = lwvs
-                    M_background[:, m, n, m, n, 2] = lwvs**2
-            M_background = np.reshape(M_background, (nz, boxw, boxw, 3*boxw**2))
-
         psfs = np.zeros((nz, boxw, boxw))
         # Technically allows super sampled PSF to account for a true 2d gaussian integration of the area of a pixel.
         # But this is disabled for now with hdfactor=1.
@@ -197,21 +144,54 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         psfs += pixgauss2d([1., w+dx, w+dy, psfw, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 
-        # The planet spectrum model is RV shifted and multiplied by the tranmission
-        planet_spec = transmission * planet_f(wvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
-        # Go from a 1d spectrum to the 3D scaled PSF
-        scaled_psfs = np.zeros((nz,boxw,boxw))+np.nan
+        # Stamp cube that will contain the data
+        data_hpf = np.zeros((nz,boxw,boxw))+np.nan
+        data_lpf = np.zeros((nz,boxw,boxw))+np.nan
+        # Stamp cube that will contain the planet model
+        scaled_psfs_hpf = np.zeros((nz,boxw,boxw))+np.nan
+        # Stamp cube that will contain the speckle model
+        M_speckles_hpf = np.zeros((nz,boxw,boxw))+np.nan
+
+        # Loop over each spaxel in the stamp cube (boxw,boxw)
         for _k in range(boxw):
             for _l in range(boxw):
-                lwvs = wvs[:,np.clip(k-2*w+_k,0,nywv-1),np.clip(l-2*w+_l,0,nxwv-1)]
+                lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
+
+                # High pass filter the data
+                if hpf_mode == "gauss":
+                    data_lpf[:,_k,_l] = broaden(lwvs,cube_stamp[:,_k,_l]*badpix_stamp[:,_k,_l],res_hpf)
+                    data_hpf[:,_k,_l] = cube_stamp[:,_k,_l]-data_lpf[:,_k,_l]
+                elif hpf_mode == "fft":
+                    data_lpf[:, _k, _l],data_hpf[:,_k,_l] = LPFvsHPF(cube_stamp[:,_k,_l]*badpix_stamp[:,_k,_l],cutoff)
+
+                    # The planet spectrum model is RV shifted and multiplied by the tranmission
+                # Go from a 1d spectrum to the 3D scaled PSF
                 planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
-                scaled_psfs[:,_k,_l] = psfs[:, _k,_l] * planet_spec
+                scaled_vec = psfs[:, _k,_l] * planet_spec
+                # high pass filter the planet model
+                if hpf_mode == "gauss":
+                    scaled_vec_lpf = broaden(lwvs,scaled_vec*badpix_stamp[:,_k,_l],res_hpf)
+                    scaled_psfs_hpf[:,_k,_l] = scaled_vec-scaled_vec_lpf
+                elif hpf_mode == "fft":
+                    _,scaled_psfs_hpf[:,_k,_l] = LPFvsHPF(scaled_vec*badpix_stamp[:,_k,_l],cutoff)
+
+                if hpf_mode == "gauss":
+                    star_spectrum_lpf = broaden(lwvs,star_spectrum*badpix_stamp[:,_k,_l],res_hpf)
+                    M_speckles_hpf[:,_k,_l] = (star_spectrum-star_spectrum_lpf)/star_spectrum_lpf*data_lpf[:,_k,_l]
+                elif hpf_mode == "fft":
+                    star_spectrum_lpf,star_spectrum_hpf = LPFvsHPF(star_spectrum*badpix_stamp[:,_k,_l],cutoff)
+                    M_speckles_hpf[:,_k,_l] = LPFvsHPF(star_spectrum_hpf/star_spectrum_lpf*data_lpf[:,_k,_l],cutoff)[1]
+
+                # import matplotlib.pyplot as plt
+                # plt.plot(cube_stamp[:,_k,_l]*badpix_stamp[:,_k,_l])
+                # plt.plot(data_hpf[:,_k,_l])
+                # plt.plot(data_lpf[:,_k,_l])
+                # plt.show()
+
+        d = np.ravel(data_hpf)
 
         # combine planet model with speckle model
-        if fitback:
-            M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles,M_background], axis=3)
-        else:
-            M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles], axis=3)
+        M = np.concatenate([scaled_psfs_hpf[:, :, :, None], M_speckles_hpf[:, :, :, None]], axis=3)
         # Ravel data dimension
         M = np.reshape(M, (nz * boxw * boxw, N_linpara))
         # Get rid of bad pixels
