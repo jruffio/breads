@@ -54,5 +54,7 @@ class Instrument:
 
     def broaden(self, wvs,spectrum):
         return None
-     
+
+    def remove_bad_pixels(self, chunks=20, mypool=None, med_spec=None, nan_mask_boxsize=3):
+        return None
     

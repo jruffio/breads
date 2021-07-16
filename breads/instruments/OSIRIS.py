@@ -62,6 +62,13 @@ class OSIRIS(Instrument):
         
         self.valid_data_check()
 
+    def remove_bad_pixels(self, chunks=20, mypool=None, med_spec=None, nan_mask_boxsize=3):
+        new_badpixcube, new_cube, res = \
+            utils.findbadpix(self.data, self.noise, self.bad_pixels, chunks, mypool, med_spec, nan_mask_boxsize)
+        self.bad_pixels = new_badpixcube
+        self.data = new_badpixcube * self.data
+        return res
+
     def broaden(self, wvs,spectrum, loc=None,mppool=None):
         """
         Broaden a spectrum to the resolution of this data object using the resolution attribute (self.R).
@@ -80,6 +87,7 @@ class OSIRIS(Instrument):
             Broadened spectrum
         """
         return broaden(wvs, spectrum, self.R, mppool=mppool)
+
 
 def return_64x19(cube):
     """
