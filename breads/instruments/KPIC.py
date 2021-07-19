@@ -47,6 +47,10 @@ class KPIC(Instrument):
                 arr = hdulist[0].data
                 nfib,nord,npix = arr.shape
                 line_width = np.reshape(arr,(nfib,nord*npix))
+        if self.wavelengths.shape[1] == 4 and line_width.shape[0] ==5:
+            # hard coded for epoch 20210704 when the trace calibration included the gas cell, but not the wavcal
+            self.wavelengths = np.concatenate([np.zeros((self.wavelengths.shape[0],1)),self.wavelengths],axis=1)
+            dwvs = np.concatenate([np.zeros((1,self.wavelengths.shape[0])),dwvs],axis=0)
         line_FWHM_wvunit = line_width* dwvs*2*np.sqrt(2*np.log(2))
         self.resolution = self.wavelengths/line_FWHM_wvunit.T
 
@@ -120,6 +124,7 @@ class KPIC(Instrument):
             self.bary_RV = np.mean(baryrv_list)
             self.orders = np.arange(0,9)
 
+        self.bad_pixels[np.where(self.noise==0)] = np.nan
         
         self.valid_data_check()
 
@@ -139,8 +144,8 @@ class KPIC(Instrument):
         Return:
             Broadened spectrum
         """
-        fill_value = (self.resolution[loc][0],self.resolution[loc][-1])
-        res_func = interp1d(self.wavelengths[loc], self.resolution[loc], bounds_error=False, fill_value=fill_value)
+        fill_value = (self.resolution[:,loc][0],self.resolution[:,loc][-1])
+        res_func = interp1d(self.wavelengths[:,loc], self.resolution[:,loc], bounds_error=False, fill_value=fill_value)
         return broaden(wvs, spectrum, res_func(wvs), mppool=mppool)
 
     def selec_order(self,orders):
@@ -189,10 +194,8 @@ def combine_stellar_spectra(spectra,errors,weights=None):
     return med_spec,errors
 
 def combine_science_spectra(spectra,errors):
-    # deno = np.nansum(1/errors**2, axis=0)
-    # out_spec = np.nansum(spectra/errors**2, axis=0)/deno
-    # out_errors = 1/np.sqrt(deno)
     out_spec = np.nanmean(spectra, axis=0)
-    out_errors = np.sqrt(np.nansum(errors**2, axis=0))/spectra.shape[0]
-    # out_errors = np.ones(out_errors.shape)*np.nanmedian(out_errors)
+    mask = np.ones(spectra.shape)
+    mask[np.where(np.isnan(errors))] = 0
+    out_errors = np.sqrt(np.nansum(errors**2, axis=0))/np.sum(mask,axis=0)
     return out_spec,out_errors
