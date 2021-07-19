@@ -6,9 +6,15 @@ import scipy.io as scio
 import astropy.io.fits as pyfits
 from glob import glob
 import multiprocessing as mp
+import h5py
+from scipy.interpolate import RegularGridInterpolator
+import time
 
 from breads.instruments.KPIC import KPIC
-from breads.search_planet import search_planet
+from breads.fit import nlog_prob
+
+import emcee
+import corner
 
 if __name__ == "__main__":
     try:
@@ -38,7 +44,7 @@ if __name__ == "__main__":
     for filenum in filenums_fib:
         A0_filelist.append(os.path.join(datadir, "nspec210704_{0:04d}_fluxes.fits".format(filenum)))
 
-    planet_btsettl = "/scr3/jruffio/models/BT-Settl/BT-Settl_M-0.0_a+0.0/lte018-5.0-0.0a+0.0.BT-Settl.spec.7"
+    planet_btsettl = "/scr3/jruffio/models/BT-Settl/BT-Settl_M-0.0_a+0.0/lte018-4.0-0.0a+0.0.BT-Settl.spec.7"
     trace_filename = "/scr3/kpic/KPIC_Campaign/calibs/20210704/trace/nspec210704_0030_trace.fits"
     wvs_filename = "/scr3/kpic/KPIC_Campaign/calibs/20210704/wave/20210704_HIP81497_psg_wvs.fits"
 
@@ -55,18 +61,20 @@ if __name__ == "__main__":
 
     mypool = mp.Pool(processes=numthreads)
 
-    # Define planet model from BTsettl
-    arr = np.genfromtxt(planet_btsettl, delimiter=[12, 14], dtype=np.float,
-                        converters={1: lambda x: float(x.decode("utf-8").replace('D', 'e'))})
-    model_wvs = arr[:, 0] / 1e4
-    model_spec = 10 ** (arr[:, 1] - 8)
+    print(1)
+    # Define planet model grid from BTsettl
     minwv,maxwv= np.min(dataobj.wavelengths),np.max(dataobj.wavelengths)
-    crop_btsettl = np.where((model_wvs > minwv - 0.02) * (model_wvs < maxwv + 0.02))
-    model_wvs = model_wvs[crop_btsettl]
-    model_spec = model_spec[crop_btsettl]
-    model_broadspec = dataobj.broaden(model_wvs,model_spec,loc=sc_fib,mppool=mypool)
-    planet_f = interp1d(model_wvs, model_broadspec, bounds_error=False, fill_value=np.nan)
+    with h5py.File("/scr3/jruffio/code/OSIRIS/scripts/bt-settl_K-band_1000-3000K_KPIC.hdf5", 'r') as hf:
+        grid_specs = np.array(hf.get("spec"))
+        grid_temps = np.array(hf.get("temps"))
+        grid_loggs = np.array(hf.get("loggs"))
+        grid_wvs = np.array(hf.get("wvs"))
+    crop_grid = np.where((grid_wvs > minwv - 0.02) * (grid_wvs < maxwv + 0.02))
+    grid_wvs = grid_wvs[crop_grid]
+    grid_specs = grid_specs[:,:,crop_grid[0]]
+    myinterpgrid = RegularGridInterpolator((grid_temps,grid_loggs),grid_specs,method="linear",bounds_error=False,fill_value=np.nan)
 
+    print(2)
     # Define transmission from standard star using Phoenix A0 stellar model
     with pyfits.open(wvs_phoenix) as hdulist:
         phoenix_wvs = hdulist[0].data / 1.e4
@@ -77,6 +85,7 @@ if __name__ == "__main__":
     phoenix_A0_broad = dataobj.broaden(phoenix_wvs,phoenix_A0,loc=sc_fib,mppool=mypool)
     phoenix_A0_func = interp1d(phoenix_wvs, phoenix_A0_broad, bounds_error=False, fill_value=np.nan)
 
+    print(3)
     transmission = A0obj.data[:,sc_fib]/phoenix_A0_func(dataobj.wavelengths[:,sc_fib])
 
     mypool.close()
@@ -85,42 +94,37 @@ if __name__ == "__main__":
     # Define star spectrum
     host_spectrum = hostobj.data[:,sc_fib]
 
-    # plt.plot(host_spectrum)
-    # plt.show()
 
-    # Definition of the forward model
-    if 1: # Using a high pass filter
+    # Definition of the (extra) parameters for fm
+    if 1: # model grid
+        from breads.fm.hc_atmgrid_hpffm import hc_atmgrid_hpffm
+        fm_paras = {"atm_grid":myinterpgrid,"atm_grid_wvs":grid_wvs,"transmission":transmission,"star_spectrum":host_spectrum,
+                    "boxw":1,"psfw":0.01,"badpixfraction":0.75,"hpf_mode":"fft","cutoff":10,"loc":sc_fib,
+                    "fft_bounds":np.arange(0,dataobj.data.shape[0]+1, 2048)}
+        fm_func = hc_atmgrid_hpffm
+        nonlin_labels = ["Teff", "logg", "spin", "RV"]
+        nonlin_paras_mins = np.array([1000, 3.5, 0, -50])
+        nonlin_paras_maxs = np.array([3000, 5.5, 50, 50])
+    else: # single model
+        planet_f = interp1d(grid_wvs, myinterpgrid([1800,4.0])[0], bounds_error=False, fill_value=np.nan)
         from breads.fm.hc_hpffm import hc_hpffm
         fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":host_spectrum,
                     "boxw":1,"psfw":0.01,"badpixfraction":0.75,"hpf_mode":"fft","cutoff":10,"loc":sc_fib,
                     "fft_bounds":np.arange(0,dataobj.data.shape[0]+1, 2048)}
         fm_func = hc_hpffm
-    else: # forward modelling the continuum with a spline
-        from breads.fm.hc_splinefm import hc_splinefm
-        N_nodes_per_order = 5
-        nodes = []
-        nz,nfib = dataobj.data.shape
-        ordersize = int(nz//np.size(dataobj.orders)) # probably equal to 2048...
-        for order_id in range(np.size(dataobj.orders)):
-            minwvord = dataobj.wavelengths[order_id*ordersize,sc_fib]
-            maxwvord = dataobj.wavelengths[(order_id+1)*ordersize-1,sc_fib]
-            nodes.append(np.linspace(minwvord,maxwvord,N_nodes_per_order,endpoint=True))
-        fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":host_spectrum,
-                    "boxw":1,"psfw":0.01,"badpixfraction":0.75,"nodes":nodes,"loc":sc_fib}
-        fm_func = hc_splinefm
+        nonlin_labels = ["RV"]
+        nonlin_paras_mins = np.array([-50])
+        nonlin_paras_maxs = np.array([50])
 
     # /!\ Optional but recommended
     # Test the forward model for a fixed value of the non linear parameter.
     # Make sure it does not crash and look the way you want
     if 0:
-        nonlin_paras = [-2] # rv (km/s)
+        nonlin_paras = [1800,4.0,0,0] # x (pix),y (pix), rv (km/s)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
         # s is the vector of uncertainties corresponding to d
         d, M, s = fm_func(nonlin_paras,dataobj,**fm_paras)
-
-        # plt.plot(s)
-        # plt.show()
 
         validpara = np.where(np.sum(M,axis=0)!=0)
         M = M[:,validpara[0]]
@@ -132,7 +136,6 @@ if __name__ == "__main__":
 
         plt.subplot(2,1,1)
         plt.plot(d,label="data")
-        plt.plot(s/np.nanstd(s)*np.nanstd(d),label="s")
         plt.plot(m,label="model")
         plt.plot(paras[0]*M[:,0],label="planet model")
         plt.plot(m-paras[0]*M[:,0],label="starlight model")
@@ -144,27 +147,22 @@ if __name__ == "__main__":
         plt.legend()
         plt.show()
 
-    # fit rv
-    rvs = np.linspace(-400,400,401)
-    out = search_planet([rvs],dataobj,fm_func,fm_paras,numthreads=numthreads)
-    N_linpara = (out.shape[-1]-2)//2
-    print(out.shape)
+    simplex_init_steps = (nonlin_paras_maxs - nonlin_paras_mins)/2
+    paras0 = (nonlin_paras_maxs+nonlin_paras_mins)/2
+    initial_simplex = np.concatenate([paras0[None,:],paras0[None,:] + np.diag(simplex_init_steps)],axis=0)
 
-    plt.figure(1,figsize=(12,4))
-    plt.subplot(1,3,1)
-    snr = out[:,3]/out[:,3+N_linpara]
-    plt.plot(rvs,snr)
-    plt.plot(rvs,snr-np.nanmedian(snr),label="spline CCF")
-    plt.ylabel("SNR")
-    plt.xlabel("RV (km/s)")
+    def nonlin_lnprior_func(nonlin_paras):
+        for p, _min, _max in zip(nonlin_paras, nonlin_paras_mins, nonlin_paras_maxs):
+            if p > _max or p < _min:
+                return -np.inf
+        return 0
 
-    plt.subplot(1,3,2)
-    plt.plot(rvs,out[:,0]-out[:,1])
-    plt.ylabel("ln(Bayes factor)")
-    plt.xlabel("RV (km/s)")
+    from scipy.optimize import minimize
+    res = minimize(nlog_prob, paras0, args=(dataobj, fm_func, fm_paras,nonlin_lnprior_func), method="nelder-mead",
+                           options={"xatol": 1e-2, "maxiter": 5e3,"initial_simplex":initial_simplex,"disp":True})
+    print("Best fit values:")
+    print(nonlin_labels)
+    print(res.x)
 
-    plt.subplot(1,3,3)
-    plt.plot(rvs,np.exp(out[:,0]-np.max(out[:,0])))
-    plt.ylabel("RV posterior")
-    plt.xlabel("RV (km/s)")
     plt.show()
+

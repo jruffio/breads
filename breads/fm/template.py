@@ -1,3 +1,4 @@
+import numpy as np
 
 def templatefm(nonlin_paras, cubeobj, para1=None,para2=None):
     """
@@ -17,5 +18,6 @@ def templatefm(nonlin_paras, cubeobj, para1=None,para2=None):
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
     pass
+    N_linpara = 0
     d, M, s = np.array([]), np.array([]).reshape(0, N_linpara), np.array([])
     return
