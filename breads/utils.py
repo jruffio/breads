@@ -112,8 +112,8 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
         noise_list = np.reshape(noisecube,(nz,nx*ny))
         badpix_list = np.reshape(new_badpixcube,(nz,nx*ny))
         out_data,out_badpix,out_res = _task_findbadpix((data_list,noise_list,badpix_list,med_spec,M_spline))
-        new_cube = np.reshape(new_cube,(nz,ny,nx))
-        new_badpixcube = np.reshape(new_badpixcube,(nz,ny,nx))
+        new_cube = np.reshape(out_data,(nz,ny,nx))
+        new_badpixcube = np.reshape(out_badpix,(nz,ny,nx))
         res = np.reshape(out_res,(nz,ny,nx))
     else:
         numthreads = mypool._processes
