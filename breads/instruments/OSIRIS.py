@@ -81,10 +81,21 @@ class OSIRIS(Instrument):
         self.noise = self.noise[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
         self.bad_pixels = self.data[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
 
-    def calibrate(self, SkyCalibObj : SkyCalibration):
+    def calibrate(self, SkyCalibObj):
+        """
+        SkyCalibObj can be either an object of an SkyCalibration object, or
+        the path+filename of the fits file that SkyCalibration generates.
+        """
         if self.calibrated:
             warn("Overwriting previously done calibration")
-        self.wavelengths = SkyCalibObj.corrected_wavelengths
+        if isinstance(SkyCalibObj, SkyCalibration):
+            self.wavelengths = SkyCalibObj.corrected_wavelengths
+        elif type(SkyCalibObj) is str:
+            with pyfits.open(SkyCalibObj) as hdulist:
+                self.wavelengths = hdulist[0].data
+        else:
+            warn("Invalid Input, run help(osiris.calibrate) for info.")
+            return
         self.calibrated = True
 
     def broaden(self, wvs,spectrum, loc=None,mppool=None):
