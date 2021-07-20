@@ -317,10 +317,8 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
     for i, img_slice in enumerate(data.data):
         if verbose and (i % 200 == 0):
             print(f'index {i} wavelength {data.read_wavelengths[i]}')
-        params = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
+        mu_x, mu_y, sig_x, sig_y, fit_vals, resid = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
             residual=residual, mask=mask, sigma=sigma, n_sigmas=n_sigmas)
-        print(params)
-        mu_x, mu_y, sig_x, sig_y, fit_vals, resid = params
         mu_xs += [mu_x]; mu_ys += [mu_y]
         sig_xs += [sig_x]; sig_ys += [sig_y]
         all_fit_values += [fit_vals]
