@@ -9,6 +9,7 @@ import astropy.units as u
 from astropy.time import Time
 from copy import copy
 from breads.utils import broaden
+from breads.calibration import SkyCalibration
 
 class OSIRIS(Instrument):
     def __init__(self, filename=None, skip_baryrv=False):
@@ -19,6 +20,7 @@ class OSIRIS(Instrument):
             warn(warning_text)
         else:
             self.read_data_file(filename, skip_baryrv=skip_baryrv)
+        self.calibrated = False
 
     def read_data_file(self, filename, skip_baryrv=False):
         """
@@ -39,7 +41,7 @@ class OSIRIS(Instrument):
             badpixcube[np.where(badpixcube!=0)] = 1
             badpixcube[np.where(badpixcube==0)] = np.nan
 
-        nz,ny,nx = cube.shape
+        nz, nx, ny = cube.shape
         init_wv = prihdr["CRVAL1"]/1000. # wv for first slice in mum
         dwv = prihdr["CDELT1"]/1000. # wv interval between 2 slices in mum
         wvs=np.linspace(init_wv,init_wv+dwv*nz,nz,endpoint=False)
@@ -53,7 +55,11 @@ class OSIRIS(Instrument):
         else:
             baryrv = None
 
-        self.wavelengths = wvs
+        self.wavelengths = np.zeros_like(cube)
+        for i in range(nx):
+            for j in range(ny):
+                self.wavelengths[:, i, j] = wvs
+        self.read_wavelengths = wvs
         self.data = cube
         self.noise = noisecube
         self.bad_pixels = badpixcube
@@ -66,8 +72,20 @@ class OSIRIS(Instrument):
         new_badpixcube, new_cube, res = \
             utils.findbadpix(self.data, self.noise, self.bad_pixels, chunks, mypool, med_spec, nan_mask_boxsize)
         self.bad_pixels = new_badpixcube
-        self.data = new_badpixcube * self.data
+        self.data = new_cube
         return res
+
+    def crop_image(self, x_range, y_range):
+        self.data = self.data[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
+        self.wavelengths = self.wavelengths[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
+        self.noise = self.noise[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
+        self.bad_pixels = self.data[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
+
+    def calibrate(self, SkyCalibObj : SkyCalibration):
+        if self.calibrated:
+            warn("Overwriting previously done calibration")
+        self.wavelengths = SkyCalibObj.corrected_wavelengths
+        self.calibrated = True
 
     def broaden(self, wvs,spectrum, loc=None,mppool=None):
         """

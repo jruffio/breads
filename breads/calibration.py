@@ -142,7 +142,7 @@ def relevant_OH_line_data(data: Instrument, OH_wavelengths, OH_intensity):
     """
     returns the relevant OH line data based on wavelength range of instrument
     """
-    wavs = data.wavelengths * u.micron
+    wavs = data.read_wavelengths * u.micron
     wav_low, wav_high = np.where(OH_wavelengths >= wavs[0])[0][0], np.where(OH_wavelengths <= wavs[-1])[0][-1]
     relevant_OH = OH_wavelengths[wav_low:wav_high], OH_intensity[wav_low:wav_high]
     return relevant_OH
@@ -160,7 +160,7 @@ def sky_calibration(data: Instrument, num_threads = 16, R=4000, zero_order=False
     row_inputs = np.reshape(np.array(list(range(nx)) * ny), (nx, ny), order = 'F')
     col_inputs = np.reshape(np.array(list(range(ny)) * nx), (nx, ny), order = 'C')
     params = np.reshape(np.dstack((row_inputs, col_inputs)), (nx * ny, 2))
-    args = zip(repeat(data.wavelengths), np.transpose(data.data.reshape((nz, nx * ny), order='C')), 
+    args = zip(repeat(data.read_wavelengths), np.transpose(data.data.reshape((nz, nx * ny), order='C')), 
                 params, repeat(relevant_OH), repeat(R), repeat(zero_order),
                 repeat(verbose), repeat(frac_error), repeat(bad_pixel_threshold), 
                 repeat(margin), repeat(center_data))
@@ -170,7 +170,7 @@ def sky_calibration(data: Instrument, num_threads = 16, R=4000, zero_order=False
         p0s[0][1], calib_filename, center_data)
 
 def corrected_wavelengths(data, off0, off1, center_data):
-    wavs = data.wavelengths.astype(float) * u.micron
+    wavs = data.read_wavelengths.astype(float) * u.micron
     if center_data:
         wavs = wavs + (wavs - np.mean(wavs)) * off1 + off0 * u.angstrom
     else:
@@ -316,7 +316,7 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
     
     for i, img_slice in enumerate(data.data):
         if verbose and (i % 200 == 0):
-            print(f'index {i} wavelength {data.wavelengths[i]}')
+            print(f'index {i} wavelength {data.read_wavelengths[i]}')
         mu_x, mu_y, sig_x, sig_y, fit_vals, resid = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
             residual=residual, mask=mask, sigma=sigma, n_sigmas=n_sigmas)
         mu_xs += [mu_x]; mu_ys += [mu_y]
@@ -328,7 +328,7 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
         # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
         fluxs += [aper_photo['aperture_sum'][0]]
 
-    transmission = fluxs / parse_star_spectrum(data.wavelengths, star_spectrum, R)
+    transmission = fluxs / parse_star_spectrum(data.read_wavelengths, star_spectrum, R)
     return TelluricCalibration(data, *tuple(map(np.array, mu_xs, mu_ys, \
         (sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission))), calib_filename)
 
@@ -344,12 +344,12 @@ class TelluricCalibration:
         self.residuals = residuals
         self.fluxs = fluxs
         self.transmission = transmission
-        self.wavelengths = data.wavelengths
+        self.read_wavelengths = data.read_wavelengths
 
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(data=self.transmission,
                                         header=pyfits.Header(cards={"TYPE": "transmission"})))
-        hdulist.append(pyfits.ImageHDU(data=self.wavelengths,
+        hdulist.append(pyfits.ImageHDU(data=self.read_wavelengths,
                                         header=pyfits.Header(cards={"TYPE": "wavelengths"})))
         hdulist.append(pyfits.ImageHDU(data=self.mu_xs,
                                         header=pyfits.Header(cards={"TYPE": "Mu X"})))
