@@ -253,7 +253,7 @@ def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
     if fit.success:
         fit_values = fit.x
     else:
-        return(np.nan, np.nan, fit.x * np.nan, np.nan * np.zeros((nx, ny)))
+        return(np.nan, np.nan, np.nan, np.nan, fit.x * np.nan, np.nan * np.zeros((nx, ny)))
     if residual:
         residuals = img_slice - psf_func(nx, ny, *fit_values)
     else:
@@ -317,8 +317,10 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
     for i, img_slice in enumerate(data.data):
         if verbose and (i % 200 == 0):
             print(f'index {i} wavelength {data.read_wavelengths[i]}')
-        mu_x, mu_y, sig_x, sig_y, fit_vals, resid = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
+        params = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
             residual=residual, mask=mask, sigma=sigma, n_sigmas=n_sigmas)
+        print(params)
+        mu_x, mu_y, sig_x, sig_y, fit_vals, resid = params
         mu_xs += [mu_x]; mu_ys += [mu_y]
         sig_xs += [sig_x]; sig_ys += [sig_y]
         all_fit_values += [fit_vals]
