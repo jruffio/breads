@@ -24,15 +24,19 @@ def process_chunk(args):
     nonlin_paras_list, dataobj, fm_func, fm_paras = args
 
     for k, nonlin_paras in enumerate(zip(*nonlin_paras_list)):
-        log_prob,log_prob_H0,rchi2,linparas,linparas_err = fitfm(nonlin_paras,dataobj,fm_func,fm_paras)
-        N_linpara = np.size(linparas)
-        if k ==0:
-            out_chunk = np.zeros((np.size(nonlin_paras_list[0]),1+1+1+2*N_linpara))
-        out_chunk[k,0] = log_prob
-        out_chunk[k,1] = log_prob_H0
-        out_chunk[k,2] = rchi2
-        out_chunk[k,3:(N_linpara+3)] = linparas
-        out_chunk[k,(N_linpara+3):(2*N_linpara+3)] = linparas_err
+        try:
+        # if 1:
+            log_prob,log_prob_H0,rchi2,linparas,linparas_err = fitfm(nonlin_paras,dataobj,fm_func,fm_paras)
+            N_linpara = np.size(linparas)
+            if k ==0:
+                out_chunk = np.zeros((np.size(nonlin_paras_list[0]),1+1+1+2*N_linpara))
+            out_chunk[k,0] = log_prob
+            out_chunk[k,1] = log_prob_H0
+            out_chunk[k,2] = rchi2
+            out_chunk[k,3:(N_linpara+3)] = linparas
+            out_chunk[k,(N_linpara+3):(2*N_linpara+3)] = linparas_err
+        except:
+            out_chunk[k,:] = np.nan
     return out_chunk
 
 
@@ -79,7 +83,7 @@ def search_planet(para_vecs,dataobj,fm_func,fm_paras,numthreads=None):
         out = np.reshape(_out,out_shape)
     else:
         mypool = mp.Pool(processes=numthreads)
-        chunk_size = np.size(para_grids[0])//(3*numthreads)
+        chunk_size = np.max([1,np.size(para_grids[0])//(3*numthreads)])
         N_chunks = np.size(para_grids[0])//chunk_size
         nonlin_paras_lists = []
         indices_lists = []

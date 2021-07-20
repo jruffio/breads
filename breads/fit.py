@@ -38,7 +38,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
     N_data = np.size(d)
     linparas = np.ones(N_linpara)+np.nan
     linparas_err = np.ones(N_linpara)+np.nan
-    if N_data == 0:
+    if N_data == 0 or 0 not in validpara[0]:
         log_prob = -np.inf
         log_prob_H0 = -np.inf
         rchi2 = np.inf
@@ -87,8 +87,48 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
     return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
 def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None):
+    """
+    Wrapper to fit_fm() but only returns the log probability marginalized over the linear parameters.
+
+    Args:
+        nonlin_paras: [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
+            parameters depends on the forward model defined.
+        dataobj: A data object of type breads.instruments.instrument.Instrument to be analyzed.
+        fm_func: A forward model function. See breads.fm.template.template() for an example.
+        fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
+        computeH0: If true (default), compute the probability of the model removing the first element of the linear
+            model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
+            non-linear parameters
+
+    Returns:
+        log_prob: Probability of the model marginalized over linear parameters.
+    """
     if nonlin_lnprior_func is not None:
         prior = nonlin_lnprior_func(nonlin_paras)
     else:
         prior = 0
-    return fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False)[0]+prior
+    try:
+        lnprob = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False)[0]+prior
+    except:
+        lnprob =  -np.inf
+    return lnprob
+
+
+def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None):
+    """
+   Returns the negative of the log_prob() for minimization routines.
+
+    Args:
+        nonlin_paras: [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
+            parameters depends on the forward model defined.
+        dataobj: A data object of type breads.instruments.instrument.Instrument to be analyzed.
+        fm_func: A forward model function. See breads.fm.template.template() for an example.
+        fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
+        computeH0: If true (default), compute the probability of the model removing the first element of the linear
+            model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
+            non-linear parameters
+
+    Returns:
+        log_prob: Probability of the model marginalized over linear parameters.
+    """
+    return - log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func)

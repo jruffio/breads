@@ -18,6 +18,7 @@ if __name__ == "__main__":
     except:
         pass
 
+    numthreads = 16
 
     filename = "../../public_osiris_data/kap_And/20161106/science/s161106_a020002_Kbb_020.fits"
     dataobj = OSIRIS(filename)
@@ -25,8 +26,6 @@ if __name__ == "__main__":
     dataobj.noise = np.ones((nz,ny,nx))
     # plt.imshow(dataobj.data[1000,:,:])
     # plt.show()
-    # print(np.where(np.isnan(dataobj.bad_pixels)))
-    # exit()
 
     if 1:
         # Load the planet model, the transmission spectrum, and the star spectrum to be used in the forward model.
@@ -43,18 +42,25 @@ if __name__ == "__main__":
         with pyfits.open(filename) as hdulist:
             star_spectrum = hdulist[1].data
 
+    import multiprocessing as mp
+    mypool = mp.Pool(processes=numthreads)
+    dataobj.remove_bad_pixels(med_spec=star_spectrum,mypool=mypool)
+    mypool.close()
+    mypool.join()
+    # dataobj.remove_bad_pixels(med_spec=star_spectrum,mypool=None)
+
     # Definition of the (extra) parameters for splinefm()
-    # fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
-    #             "boxw":3,"nodes":20,"psfw":1.2,"nodes":20,"badpixfraction":0.75}
-    # fm_func = hc_splinefm
+    fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
+                "boxw":3,"nodes":20,"psfw":1.2,"nodes":20,"badpixfraction":0.75}
+    fm_func = hc_splinefm
     # fm_paras = {"planet_f":planet_f,"transmission":transmission,"boxw":1,"res_hpf":100,"psfw":1.2,"badpixfraction":0.75}
     # fm_func = iso_hpffm
-    fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
-                "boxw":3,"res_hpf":100,"psfw":1.2,"badpixfraction":0.75}
-    fm_func = hc_hpffm
+    # fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
+    #             "boxw":3,"psfw":1.2,"badpixfraction":0.75,"hpf_mode":"fft","cutoff":40}
+    # fm_func = hc_hpffm
 
-    if 1: # Example code to test the forward model
-        nonlin_paras = [-15,30,9] # x (pix),y (pix), rv (km/s)
+    if 0: # Example code to test the forward model
+        nonlin_paras = [-15,30,9] # rv (km/s), y (pix), x (pix)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
         # s is the vector of uncertainties corresponding to d
@@ -88,7 +94,7 @@ if __name__ == "__main__":
     rvs = np.array([-15])
     ys = np.arange(ny)
     xs = np.arange(nx)
-    out = search_planet([rvs,ys,xs],dataobj,fm_func,fm_paras,numthreads=16)
+    out = search_planet([rvs,ys,xs],dataobj,fm_func,fm_paras,numthreads=numthreads)
     N_linpara = (out.shape[-1]-2)//2
     print(out.shape)
 

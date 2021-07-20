@@ -25,21 +25,21 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     return gaussA + bkg
 
 # pos: (x,y) or fiber, position of the companion
-def hc_atmgrid_hpffm(nonlin_paras, cubeobj,loc=None, atm_grid=None, atm_grid_wvs=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,
-             badpixfraction=0.75,hpf_mode=None,res_hpf=50,cutoff=5):
+def hc_atmgrid_hpffm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,
+             badpixfraction=0.75,hpf_mode=None,res_hpf=50,cutoff=5,fft_bounds=None,loc=None):
     """
     For high-contrast companions (planet + speckles).
     Generate forward model removing the continuum with a fourier based high pass filter.
 
     Args:
-        nonlin_paras: Non-linear parameters of the model, which are the radial velocity and the position of
-            the planet in the FOV.
-            [rv,y,x] for 3d cubes (e.g. OSIRIS)
-            [rv,y] for 2d (e.g. KPIC, y being fiber)
-            [rv] for 1d spectra
+        nonlin_paras: Non-linear parameters of the model, which are first the parameters defining the atmopsheric grid
+            (atm_grid). The following parameters are the spin (vsini), the radial velocity, and the position (if loc is
+            not defined) of the planet in the FOV.
+                [atm paras ....,vsini,rv,y,x] for 3d cubes (e.g. OSIRIS)
+                [atm paras ....,vsini,rv,y] for 2d (e.g. KPIC, y being fiber)
+                [atm paras ....,vsini,rv] for 1d spectra
         cubeobj: Data object.
             Must inherit breads.instruments.instrument.Instrument.
-        loc: (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
         atm_grid: Planet atmospheric model grid as a scipy.interpolate.RegularGridInterpolator object. Make sure the
             wavelength coverage of the grid is just right and not too big as it will slow down the spin broadening.
         atm_grid_wvs: Wavelength sampling on which atm_grid is defined. Wavelength needs to be uniformly sampled.
@@ -59,6 +59,10 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj,loc=None, atm_grid=None, atm_grid_wvs
         res_hpf: float, if hpf_mode="gauss", resolution of the continuum to be subtracted.
         cutoff: int, if hpf_mode="fft", the higher the cutoff the more agressive the high pass filter.
             See breads.utils.LPFvsHPF().
+        fft_bounds: [l1,l2,..ln] if hpf_mode is "fft", divide the spectrum into n chunks [l1,l2],..[..,ln] on which the
+            fft high-pass filter is run separately.
+        loc: (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
+            When loc is not None, the x,y non-linear parameters should not be given.
 
     Returns:
         d: Data as a 1d vector with bad pixels removed (no nans)
@@ -78,7 +82,6 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj,loc=None, atm_grid=None, atm_grid_wvs
         data = cubeobj.data[:,None,None]
         noise = cubeobj.noise[:,None,None]
         bad_pixels = cubeobj.bad_pixels[:,None,None]
-        vsini,rv = other_nonlin_paras
     elif len(cubeobj.data.shape)==2:
         data = cubeobj.data[:,:,None]
         noise = cubeobj.noise[:,:,None]
@@ -92,15 +95,24 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj,loc=None, atm_grid=None, atm_grid_wvs
     else:
         refpos = cubeobj.refpos
 
-    vsini,rv = other_nonlin_paras
+    vsini,rv = other_nonlin_paras[0:2]
+    # Defining the position of companion
+    # If loc is not defined, then the x,y position is assume to be a non linear parameter.
     if np.size(loc) ==2:
         x,y = loc
-    elif np.size(loc) ==1:
+    elif np.size(loc) ==1 and loc is not None:
         x,y = 0,loc
     elif loc is None:
-        x,y = 0,0
+        if len(cubeobj.data.shape)==1:
+            x,y = 0,0
+        elif len(cubeobj.data.shape)==2:
+            x,y = 0,other_nonlin_paras[2]
+        elif len(cubeobj.data.shape)==3:
+            x,y = other_nonlin_paras[3],other_nonlin_paras[2]
 
     nz, ny, nx = data.shape
+    if fft_bounds is None:
+        fft_bounds = np.array([0,nz])
 
     # Handle the different dimensions for the wavelength
     # Only 2 cases are acceptable, anything else is undefined:
@@ -140,6 +152,7 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj,loc=None, atm_grid=None, atm_grid_wvs
     badpix_stamp = _padbad_pixels[:, padk-w:padk+w+1, padl-w:padl+w+1]
     badpixs = np.ravel(_padbad_pixels[:, padk-w:padk+w+1, padl-w:padl+w+1])
     s = np.ravel(_padnoise[:, padk-w:padk+w+1, padl-w:padl+w+1])
+    badpixs[np.where(s==0)] = np.nan
 
     where_finite = np.where(np.isfinite(badpixs))
 
@@ -150,14 +163,14 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj,loc=None, atm_grid=None, atm_grid_wvs
 
         planet_model = atm_grid(atm_paras)[0]
 
-        if np.sum(np.isnan(planet_model)) >= 1 or np.sum(planet_model)==0:
+        if np.sum(np.isnan(planet_model)) >= 1 or np.sum(planet_model)==0 or np.size(atm_grid_wvs) != np.size(planet_model):
             return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
         else:
             if vsini != 0:
                 spinbroad_model = pyasl.fastRotBroad(atm_grid_wvs, planet_model, 0.1, vsini)
             else:
                 spinbroad_model = planet_model
-            planet_f = interp1d(atm_grid_wvs,spinbroad_model)
+            planet_f = interp1d(atm_grid_wvs,spinbroad_model, bounds_error=False, fill_value=0)
 
         psfs = np.zeros((nz, boxw, boxw))
         # Technically allows super sampled PSF to account for a true 2d gaussian integration of the area of a pixel.
@@ -181,32 +194,29 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj,loc=None, atm_grid=None, atm_grid_wvs
             for _l in range(boxw):
                 lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
 
-                # High pass filter the data
+                # The planet spectrum model is RV shifted and multiplied by the tranmission
+                # Go from a 1d spectrum to the 3D scaled PSF
+                planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
+                scaled_vec = psfs[:, _k,_l] * planet_spec
+
+                # High pass filter the data and the models
                 if hpf_mode == "gauss":
                     data_lpf[:,_k,_l] = broaden(lwvs,cube_stamp[:,_k,_l]*badpix_stamp[:,_k,_l],res_hpf)
                     data_hpf[:,_k,_l] = cube_stamp[:,_k,_l]-data_lpf[:,_k,_l]
-                elif hpf_mode == "fft":
-                    data_lpf[:, _k, _l],data_hpf[:,_k,_l] = LPFvsHPF(cube_stamp[:,_k,_l]*badpix_stamp[:,_k,_l],cutoff)
 
-                    # The planet spectrum model is RV shifted and multiplied by the tranmission
-                # Go from a 1d spectrum to the 3D scaled PSF
-                planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
-
-                scaled_vec = psfs[:, _k,_l] * planet_spec
-
-                # high pass filter the planet model
-                if hpf_mode == "gauss":
                     scaled_vec_lpf = broaden(lwvs,scaled_vec*badpix_stamp[:,_k,_l],res_hpf)
                     scaled_psfs_hpf[:,_k,_l] = scaled_vec-scaled_vec_lpf
-                elif hpf_mode == "fft":
-                    _,scaled_psfs_hpf[:,_k,_l] = LPFvsHPF(scaled_vec*badpix_stamp[:,_k,_l],cutoff)
 
-                if hpf_mode == "gauss":
                     star_spectrum_lpf = broaden(lwvs,star_spectrum*badpix_stamp[:,_k,_l],res_hpf)
                     M_speckles_hpf[:,_k,_l] = (star_spectrum-star_spectrum_lpf)/star_spectrum_lpf*data_lpf[:,_k,_l]
                 elif hpf_mode == "fft":
-                    star_spectrum_lpf,star_spectrum_hpf = LPFvsHPF(star_spectrum*badpix_stamp[:,_k,_l],cutoff)
-                    M_speckles_hpf[:,_k,_l] = LPFvsHPF(star_spectrum_hpf/star_spectrum_lpf*data_lpf[:,_k,_l],cutoff)[1]
+                    for lb,rb in zip(fft_bounds[0:-1],fft_bounds[1::]):
+                        data_lpf[lb:rb, _k, _l],data_hpf[lb:rb,_k,_l] = LPFvsHPF(cube_stamp[lb:rb,_k,_l]*badpix_stamp[lb:rb,_k,_l],cutoff)
+
+                        _,scaled_psfs_hpf[lb:rb,_k,_l] = LPFvsHPF(scaled_vec[lb:rb]*badpix_stamp[lb:rb,_k,_l],cutoff)
+
+                        star_spectrum_lpf,star_spectrum_hpf = LPFvsHPF(star_spectrum[lb:rb]*badpix_stamp[lb:rb,_k,_l],cutoff)
+                        M_speckles_hpf[lb:rb,_k,_l] = LPFvsHPF(star_spectrum_hpf/star_spectrum_lpf*data_lpf[lb:rb,_k,_l],cutoff)[1]
 
                 # import matplotlib.pyplot as plt
                 # plt.plot(cube_stamp[:,_k,_l]*badpix_stamp[:,_k,_l])
