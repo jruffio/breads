@@ -257,7 +257,7 @@ def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
     if residual:
         residuals = img_slice - psf_func(nx, ny, *fit_values)
     else:
-        residual = None
+        residuals = None
     return (fit_values[0], fit_values[1], fit_values[2], fit_values[3], fit_values, residuals)
 
 def parse_star_spectrum(wavs, star_spectrum, R):
