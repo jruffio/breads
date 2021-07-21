@@ -253,12 +253,12 @@ def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
     if fit.success:
         fit_values = fit.x
     else:
-        return(np.nan, np.nan, np.nan, np.nan, fit.x * np.nan, np.nan * np.zeros((nx, ny)))
+        return(np.nan, np.nan, np.nan, np.nan, fit, np.nan * np.zeros((nx, ny)))
     if residual:
         residuals = img_slice - psf_func(nx, ny, *fit_values)
     else:
         residuals = None
-    return (fit_values[0], fit_values[1], fit_values[2], fit_values[3], fit_values, residuals)
+    return (fit_values[0], fit_values[1], fit_values[2], fit_values[3], fit, residuals)
 
 def parse_star_spectrum(wavs, star_spectrum, R):
     # would be worthwhile to, in future, add this to __init__ of breads.calibration
@@ -315,7 +315,7 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
             "if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters"
     
     for i, img_slice in enumerate(data.data):
-        if verbose and (i % 200 == 0):
+        if verbose and (i % 50 == 0):
             print(f'index {i} wavelength {data.read_wavelengths[i]}')
         mu_x, mu_y, sig_x, sig_y, fit_vals, resid = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
             residual=residual, mask=mask, sigma=sigma, n_sigmas=n_sigmas)
@@ -323,14 +323,20 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
         sig_xs += [sig_x]; sig_ys += [sig_y]
         all_fit_values += [fit_vals]
         residuals += [resid]
-        aper_photo = aperture_photometry(img_slice, \
-            EllipticalAperture((mu_y, mu_x), aperture_sigmas*sig_y, aperture_sigmas*sig_x)) 
-        # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
-        fluxs += [aper_photo['aperture_sum'][0]]
+        if fit_vals.success:
+            aper_photo = aperture_photometry(img_slice, \
+                EllipticalAperture((mu_y, mu_x), aperture_sigmas*sig_y, aperture_sigmas*sig_x)) 
+            # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
+            print(aper_photo)
+            fluxs += [aper_photo['aperture_sum'][0]]
+        else:
+            print("fit failed at: ", i)
+            print(fit_vals)
+            fluxs += [np.nan]
 
     transmission = fluxs / parse_star_spectrum(data.read_wavelengths, star_spectrum, R)
-    return TelluricCalibration(data, *tuple(map(np.array, mu_xs, mu_ys, \
-        (sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission))), calib_filename)
+    return TelluricCalibration(data, *tuple(map(np.array, (mu_xs, mu_ys, \
+        sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission))), calib_filename)
 
 class TelluricCalibration:
     def __init__(self, data: Instrument, \
@@ -351,6 +357,8 @@ class TelluricCalibration:
                                         header=pyfits.Header(cards={"TYPE": "transmission"})))
         hdulist.append(pyfits.ImageHDU(data=self.read_wavelengths,
                                         header=pyfits.Header(cards={"TYPE": "wavelengths"})))
+        hdulist.append(pyfits.ImageHDU(data=self.fluxs,
+                                        header=pyfits.Header(cards={"TYPE": "fluxs"})))
         hdulist.append(pyfits.ImageHDU(data=self.mu_xs,
                                         header=pyfits.Header(cards={"TYPE": "Mu X"})))
         hdulist.append(pyfits.ImageHDU(data=self.mu_ys,

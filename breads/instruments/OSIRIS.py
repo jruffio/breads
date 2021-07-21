@@ -30,12 +30,13 @@ class OSIRIS(Instrument):
             prihdr = hdulist[0].header
             curr_mjdobs = prihdr["MJD-OBS"]
             cube = np.rollaxis(np.rollaxis(hdulist[0].data,2),2,1)
-            cube = return_64x19(cube)
             noisecube = np.rollaxis(np.rollaxis(hdulist[1].data,2),2,1)
-            noisecube = return_64x19(noisecube)
             # cube = np.moveaxis(cube,0,2)
             badpixcube = np.rollaxis(np.rollaxis(hdulist[2].data,2),2,1)
-            badpixcube = return_64x19(badpixcube)
+            if "bb" in hdulist[0].header["IF2NAME"]:
+                cube = return_64x19(cube)
+                noisecube = return_64x19(noisecube)
+                badpixcube = return_64x19(badpixcube)
             # badpixcube = np.moveaxis(badpixcube,0,2)
             badpixcube = badpixcube.astype(dtype=ctypes.c_double)
             badpixcube[np.where(badpixcube!=0)] = 1
