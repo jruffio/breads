@@ -133,7 +133,7 @@ def wavelength_calibration_one_pixel(wavs, one_pixel, location, relevant_OH, R=4
         #     return ((np.nan, np.nan, np.nan), u.angstrom, (p0, pCov))
     except Exception as e:
         warn(f"data at row: {row}, col: {col} did not fit: \n" + str(e))
-        raise e
+        # raise e
         return ((np.nan, np.nan, np.nan), (u.angstrom, None, None), None)
     
     return (tuple(p0), (u.angstrom, None, None), pCov)

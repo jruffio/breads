@@ -97,10 +97,19 @@ class OSIRIS(Instrument):
         if self.calibrated:
             warn("Overwriting previously done calibration")
         if isinstance(SkyCalibObj, SkyCalibration):
-            self.wavelengths = SkyCalibObj.corrected_wavelengths
+            wavs = self.read_wavelengths.astype(float) * u.micron
+            off0 = SkyCalibObj.fit_values[:, :, 0]
+            off1 = SkyCalibObj.fit_values[:, :, 1]
+            wavs = wavs * (1 + off1) + off0 * u.angstrom
+            self.wavelengths = (wavs.to(u.micron)).astype(float)
         elif type(SkyCalibObj) is str:
+            wavs = self.read_wavelengths.astype(float) * u.micron
             with pyfits.open(SkyCalibObj) as hdulist:
-                self.wavelengths = hdulist[0].data
+                off0 = hdulist[1].data
+                off1 = hdulist[2].data
+                print(hdulist[0].data.shape, off0.shape, off1.shape)
+                wavs = wavs * (1 + off1) + off0 * u.angstrom
+                self.wavelengths = (wavs.to(u.micron)).astype(float)
         else:
             warn("Invalid Input, run help(osiris.calibrate) for info.")
             return
