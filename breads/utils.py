@@ -61,6 +61,13 @@ def _remove_edges(paras):
 
     return cp_slices
 
+def corrected_wavelengths(data, off0, off1, center_data):
+    wavs = data.read_wavelengths.astype(float) * u.micron
+    if center_data:
+        wavs = wavs + (wavs - np.mean(wavs)) * off1 + off0 * u.angstrom
+    else:
+        wavs = wavs * (1 + off1) + off0 * u.angstrom
+    return wavs
 
 def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3):
     if noisecube is None:
@@ -201,6 +208,15 @@ def broaden(wvs,spectrum,R,mppool=None):
             conv_spectrum[indices] = out
 
         return conv_spectrum
+
+def clean_nans(arr, set_to="median", allowed_range=None):
+    if set_to == "median":
+        set_to = np.nanmedian(arr)
+    np.nan_to_num(arr, copy = False, nan=set_to)
+    if allowed_range is not None:
+        min_v, max_v = allowed_range
+        arr[arr > max_v] = set_to
+        arr[arr < min_v] = set_to
 
 
 def _task_broaden(paras):

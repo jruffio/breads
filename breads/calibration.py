@@ -169,14 +169,6 @@ def sky_calibration(data: Instrument, num_threads = 16, R=4000, zero_order=False
     return SkyCalibration(data, np.reshape(p0s_values, (nx, ny, len(p0s[0][0]))), \
         p0s[0][1], calib_filename, center_data)
 
-def corrected_wavelengths(data, off0, off1, center_data):
-    wavs = data.read_wavelengths.astype(float) * u.micron
-    if center_data:
-        wavs = wavs + (wavs - np.mean(wavs)) * off1 + off0 * u.angstrom
-    else:
-        wavs = wavs * (1 + off1) + off0 * u.angstrom
-    return wavs
-
 class SkyCalibration:
     def __init__(self, data: Instrument, fit_values, unit, calib_filename, center_data):
         if calib_filename is None:
@@ -189,7 +181,7 @@ class SkyCalibration:
         for i in range(nx):
             for j in range(ny):
                 corr_wavs[:, i, j] = \
-                    corrected_wavelengths(data, fit_values[i, j, 0], fit_values[i, j, 1], center_data)
+                    utils.corrected_wavelengths(data, fit_values[i, j, 0], fit_values[i, j, 1], center_data)
         self.corrected_wavelengths = corr_wavs
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(data=corr_wavs,

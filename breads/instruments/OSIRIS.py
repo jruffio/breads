@@ -89,30 +89,32 @@ class OSIRIS(Instrument):
         self.noise = self.noise[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
         self.bad_pixels = self.data[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
 
-    def calibrate(self, SkyCalibObj):
+    def calibrate(self, SkyCalibObj, allowed_range=(-1, 1)):
         """
         SkyCalibObj can be either an object of an SkyCalibration object, or
         the path+filename of the fits file that SkyCalibration generates.
         """
         if self.calibrated:
             warn("Overwriting previously done calibration")
+        nz, nx, ny = self.data.shape
         if isinstance(SkyCalibObj, SkyCalibration):
-            wavs = self.read_wavelengths.astype(float) * u.micron
             off0 = SkyCalibObj.fit_values[:, :, 0]
-            off1 = SkyCalibObj.fit_values[:, :, 1]
-            wavs = wavs * (1 + off1) + off0 * u.angstrom
-            self.wavelengths = (wavs.to(u.micron)).astype(float)
+            off0 = SkyCalibObj.fit_values[:, :, 1]
         elif type(SkyCalibObj) is str:
-            wavs = self.read_wavelengths.astype(float) * u.micron
             with pyfits.open(SkyCalibObj) as hdulist:
                 off0 = hdulist[1].data
                 off1 = hdulist[2].data
-                print(hdulist[0].data.shape, off0.shape, off1.shape)
-                wavs = wavs * (1 + off1) + off0 * u.angstrom
-                self.wavelengths = (wavs.to(u.micron)).astype(float)
         else:
             warn("Invalid Input, run help(osiris.calibrate) for info.")
             return
+        utils.clean_nans(off0, allowed_range=allowed_range)
+        utils.clean_nans(off1)
+        for i in range(nx):
+            for j in range(ny):
+                self.wavelengths[:, i, j] = \
+                utils.corrected_wavelengths(self, off0[i, j], off1[i, j], False)
+
+        utils.clean_nans(self.wavelengths)
         self.calibrated = True
 
     def broaden(self, wvs,spectrum, loc=None,mppool=None):
