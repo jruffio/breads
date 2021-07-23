@@ -29,14 +29,14 @@ def process_chunk(args):
             log_prob,log_prob_H0,rchi2,linparas,linparas_err = fitfm(nonlin_paras,dataobj,fm_func,fm_paras)
             N_linpara = np.size(linparas)
             if k ==0:
-                out_chunk = np.zeros((np.size(nonlin_paras_list[0]),1+1+1+2*N_linpara))
+                out_chunk = np.zeros((np.size(nonlin_paras_list[0]),1+1+1+2*N_linpara))+np.nan
             out_chunk[k,0] = log_prob
             out_chunk[k,1] = log_prob_H0
             out_chunk[k,2] = rchi2
             out_chunk[k,3:(N_linpara+3)] = linparas
             out_chunk[k,(N_linpara+3):(2*N_linpara+3)] = linparas_err
         except:
-            out_chunk[k,:] = np.nan
+            pass
     return out_chunk
 
 
