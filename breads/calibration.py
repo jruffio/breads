@@ -291,7 +291,7 @@ def parse_star_spectrum(wavs, star_spectrum, R):
 
 def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
         psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
-        aperture_sigmas=5, R=4000):
+        aperture_sigmas=5, R=4000, verbose_n=50):
     """
     star_spectrum needs to be a 2-tuple or array-like of length 2. 
     It can either be (wavelength data-array, flux data-array) or (wavelength datafile, flux datafile). 
@@ -315,7 +315,7 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
             "if you pass in a psf_func other than gaussian2D, you must pass in x0 initial parameters"
     
     for i, img_slice in enumerate(data.data):
-        if verbose and (i % 50 == 0):
+        if verbose and (i % verbose_n == 0):
             print(f'index {i} wavelength {data.read_wavelengths[i]}')
         mu_x, mu_y, sig_x, sig_y, fit_vals, resid = psf_fitter(img_slice, psf_func=psf_func, x0=x0,\
             residual=residual, mask=mask, sigma=sigma, n_sigmas=n_sigmas)
@@ -327,8 +327,9 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
             aper_photo = aperture_photometry(img_slice, \
                 EllipticalAperture((mu_y, mu_x), aperture_sigmas*sig_y, aperture_sigmas*sig_x)) 
             # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
-            print(aper_photo)
             fluxs += [aper_photo['aperture_sum'][0]]
+            if verbose and (i % verbose_n == 0):
+                print(aper_photo)
         else:
             print("fit failed at: ", i)
             print(fit_vals)
