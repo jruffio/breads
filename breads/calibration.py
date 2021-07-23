@@ -373,7 +373,7 @@ class TelluricCalibration:
             hdulist.writeto(calib_filename, clobber=True)
         hdulist.close()
 
-def extract_star_spectrum(data: Instrument, star_spectrum, calib_filename="./star_spectrum_file.fits",
+def extract_star_spectrum(data: Instrument, calib_filename="./star_spectrum_file.fits",
         psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
         aperture_sigmas=5, R=4000):
     star_spectrum = (data.read_wavelengths, np.ones_like(data.read_wavelengths))
