@@ -77,7 +77,7 @@ if __name__ == "__main__":
     phoenix_A0_broad = dataobj.broaden(phoenix_wvs,phoenix_A0,loc=sc_fib,mppool=mypool)
     phoenix_A0_func = interp1d(phoenix_wvs, phoenix_A0_broad, bounds_error=False, fill_value=np.nan)
 
-    transmission = A0obj.data[:,sc_fib]/phoenix_A0_func(dataobj.wavelengths[:,sc_fib])
+    transmission = A0obj.data[:,sc_fib]/phoenix_A0_func(A0obj.wavelengths[:,sc_fib])
 
     mypool.close()
     mypool.join()
@@ -132,7 +132,6 @@ if __name__ == "__main__":
 
         plt.subplot(2,1,1)
         plt.plot(d,label="data")
-        plt.plot(s/np.nanstd(s)*np.nanstd(d),label="s")
         plt.plot(m,label="model")
         plt.plot(paras[0]*M[:,0],label="planet model")
         plt.plot(m-paras[0]*M[:,0],label="starlight model")
