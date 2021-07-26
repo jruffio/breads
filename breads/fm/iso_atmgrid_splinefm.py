@@ -127,11 +127,15 @@ def iso_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None
     _padnoise =np.pad(noise,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     _padbad_pixels =np.pad(bad_pixels,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     k, l = int(np.round(refpos[1] + y)), int(np.round(refpos[0] + x))
-    dx,dy = x-l,y-k
-    k,l = k+w,l+w
-    d = np.ravel(_paddata[:, k-w:k+w+1, l-w:l+w+1])
-    s = np.ravel(_padnoise[:, k-w:k+w+1, l-w:l+w+1])
-    badpixs = np.ravel(_padbad_pixels[:, k-w:k+w+1, l-w:l+w+1])
+    dx,dy = x-l+refpos[0],y-k+refpos[1]
+    padk,padl = k+w,l+w
+
+    # high pass filter the data
+    cube_stamp = _paddata[:, padk-w:padk+w+1, padl-w:padl+w+1]
+    badpix_stamp = _padbad_pixels[:, padk-w:padk+w+1, padl-w:padl+w+1]
+    badpixs = np.ravel(badpix_stamp)
+    d = np.ravel(cube_stamp)
+    s = np.ravel(_padnoise[:, padk-w:padk+w+1, padl-w:padl+w+1])
     badpixs[np.where(s==0)] = np.nan
 
 
@@ -155,7 +159,8 @@ def iso_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None
         N_linpara = N_nodes
 
     where_finite = np.where(np.isfinite(badpixs))
-    if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(badpixs) or vsini < 0:
+    if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(badpixs) or vsini < 0 or \
+            padk >= ny+2*w-1 or padk < 0 or padl >= nx+2*w-1 or padl < 0:
         # don't bother to do a fit if there are too many bad pixels
         return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
     else:
