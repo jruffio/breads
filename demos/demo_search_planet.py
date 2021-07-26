@@ -47,7 +47,6 @@ if __name__ == "__main__":
     dataobj.remove_bad_pixels(med_spec=star_spectrum,mypool=mypool)
     mypool.close()
     mypool.join()
-    # dataobj.remove_bad_pixels(med_spec=star_spectrum,mypool=None)
 
     # Definition of the (extra) parameters for splinefm()
     fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
@@ -79,6 +78,7 @@ if __name__ == "__main__":
         plt.plot(m,label="model")
         plt.plot(paras[0]*M[:,0],label="planet model")
         plt.plot(m-paras[0]*M[:,0],label="starlight model")
+        plt.legend()
         plt.subplot(2,1,2)
         plt.plot(M[:,0]/np.max(M[:,0]),label="planet model")
         for k in range(M.shape[-1]-1):
