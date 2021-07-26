@@ -22,6 +22,7 @@ class OSIRIS(Instrument):
         else:
             self.read_data_file(filename, skip_baryrv=skip_baryrv)
         self.calibrated = False
+        self.refpos = None
 
     def read_data_file(self, filename, skip_baryrv=False):
         """
@@ -81,6 +82,7 @@ class OSIRIS(Instrument):
             utils.findbadpix(self.data, self.noise, self.bad_pixels, chunks, mypool, med_spec, nan_mask_boxsize)
         self.bad_pixels = new_badpixcube
         self.data = new_cube
+        utils.clean_nans(self.data)
         return res
 
     def crop_image(self, x_range, y_range):
@@ -88,6 +90,16 @@ class OSIRIS(Instrument):
         self.wavelengths = self.wavelengths[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
         self.noise = self.noise[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
         self.bad_pixels = self.data[:, x_range[0]:x_range[1], y_range[0]:y_range[1]]
+
+    def set_reference_position(self, value):
+        if type(value) is tuple:
+            self.refpos = value
+        if type(value) is str:
+            with pyfits.open(value) as hdulist:
+                mu_x = hdulist[3].data
+                mu_y = hdulist[4].data
+            self.refpos = (np.nanmedian(mu_x), np.nanmedian(mu_y))
+
 
     def calibrate(self, SkyCalibObj, allowed_range=(-1, 1)):
         """
