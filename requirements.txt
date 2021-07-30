@@ -5,3 +5,5 @@ numpy
 pip
 py
 scipy
+emcee
+PyAstronomy
