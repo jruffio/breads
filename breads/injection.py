@@ -73,7 +73,7 @@ def inject_planet(dataobj: Instrument, location, model, star, transmission, plan
         planet_slice = val * utils.gaussian2D(ny, nx, planet_x[ind], planet_y[ind], \
             sigx[ind], sigy[ind], const / (2*np.pi*sigx[ind]*sigy[ind])) * transmission[ind]
         dataobj.data[ind] += planet_slice
-        break
+        
 
 
 
