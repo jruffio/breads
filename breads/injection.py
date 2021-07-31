@@ -1,9 +1,11 @@
 import numpy as np
+import astropy.io.fits as pyfits
 from scipy.interpolate import interp1d
 from breads.instruments.instrument import Instrument
 from breads.calibration import TelluricCalibration
+import breads.utils as utils
 
-def read_planet_info(model, broaden, crop, dataobj):
+def read_planet_info(model, broaden, crop, margin, dataobj):
     print("reading planet file")
     if type(model) is str:
         planet_btsettl = "/scr3/jruffio/models/BT-Settl/BT-Settl_M-0.0_a+0.0/lte018-5.0-0.0a+0.0.BT-Settl.spec.7"
@@ -27,8 +29,22 @@ def read_planet_info(model, broaden, crop, dataobj):
 
     return planet_f
 
+def read_transmission_info(transmission):
+    if type(transmission) is str:
+        with pyfits.open(transmission) as hdulist:
+            transmission = hdulist[0].data
+    return (transmission / np.nanmedian(transmission))
+
 def read_star_info(star):
-    if isinstance(star, TelluricCalibration):
+    print("reading star info")
+    if type(star) is str:
+        with pyfits.open(star) as hdulist:
+            star_spectrum = hdulist[2].data
+            star_x, star_y = hdulist[3].data, hdulist[4].data
+            star_sigx, star_sigy = hdulist[5].data, hdulist[6].data
+            star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
+            return (star_x, star_y, star_sigx, star_sigy, star_flux)
+    elif isinstance(star, TelluricCalibration):
         star_spectrum = star.fluxs
         star_x, star_y = star.mu_xs, star.mu_ys
         star_sigx, star_sigy = star.sig_xs, star.sig_ys
@@ -37,17 +53,26 @@ def read_star_info(star):
     else:
         return star
 
-def inject_planet(dataobj: Instrument, location, model, star, \
+def inject_planet(dataobj: Instrument, location, model, star, transmission, planet_star_ratio, \
     broaden=True, crop=True, margin=0.2):
 
-    planet_f = read_planet_info(model, broaden, crop, dataobj)
-    star_x, star_y, star_sigx, star_sigy, star_flux = read_star_info(star)
+    planet_f = read_planet_info(model, broaden, crop, margin, dataobj)
+    star_x, star_y, sigx, sigy, star_flux = read_star_info(star)
+    transmission = read_transmission_info(transmission)
     x, y = location
-    planet_x = star_x + x, star_y + y 
+    planet_x, planet_y = star_x + x, star_y + y 
     planet_data = np.zeros_like(dataobj.data)
     nz, ny, nx = dataobj.data.shape
 
-    for img, wav in zip(dataobj.data, dataobj.wavelengths):
+    planet_f_vals = planet_f(dataobj.wavelengths)
+    print("set planet flux")
+    const = planet_star_ratio * star_flux / (np.nanmean(planet_f_vals) * nz)
+
+    print("start injection")
+    for ind, val in zip(range(nz), planet_f_vals):
+        planet_slice = val * utils.gaussian2D(ny, nx, planet_x[ind], planet_y[ind], \
+            sigx[ind], sigy[ind], const / (2*np.pi*sigx[ind]*sigy[ind])) * transmission[ind]
+        dataobj.data[ind] += planet_slice
         break
 
 

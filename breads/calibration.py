@@ -217,16 +217,7 @@ def mask_sky_remnant(slice, sigma=0.3, n_sigmas=2):
     slice[slice < (-sigma * n_sigmas)] = np.nan
     return slice
 
-def gaussian2D(nx, ny, mu_x, mu_y, sig_x, sig_y, A):
-    """
-    Two Dimensional Gaussian for getting PSF for different wavelength slices
-    """
-    x_vals, y_vals = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
-    gauss = A * np.exp(-((x_vals - mu_x) ** 2) / (2 * sig_x * sig_x)) * \
-        np.exp(-((y_vals - mu_y) ** 2) / (2 * sig_y * sig_y))
-    return gauss
-
-def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
+def psf_fitter(img_slice, psf_func=utils.gaussian2D, x0=None, \
     residual=False, mask=False, minimize_method='nelder-mead', sigma=0.3, n_sigmas=2):
     """
     psf_func should be such that the first six arguments are nx, ny, mu_x, mu_y, sig_x, sig_y
@@ -234,7 +225,7 @@ def psf_fitter(img_slice, psf_func=gaussian2D, x0=None, \
     """
     if mask:
         img_slice = mask_sky_remnant(img_slice, sigma, n_sigmas)
-    if psf_func == gaussian2D and x0 is None:
+    if psf_func == utils.gaussian2D and x0 is None:
         x0 = [*np.unravel_index(np.nanargmax(img_slice), img_slice.shape), 2, 2, np.nanmax(img_slice)]
     else:
         assert (x0 is not None), \
@@ -282,7 +273,7 @@ def parse_star_spectrum(wavs, star_spectrum, R):
     return np.interp(wavs, wavs_spec, utils.broaden(wavs_spec, spec, R))
 
 def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
-        psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
+        psf_func=utils.gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
         aperture_sigmas=5, R=4000, verbose_n=50):
     """
     star_spectrum needs to be a 2-tuple or array-like of length 2. 
@@ -299,7 +290,7 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
     """
     mu_xs, mu_ys, sig_xs, sig_ys, all_fit_values, residuals, fluxs = [], [], [], [], [], [], []
             
-    if psf_func == gaussian2D and x0 is None:
+    if psf_func == utils.gaussian2D and x0 is None:
         img_mean = np.nanmean(data.data, axis=0)
         x0 = [*np.unravel_index(np.nanargmax(img_mean), img_mean.shape), 2, 2, np.nanmax(img_mean)]
     else:
@@ -367,7 +358,7 @@ class TelluricCalibration:
         hdulist.close()
 
 def extract_star_spectrum(data: Instrument, calib_filename="./star_spectrum_file.fits",
-        psf_func=gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
+        psf_func=utils.gaussian2D, x0=None, residual=False, mask=False, sigma=0.3, n_sigmas=2, verbose=False, 
         aperture_sigmas=5, R=4000):
     star_spectrum = (data.read_wavelengths, np.ones_like(data.read_wavelengths))
     return telluric_calibration(data, star_spectrum, calib_filename, \

@@ -334,6 +334,14 @@ def LPFvsHPF(myvec,cutoff):
     # plt.show()
     return LPF_myvec,HPF_myvec
 
+def gaussian2D(nx, ny, mu_x, mu_y, sig_x, sig_y, A):
+    """
+    Two Dimensional Gaussian for getting PSF for different wavelength slices
+    """
+    x_vals, y_vals = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
+    gauss = A * np.exp(-((x_vals - mu_x) ** 2) / (2 * sig_x * sig_x)) * \
+        np.exp(-((y_vals - mu_y) ** 2) / (2 * sig_y * sig_y))
+    return gauss
 
 def get_spline_model(x_knots, x_samples, spline_degree=3):
     """
