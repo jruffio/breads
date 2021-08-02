@@ -7,6 +7,9 @@ import breads.utils as utils
 from photutils.aperture import EllipticalAperture, aperture_photometry
 
 def read_planet_info(model, broaden, crop, margin, dataobj):
+    if type(model) == interp1d:
+        print("planet model is interp1d")
+        return model
     print("reading planet file")
     if type(model) is str:
         planet_btsettl = "/scr3/jruffio/models/BT-Settl/BT-Settl_M-0.0_a+0.0/lte018-5.0-0.0a+0.0.BT-Settl.spec.7"

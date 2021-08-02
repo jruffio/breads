@@ -1,7 +1,7 @@
 import numpy as np
-
 from scipy.optimize import lsq_linear
 from scipy.special import loggamma
+import matplotlib.pyplot as plt
 
 def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
     """
@@ -50,6 +50,12 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
         r = d  - m
         chi2 = np.nansum(r**2)
         rchi2 = chi2 / N_data
+
+        # plt.figure()
+        # for col in M.T:
+        #     plt.plot(col / np.nanmean(col))
+        # plt.show()
+
 
         covphi = rchi2 * np.linalg.inv(np.dot(M.T, M))
         slogdet_icovphi0 = np.linalg.slogdet(np.dot(M.T, M))
