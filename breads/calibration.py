@@ -320,11 +320,11 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
 
     transmission = fluxs / parse_star_spectrum(data.read_wavelengths, star_spectrum, R)
     return TelluricCalibration(data, *tuple(map(np.array, (mu_xs, mu_ys, \
-        sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission))), calib_filename)
+        sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission))), calib_filename, aperture_sigmas)
 
 class TelluricCalibration:
     def __init__(self, data: Instrument, \
-        mu_xs, mu_ys, sig_xs, sig_ys, fit_values, residuals, fluxs, transmission, calib_filename):
+        mu_xs, mu_ys, sig_xs, sig_ys, fit_values, residuals, fluxs, transmission, calib_filename, aperture_sigmas):
         if calib_filename is None:
             calib_filename = "./telluric_calib_file.fits"
         self.calib_filename = calib_filename
@@ -335,6 +335,7 @@ class TelluricCalibration:
         self.fluxs = fluxs
         self.transmission = transmission
         self.read_wavelengths = data.read_wavelengths
+        self.aperture_sigmas = aperture_sigmas
 
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(data=self.transmission,
@@ -342,7 +343,7 @@ class TelluricCalibration:
         hdulist.append(pyfits.ImageHDU(data=self.read_wavelengths,
                                         header=pyfits.Header(cards={"TYPE": "wavelengths"})))
         hdulist.append(pyfits.ImageHDU(data=self.fluxs,
-                                        header=pyfits.Header(cards={"TYPE": "fluxs"})))
+                                        header=pyfits.Header(cards={"TYPE": "fluxs", "aperture_sigmas": aperture_sigmas})))
         hdulist.append(pyfits.ImageHDU(data=self.mu_xs,
                                         header=pyfits.Header(cards={"TYPE": "Mu X"})))
         hdulist.append(pyfits.ImageHDU(data=self.mu_ys,
