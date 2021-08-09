@@ -70,7 +70,7 @@ def _task_findbadpix(paras):
     new_badpix_arr = copy(badpix_arr)
     res = np.zeros(data_arr.shape) + np.nan
     for k in range(data_arr.shape[1]):
-        where_data_finite = np.where(np.isfinite(badpix_arr[:,k])*np.isfinite(data_arr[:,k])*np.isfinite(noise_arr[:,k])*(noise_arr[:,k]!=0))
+        where_data_finite = np.where(np.isfinite(med_spec)*np.isfinite(badpix_arr[:,k])*np.isfinite(data_arr[:,k])*np.isfinite(noise_arr[:,k])*(noise_arr[:,k]!=0))
         if np.size(where_data_finite[0]) == 0:
             res[:,k] = np.nan
             continue
