@@ -306,18 +306,17 @@ def telluric_calibration(data: Instrument, star_spectrum, calib_filename=None,
         sig_xs += [sig_x]; sig_ys += [sig_y]
         all_fit_values += [fit_vals]
         residuals += [resid]
-        if fit_vals.success:
-            aper_photo = aperture_photometry(img_slice, \
-                EllipticalAperture((mu_y, mu_x), aperture_sigmas*sig_y, aperture_sigmas*sig_x)) 
-            # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
-            fluxs += [aper_photo['aperture_sum'][0]]
-            if verbose and (i % verbose_n == 0):
-                print(aper_photo)
-        else:
+        if not fit_vals.success or sig_x < 0 or sig_y < 0:
             print("fit failed at: ", i)
             print(fit_vals)
-            fluxs += [np.nan]
-
+            # fluxs += [np.nan]
+            mu_x, mu_y, sig_x, sig_y = np.nanmedian(mu_xs), np.nanmedian(mu_ys), np.nanmedian(sig_xs), np.nanmedian(sig_ys)
+        aper_photo = aperture_photometry(img_slice, \
+                EllipticalAperture((mu_y, mu_x), aperture_sigmas*sig_y, aperture_sigmas*sig_x)) 
+            # check if a, b order is correct, seems correct, weirdly photutils uses order y, x
+        fluxs += [aper_photo['aperture_sum'][0]]
+        if verbose and (i % verbose_n == 0):
+            print(aper_photo)
     transmission = fluxs / parse_star_spectrum(data.read_wavelengths, star_spectrum, R)
     return TelluricCalibration(data, *tuple(map(np.array, (mu_xs, mu_ys, \
         sig_xs, sig_ys, all_fit_values, residuals, fluxs, transmission))), calib_filename, aperture_sigmas)
