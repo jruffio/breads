@@ -1,4 +1,5 @@
 from matplotlib.pyplot import axis
+import matplotlib.pyplot as plt
 from breads.instruments.instrument import Instrument
 import breads.utils as utils
 from warnings import warn
@@ -11,6 +12,8 @@ from astropy.time import Time
 from copy import copy
 from breads.utils import broaden
 from breads.calibration import SkyCalibration
+import multiprocessing as mp
+from itertools import repeat
 
 class OSIRIS(Instrument):
     def __init__(self, filename=None, skip_baryrv=False):
@@ -148,6 +151,33 @@ class OSIRIS(Instrument):
         """
         return broaden(wvs, spectrum, self.R, mppool=mppool)
 
+    def set_noise(self, num_threads = 16, wid_mov=None):
+        nz, ny, nx = self.data.shape
+        my_pool = mp.Pool(processes=num_threads)
+        if wid_mov is None:
+            wid_mov = nz // 20
+        args = []
+        for i in range(ny):
+            for j in range(nx):
+                args += [self.data[:, i, j]]
+        output = my_pool.map(set_continnuum, zip(args, repeat(wid_mov)))
+        self.continuum = np.zeros((nz, ny, nx))
+        for i in range(ny):
+            for j in range(nx):
+                self.continuum[:, i, j] = output[(i*nx+j)]
+        # self.continuum = np.reshape(self.continuum, (nz, ny, nx), order='F')
+        self.noise = np.sqrt(self.continuum)
+
+def set_continnuum(args):
+    data, wid_mov = args
+    nz = len(data)
+    cont = np.zeros_like(data)
+    for k in range(nz):
+        low, upp = k-wid_mov//2, k+wid_mov//2
+        if low < 0:
+            low = 0
+        cont[k] = np.nanmedian(data[low:upp])
+    return cont
 
 def return_64x19(cube):
     """
