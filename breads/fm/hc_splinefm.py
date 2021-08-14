@@ -185,6 +185,9 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         psfs += pixgauss2d([1., w+dx, w+dy, psfw, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 
+        # flux ratio normalization
+        star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
+
         scaled_psfs = np.zeros((nz,boxw,boxw))+np.nan
         for _k in range(boxw):
             for _l in range(boxw):
@@ -192,6 +195,10 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
                 # The planet spectrum model is RV shifted and multiplied by the tranmission
                 planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
                 scaled_psfs[:,_k,_l] = psfs[:, _k,_l] * planet_spec
+
+        planet_flux = np.size(scaled_psfs) * np.nanmean(scaled_psfs)
+        scaled_psfs = scaled_psfs / planet_flux * star_flux
+        # print(np.nansum(scaled_psfs))
 
         # combine planet model with speckle model
         if fitback:
