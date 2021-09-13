@@ -157,7 +157,7 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, tr
     where_finite = np.where(np.isfinite(badpixs))
 
     if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(badpixs) or vsini < 0 or \
-            padk >= ny+2*w-1 or padk < 0 or padl >= nx+2*w-1 or padl < 0:
+            padk > ny+2*w-1 or padk < 0 or padl > nx+2*w-1 or padl < 0:
         # don't bother to do a fit if there are too many bad pixels
         return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
     else:

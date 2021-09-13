@@ -160,11 +160,10 @@ def iso_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None
 
     where_finite = np.where(np.isfinite(badpixs))
     if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(badpixs) or vsini < 0 or \
-            padk >= ny+2*w-1 or padk < 0 or padl >= nx+2*w-1 or padl < 0:
+            padk > ny+2*w-1 or padk < 0 or padl > nx+2*w-1 or padl < 0:
         # don't bother to do a fit if there are too many bad pixels
         return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
     else:
-
         planet_model = atm_grid(atm_paras)[0]
 
         if np.sum(np.isnan(planet_model)) >= 1 or np.sum(planet_model)==0 or np.size(atm_grid_wvs) != np.size(planet_model):

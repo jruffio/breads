@@ -22,6 +22,7 @@ if __name__ == "__main__":
 
     filename = "../../public_osiris_data/kap_And/20161106/science/s161106_a020002_Kbb_020.fits"
     dataobj = OSIRIS(filename)
+    #dataobj.refpos = (10,-15)
     nz,ny,nx = dataobj.data.shape
     dataobj.noise = np.ones((nz,ny,nx))
     # plt.imshow(dataobj.data[1000,:,:])
