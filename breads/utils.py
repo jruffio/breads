@@ -260,13 +260,6 @@ def broaden(wvs,spectrum,R,mppool=None):
         return conv_spectrum
 
 def clean_nans(arr, set_to="median", allowed_range=None, continuum=None):
-    if set_to == "median":
-        set_to = np.nanmedian(arr)
-    np.nan_to_num(arr, copy = False, nan=set_to)
-    if allowed_range is not None:
-        min_v, max_v = allowed_range
-        arr[arr > max_v] = set_to
-        arr[arr < min_v] = set_to
     if set_to == "continuum":
         cont = np.ravel(continuum)
         shape = arr.shape
@@ -275,6 +268,20 @@ def clean_nans(arr, set_to="median", allowed_range=None, continuum=None):
             if np.isnan(arr[i]):
                 arr[i] = cont[i]
         arr.reshape(shape)
+        if allowed_range is not None:
+            min_v, max_v = allowed_range
+            arr[arr > max_v] = set_to
+            arr[arr < min_v] = set_to
+        return
+
+    if set_to == "median":
+        set_to = np.nanmedian(arr)
+    np.nan_to_num(arr, copy = False, nan=set_to)
+    if allowed_range is not None:
+        min_v, max_v = allowed_range
+        arr[arr > max_v] = set_to
+        arr[arr < min_v] = set_to
+    
         
 
 def _task_broaden(paras):

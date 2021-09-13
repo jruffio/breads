@@ -78,9 +78,8 @@ class OSIRIS(Instrument):
         if trim <= 0:
             return
         nz, nx, ny = self.data.shape
-        for arr in [self.wavelengths, self.data, self.noise, self.bad_pixels, self.read_wavelengths]:
-            arr[:trim] = np.nan
-            arr[nz-trim:] = np.nan
+        self.bad_pixels[:trim] = np.nan
+        self.bad_pixels[nz-trim:] = np.nan
 
     def remove_bad_pixels(self, chunks=20, mypool=None, med_spec=None, nan_mask_boxsize=3, w=5):
         if med_spec == "transmission" or med_spec == "pair subtraction":
@@ -159,7 +158,7 @@ class OSIRIS(Instrument):
         """
         return broaden(wvs, spectrum, self.R, mppool=mppool)
 
-    def set_noise(self, num_threads = 16, wid_mov=None):
+    def set_noise(self, method="sqrt_cont", num_threads = 16, wid_mov=None):
         nz, ny, nx = self.data.shape
         my_pool = mp.Pool(processes=num_threads)
         if wid_mov is None:
@@ -174,7 +173,10 @@ class OSIRIS(Instrument):
             for j in range(nx):
                 self.continuum[:, i, j] = output[(i*nx+j)]
         # self.continuum = np.reshape(self.continuum, (nz, ny, nx), order='F')
-        self.noise = np.sqrt(np.abs(self.continuum))
+        if method == "sqrt_cont":
+            self.noise = np.sqrt(np.abs(self.continuum))
+        if method == "cont":
+            self.noise = self.continuum
 
 def set_continnuum(args):
     data, wid_mov = args
