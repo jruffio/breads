@@ -18,7 +18,7 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     else:
         hdfactor = xhdgrid.shape[0] // ny
     gaussA_hd = A / (2 * np.pi * sigx * sigy) * np.exp(
-        -0.5 * ((xA - xhdgrid) ** 2 / (sigx ** 2) + (yA - yhdgrid) ** 2 / (sigx ** 2)))
+        -0.5 * ((xA - xhdgrid) ** 2 / (sigx ** 2) + (yA - yhdgrid) ** 2 / (sigy ** 2)))
     gaussA = np.nanmean(np.reshape(gaussA_hd, (ny, hdfactor, nx, hdfactor)), axis=(1, 3))
     return gaussA + bkg
 
