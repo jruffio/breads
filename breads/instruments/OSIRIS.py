@@ -14,6 +14,7 @@ from breads.utils import broaden
 from breads.calibration import SkyCalibration
 import multiprocessing as mp
 from itertools import repeat
+import pandas as pd
 
 class OSIRIS(Instrument):
     def __init__(self, filename=None, skip_baryrv=False):
@@ -179,15 +180,10 @@ class OSIRIS(Instrument):
             self.noise = self.continuum
 
 def set_continnuum(args):
-    data, wid_mov = args
-    nz = len(data)
-    cont = np.zeros_like(data)
-    for k in range(nz):
-        low, upp = k-wid_mov//2, k+wid_mov//2
-        if low < 0:
-            low = 0
-        cont[k] = np.nanmedian(data[low:upp])
-    return cont
+    data, window = args
+    tmp = np.array(pd.DataFrame(np.concatenate([data, data[::-1]], axis=0)).interpolate(method="linear").fillna(method="bfill").fillna(method="ffill"))
+    myvec_cp_lpf = np.array(pd.DataFrame(tmp).rolling(window=window, center=True).median().interpolate(method="linear").fillna(method="bfill").fillna(method="ffill"))[0:np.size(data), 0]
+    return myvec_cp_lpf
 
 def return_64x19(cube):
     """
