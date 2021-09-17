@@ -39,7 +39,7 @@ class OSIRIS(Instrument):
             noisecube = np.rollaxis(np.rollaxis(hdulist[1].data,2),2,1)
             # cube = np.moveaxis(cube,0,2)
             badpixcube = np.rollaxis(np.rollaxis(hdulist[2].data,2),2,1)
-            if "bb" in hdulist[0].header["IF2NAME"]:
+            if "bb" in hdulist[0].header["SFWNAME"]:
                 cube = return_64x19(cube)
                 noisecube = return_64x19(noisecube)
                 badpixcube = return_64x19(badpixcube)
