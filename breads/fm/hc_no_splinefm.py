@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.interpolate import InterpolatedUnivariateSpline
 from astropy import constants as const
 from scipy.optimize.linesearch import line_search_armijo
-
+from copy import deepcopy
 from breads.utils import get_spline_model
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
@@ -84,8 +84,8 @@ def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wi
         raise ValueError("Unknown format for nodes.")
     return N_nodes, x_knots
 
-def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,
-                badpixfraction=0.75,loc=None, optimize_nodes=True, wid_mov=None, opt_p=0.7, knot_margin=1e-4):
+def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2,nodes=20,
+                badpixfraction=0.75,loc=None, optimize_nodes=True, wid_mov=None, opt_p=0.7, knot_margin=1e-4, star_loc=None):
     """
     For high-contrast companions (planet + speckles).
     Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
@@ -171,6 +171,19 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
         wvs = cubeobj.wavelengths
     _, nywv, nxwv = wvs.shape
 
+    k, l = int(np.round(refpos[1] + y)), int(np.round(refpos[0] + x))
+
+    if star_spectrum is None:
+        assert star_loc is not None, "both star_spectrum and star_loc cannot be None"
+        star_spectrum = np.zeros_like(transmission)
+        sx, sy = int(np.round(star_loc[1])), int(np.round(star_loc[0]))
+        w = (boxw-1) // 2
+        dat = deepcopy(data[:, k-w:k+w, l-w:l+w])
+        data[:, k-w:k+w, l-w:l+w] = np.nan
+        star = data[:, sx-5*sigx:sx+5*sigx, sy-5*sigy:sy+5*sigy]
+        star_spectrum = np.array([np.nanmean(star_slice) * star_slice.size for star_slice in star])
+        data[:, k-w:k+w, l-w:l+w] = dat
+
     if boxw % 2 == 0:
         raise ValueError("boxw, the width of stamp around the planet, must be odd in splinefm().")
     if boxw > ny or boxw > nx:
@@ -185,7 +198,6 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
     _paddata =np.pad(data,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     _padnoise =np.pad(noise,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     _padbad_pixels =np.pad(bad_pixels,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
-    k, l = int(np.round(refpos[1] + y)), int(np.round(refpos[0] + x))
     dx,dy = x-l+refpos[0],y-k+refpos[1]
     padk,padl = k+w,l+w
 
