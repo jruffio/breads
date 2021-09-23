@@ -176,11 +176,11 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
     if star_spectrum is None:
         assert star_loc is not None, "both star_spectrum and star_loc cannot be None"
         star_spectrum = np.zeros_like(transmission)
-        sx, sy = int(np.round(star_loc[1])), int(np.round(star_loc[0]))
+        sy, sx = star_loc
         w = (boxw-1) // 2
         dat = deepcopy(data[:, k-w:k+w, l-w:l+w])
         data[:, k-w:k+w, l-w:l+w] = np.nan
-        star = data[:, sx-5*sigx:sx+5*sigx, sy-5*sigy:sy+5*sigy]
+        star = data[:, int(np.round(sx-5*sigx)):int(np.round(sx+5*sigx)), int(np.round(sy-5*sigy)):int(np.round(sy+5*sigy))]
         star_spectrum = np.array([np.nanmean(star_slice) * star_slice.size for star_slice in star])
         data[:, k-w:k+w, l-w:l+w] = dat
 
