@@ -84,7 +84,7 @@ def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wi
         raise ValueError("Unknown format for nodes.")
     return N_nodes, x_knots
 
-def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2,nodes=20,
+def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2,nodes=20, star_flux=None,
                 badpixfraction=0.75,loc=None, optimize_nodes=True, wid_mov=None, opt_p=0.7, knot_margin=1e-4, star_loc=None):
     """
     For high-contrast companions (planet + speckles).
@@ -177,12 +177,23 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
         assert star_loc is not None, "both star_spectrum and star_loc cannot be None"
         star_spectrum = np.zeros_like(transmission)
         sy, sx = star_loc
-        w = (boxw-1) // 2
-        dat = deepcopy(data[:, k-w:k+w, l-w:l+w])
-        data[:, k-w:k+w, l-w:l+w] = np.nan
-        star = data[:, int(np.round(sx-5*sigx)):int(np.round(sx+5*sigx)), int(np.round(sy-5*sigy)):int(np.round(sy+5*sigy))]
-        star_spectrum = np.array([np.nanmean(star_slice) * star_slice.size for star_slice in star])
-        data[:, k-w:k+w, l-w:l+w] = dat
+        aper_s, mask_sx, mask_sy = 5.0, int(2.0*sigx)+1, int(2.0*sigy)+1
+        dat = deepcopy(data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1])
+        star = data[:, int(np.round(sx-aper_s*sigx)):int(np.round(sx+aper_s*sigx)), int(np.round(sy-aper_s*sigy)):int(np.round(sy+aper_s*sigy))]
+        if star_flux is None:
+            star_flux = np.nanmean(star) * star.size
+        data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = np.nan
+        star_spectrum = np.array([np.nanmean(star_slice) for star_slice in star])
+        data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = dat
+        # plt.plot(star_spectrum)
+        # plt.title(str(k) + " " + str(l) + ", " + str(star_flux))
+        # plt.show()
+        # exit()
+    else:
+        # flux ratio normalization
+        star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
+
+    star_spectrum = star_spectrum / (np.nanmean(star_spectrum) * star_spectrum.size)
 
     if boxw % 2 == 0:
         raise ValueError("boxw, the width of stamp around the planet, must be odd in splinefm().")
@@ -255,9 +266,6 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
                                        np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor)
         psfs += pixgauss2d([1., w+dx, w+dy, sigx, sigy, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
-
-        # flux ratio normalization
-        star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
 
         scaled_psfs = np.zeros((nz,boxw,boxw))+np.nan
         for _k in range(boxw):
