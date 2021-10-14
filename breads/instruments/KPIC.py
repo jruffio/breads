@@ -32,7 +32,8 @@ class KPIC(Instrument):
             self.wavelengths = wvs
         else:
             with pyfits.open(wvs) as hdulist:
-                arr = hdulist[0].data
+                sfib_list = get_science_fibers(hdulist[0].header)
+                arr = hdulist[0].data[sfib_list,:,:]
                 nfib,nord,npix = arr.shape
                 self.wavelengths = np.reshape(arr,(nfib,nord*npix))
         dwvs = self.wavelengths[:, 1::] - self.wavelengths[:, 0:-1]
@@ -44,7 +45,8 @@ class KPIC(Instrument):
             line_width = trace
         else:
             with pyfits.open(trace) as hdulist:
-                arr = hdulist[0].data
+                sfib_list = get_science_fibers(hdulist[0].header)
+                arr = hdulist[0].data[sfib_list,:,:]
                 nfib,nord,npix = arr.shape
                 line_width = np.reshape(arr,(nfib,nord*npix))
         if self.wavelengths.shape[1] == 4 and line_width.shape[0] ==5:
@@ -71,10 +73,11 @@ class KPIC(Instrument):
             noise_list = []
             for filename in filelist:
                 with pyfits.open(filename) as hdulist:
-                    Nfib,Norder,Npix = hdulist[0].data.shape
-                    data_list.append(hdulist[0].data)
+                    sfib_list = get_science_fibers(hdulist[0].header)
+                    Nfib,Norder,Npix = hdulist[0].data[sfib_list,:,:].shape
+                    data_list.append(hdulist[0].data[sfib_list,:,:])
                     header = hdulist[0].header
-                    noise_list.append(hdulist[1].data)
+                    noise_list.append(hdulist[1].data[sfib_list,:,:])
                     baryrv_list.append(float(header["BARYRV"]))
 
             data_list = np.array(data_list)
@@ -199,3 +202,17 @@ def combine_science_spectra(spectra,errors):
     mask[np.where(np.isnan(errors))] = 0
     out_errors = np.sqrt(np.nansum(errors**2, axis=0))/np.sum(mask,axis=0)
     return out_spec,out_errors
+
+def get_science_fibers(header):
+    sf_id_list = []
+    sf_num_list = []
+    for fibid in range(20):
+        try:
+            fiblabel = header["FIB{0}".format(fibid)]
+            if "s" in fiblabel:
+                sf_id_list.append(fibid)
+                sf_num_list.append(fiblabel[1:2])
+        except:
+            pass
+    return np.array(sf_id_list)[np.array(sf_num_list,dtype=np.float).argsort()]
+    # return np.array([0,1,2,3])
