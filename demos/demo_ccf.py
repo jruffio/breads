@@ -45,9 +45,9 @@ if __name__ == "__main__":
     wvs_phoenix = "/scr3/jruffio/data/kpic/models/phoenix/WAVE_PHOENIX-ACES-AGSS-COND-2011.fits"
     A0_phoenix = "/scr3/jruffio/models/phoenix/fitting/phoenix.astro.physik.uni-goettingen.de/HiResFITS/PHOENIX-ACES-AGSS-COND-2011/Z-0.0/lte09000-4.00-0.0.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits"
 
-    dataobj = KPIC(spec_filelist,trace_filename,wvs_filename,fiber_scan=False)
-    A0obj = KPIC(A0_filelist,trace_filename,wvs_filename,fiber_scan=True)
-    hostobj = KPIC(host_filelist,trace_filename,wvs_filename,fiber_scan=True)
+    dataobj = KPIC(spec_filelist,trace_filename,wvs_filename,combine_mode="companion",fiber_goal_list = [sc_fib,]*len(spec_filelist))
+    A0obj = KPIC(A0_filelist,trace_filename,wvs_filename,combine_mode="star",fiber_goal_list = [1,2,1,2,1,2])
+    hostobj = KPIC(host_filelist,trace_filename,wvs_filename,combine_mode="star",fiber_goal_list = [1,2,1,2])
     A0obj = A0obj.selec_order(orders)
     hostobj = hostobj.selec_order(orders)
     dataobj = dataobj.selec_order(orders)
@@ -64,6 +64,7 @@ if __name__ == "__main__":
     crop_btsettl = np.where((model_wvs > minwv - 0.02) * (model_wvs < maxwv + 0.02))
     model_wvs = model_wvs[crop_btsettl]
     model_spec = model_spec[crop_btsettl]
+    print("broadening companion model")
     model_broadspec = dataobj.broaden(model_wvs,model_spec,loc=sc_fib,mppool=mypool)
     planet_f = interp1d(model_wvs, model_broadspec, bounds_error=False, fill_value=np.nan)
 
@@ -74,6 +75,7 @@ if __name__ == "__main__":
     phoenix_wvs = phoenix_wvs[crop_phoenix]
     with pyfits.open(A0_phoenix) as hdulist:
         phoenix_A0 = hdulist[0].data[crop_phoenix]
+    print("broadening A0 phoenix model")
     phoenix_A0_broad = dataobj.broaden(phoenix_wvs,phoenix_A0,loc=sc_fib,mppool=mypool)
     phoenix_A0_func = interp1d(phoenix_wvs, phoenix_A0_broad, bounds_error=False, fill_value=np.nan)
 
@@ -89,7 +91,7 @@ if __name__ == "__main__":
     # plt.show()
 
     # Definition of the forward model
-    if 1: # Using a high pass filter
+    if 0: # Using a high pass filter
         from breads.fm.hc_hpffm import hc_hpffm
         fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":host_spectrum,
                     "boxw":1,"psfw":0.01,"badpixfraction":0.75,"hpf_mode":"fft","cutoff":10,"loc":sc_fib,
@@ -112,14 +114,14 @@ if __name__ == "__main__":
     # /!\ Optional but recommended
     # Test the forward model for a fixed value of the non linear parameter.
     # Make sure it does not crash and look the way you want
-    if 0:
+    if 1:
         nonlin_paras = [-2] # rv (km/s)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
         # s is the vector of uncertainties corresponding to d
         d, M, s = fm_func(nonlin_paras,dataobj,**fm_paras)
 
-        # plt.plot(s)
+        # plt.plot(d)
         # plt.show()
 
         validpara = np.where(np.sum(M,axis=0)!=0)

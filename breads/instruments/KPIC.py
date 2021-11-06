@@ -12,49 +12,79 @@ from copy import deepcopy
 from  scipy.interpolate import interp1d
 from breads.utils import findbadpix
 from breads.utils import broaden
+import warnings
 
 class KPIC(Instrument):
-    def __init__(self, spec=None, trace=None, wvs=None, err=None, badpix=None,baryrv=None,orders=None,fiber_scan=False):
+    def __init__(self, spec=None, trace=None, wvs=None, err=None, badpix=None,baryrv=None,orders=None,combine_mode="planet",fiber_goal_list = None):
         super().__init__('KPIC')
         if spec is None:
             warning_text = "No data file provided. " + \
             "Please manually add data using OSIRIS.manual_data_entry() or add data using OSIRIS.read_data_file()"
             warn(warning_text)
         else:
-            self.read_data_file(spec, trace, wvs,err,badpix,baryrv,orders,fiber_scan)
+            self.read_data_file(spec, trace, wvs,err,badpix,baryrv,orders,combine_mode,fiber_goal_list)
 
-    def read_data_file(self, spec, trace, wvs, err=None, badpix=None,baryrv=None,orders=None,fiber_scan=False):
+    def read_data_file(self, spec, trace, wvs, err=None, badpix=None,baryrv=None,orders=None,combine_mode=None,fiber_goal_list = None):
         """
         Read OSIRIS spectral cube, also checks validity at the end
-        todo: replace fiber_bounce with a header fiber keyword once it exists
-        """
-        if type(wvs) is np.ndarray:
-            self.wavelengths = wvs
-        else:
-            with pyfits.open(wvs) as hdulist:
-                sfib_list = get_science_fibers(hdulist[0].header)
-                arr = hdulist[0].data[sfib_list,:,:]
-                nfib,nord,npix = arr.shape
-                self.wavelengths = np.reshape(arr,(nfib,nord*npix))
-        dwvs = self.wavelengths[:, 1::] - self.wavelengths[:, 0:-1]
-        dwvs = np.concatenate([dwvs, dwvs[:, -1][:, None]], axis=1)
 
-        self.wavelengths = self.wavelengths.T
+        Args:
+            fiber_goal_list: List of the fibers that was being tracked. (indexed from 0)
+                If None (default), will use GOALNM keyword.
+                If "brightest", defines the fiber being tracked from the brightest trace in the array
+                If nd.array, user-defined e.g. [0,0,1,1,2,2,3,3]
+            combine_mode: if "star", for combining a sequence of on-axis star observations accounting for variable stellar intensity.
+                    if "companion", just a weighted mean using the spectra errors.
+
+
+        """
 
         if type(trace) is np.ndarray:
             line_width = trace
+            self.res_fib_labels = ["s1","s2","s3","s4"]
         else:
             with pyfits.open(trace) as hdulist:
-                sfib_list = get_science_fibers(hdulist[0].header)
-                arr = hdulist[0].data[sfib_list,:,:]
-                nfib,nord,npix = arr.shape
-                line_width = np.reshape(arr,(nfib,nord*npix))
+                arr = hdulist[0].data
+                Nfib,nord,npix = arr.shape
+                line_width = np.reshape(arr,(Nfib,nord*npix))
+                self.res_fib_labels = get_fib_labels(hdulist[0].header)
+
+        if type(wvs) is np.ndarray:
+            self.wavelengths = wvs
+            self.wvs_fib_labels = ["s1","s2","s3","s4"]
+        else:
+            with pyfits.open(wvs) as hdulist:
+                arr = hdulist[0].data
+                Nfib,nord,npix = arr.shape
+                self.wavelengths = np.reshape(arr,(Nfib,nord*npix))
+                self.wvs_fib_labels = get_fib_labels(hdulist[0].header)
+
         if self.wavelengths.shape[1] == 4 and line_width.shape[0] ==5:
             # hard coded for epoch 20210704 when the trace calibration included the gas cell, but not the wavcal
             self.wavelengths = np.concatenate([np.zeros((self.wavelengths.shape[0],1)),self.wavelengths],axis=1)
-            dwvs = np.concatenate([np.zeros((1,self.wavelengths.shape[0])),dwvs],axis=0)
+
+        if self.wavelengths.shape[0] != line_width.shape[0]:
+            new_wvs = np.zeros(line_width.shape)
+            new_wvs_fib_labels = []
+            N_science_fibers = np.sum([1 if "s" in label else 0 for label in self.res_fib_labels])
+            for k,fib_label in enumerate(self.res_fib_labels):
+                fibnum = int(fib_label[1:2])
+                # print(fib_label,fibnum,np.where("s{0}".format((fibnum%N_science_fibers)+1)==self.wvs_fib_labels)[0])
+                new_wvs[k,:] = self.wavelengths[np.where("s{0}".format((fibnum%N_science_fibers)+1)==self.wvs_fib_labels)[0],:]
+                new_wvs_fib_labels.append("s{0}".format(fibnum))
+            self.wavelengths = new_wvs
+            self.wvs_fib_labels = new_wvs_fib_labels
+        dwvs = self.wavelengths[:, 1::] - self.wavelengths[:, 0:-1]
+        dwvs = np.concatenate([dwvs, dwvs[:, -1][:, None]], axis=1)
+
         line_FWHM_wvunit = line_width* dwvs*2*np.sqrt(2*np.log(2))
-        self.resolution = self.wavelengths/line_FWHM_wvunit.T
+        self.resolution = self.wavelengths/line_FWHM_wvunit
+
+        # Make wavelength dimension first
+        self.wavelengths = self.wavelengths.T
+        self.resolution = self.resolution.T
+
+
 
         if type(spec) is np.ndarray:
             self.data = spec
@@ -62,6 +92,7 @@ class KPIC(Instrument):
             self.bad_pixels = badpix
             self.bary_RV = baryrv
             self.orders = orders
+            self.fiber_goal_list = fiber_goal_list
         else:
             if type(spec) is not list:
                 filelist = [spec]
@@ -71,58 +102,81 @@ class KPIC(Instrument):
             baryrv_list = []
             data_list = []
             noise_list = []
+            fiber_list_from_hdr=[]
+            GOALNM_exists = True
             for filename in filelist:
+                print(filename)
                 with pyfits.open(filename) as hdulist:
-                    sfib_list = get_science_fibers(hdulist[0].header)
-                    Nfib,Norder,Npix = hdulist[0].data[sfib_list,:,:].shape
-                    data_list.append(hdulist[0].data[sfib_list,:,:])
+                    Nfib,Norder,Npix = hdulist[0].data.shape
+                    data_list.append(hdulist[0].data)
                     header = hdulist[0].header
-                    noise_list.append(hdulist[1].data[sfib_list,:,:])
+                    noise_list.append(hdulist[1].data)
                     baryrv_list.append(float(header["BARYRV"]))
+                    try:
+                        fiber_list_from_hdr.append(int(header["GOALNM"][-1])-1)
+                    except:
+                        GOALNM_exists = False
+
+                sf_id_list = []
+                sf_num_list = []
+                for fibid in range(20):
+                    try:
+                        fiblabel = header["FIB{0}".format(fibid)]
+                        if "s" in fiblabel:
+                            sf_id_list.append(fibid)
+                            sf_num_list.append(fiblabel[1:2])
+                    except:
+                        pass
 
             data_list = np.array(data_list)
             noise_list = np.array(noise_list)
 
             combined_spec = np.zeros((Nfib,Norder,Npix))
             combined_spec_sig = np.zeros((Nfib,Norder,Npix))
-            if fiber_scan:
-                if type(fiber_scan) is np.ndarray:
-                    fiber_list = fiber_scan
+            #     If None (default), will use GOALNM keyword.
+            #     If "brightest", defines the fiber being tracked from the brightest trace in the array
+            #     If nd.array, user-defined e.g. [0,0,1,1,2,2,3,3]
+            if fiber_goal_list is None:
+                if GOALNM_exists:
+                    self.fiber_goal_list = np.array(fiber_list_from_hdr)
                 else:
-                    fiber_list = np.argmax(np.nansum(data_list, axis=(2,3)),axis=1)
-
-                for fib in range(Nfib):
-                    if fib != 1:
-                        continue
-                    where_fib = np.where(fiber_list == fib)[0]
-                    if len(where_fib) == 0:
-                        continue
-                    # tmp_spec = data_list[where_fib,fib,:,:]
-                    # med_spec = np.nanmean(tmp_spec/np.nanmean(tmp_spec,axis=2)[:,:,None],axis=0)
-                    for order in range(Norder):
-                        badpix = findbadpix(data_list[where_fib,fib,order,:].T[:,:,None], noisecube=noise_list[where_fib,fib,order,:].T[:,:,None], badpixcube=None,
-                                            chunks=5, mypool=None, med_spec=None,nan_mask_boxsize=0)[0][:,:,0].T #med_spec[order,:]
-                        data_list[where_fib,fib,order,:] *= badpix
-
-                for fib in range(Nfib):
-                    where_fib = np.where(fiber_list == fib)[0]
-                    if len(where_fib) != 0:
-                        combined_spec[fib, :, :], combined_spec_sig[fib, :, :] = combine_stellar_spectra(
-                            data_list[where_fib, fib, :, :], noise_list[where_fib, fib, :, :])
+                    raise Exception("GOALNM keyword not found in header. Please define fiber_goal_list.")
+            elif fiber_goal_list == "brightest":
+                self.fiber_goal_list = np.argmax(np.nansum(data_list, axis=(2, 3)), axis=1)
             else:
-                for fib in range(Nfib):
-                    for order in range(Norder):
-                        badpix = findbadpix(data_list[:,fib,order,:].T[:,:,None], noisecube=noise_list[:,fib,order,:].T[:,:,None], badpixcube=None,
-                                            chunks=5, mypool=None, med_spec=None,nan_mask_boxsize=0)[0][:,:,0].T
-                        data_list[:,fib,order,:] *= badpix
+                self.fiber_goal_list = np.array(fiber_goal_list)
 
-                for fib in range(Nfib):
+            if combine_mode is None:
+                if len(filelist) > 1:
+                    raise Exception("the input 'combine_mode' should not be None. Please choose 'star' or 'companion'")
+                else:
+                    combine_mode = "companion"
+
+            for fib in range(Nfib):
+                where_fib = np.where(self.fiber_goal_list == fib)[0]
+                if len(where_fib) == 0:
+                    continue
+                for order in range(Norder):
+                    badpix = findbadpix(data_list[where_fib,fib,order,:].T[:,:,None], noisecube=noise_list[where_fib,fib,order,:].T[:,:,None], badpixcube=None,
+                                        chunks=5, mypool=None, med_spec=None,nan_mask_boxsize=0,threshold=5)[0][:,:,0].T
+                    data_list[where_fib,fib,order,:] *= badpix
+
+            for fib in range(Nfib):
+                where_fib = np.where(self.fiber_goal_list == fib)[0]
+                if len(where_fib) == 0:
+                    where_fib = np.where(self.fiber_goal_list == self.fiber_goal_list[0])[0]
                     combined_spec[fib, :, :], combined_spec_sig[fib, :, :] = combine_science_spectra(
-                        data_list[:, fib, :, :], noise_list[:, fib, :, :])
+                        data_list[where_fib, fib, :, :], noise_list[where_fib, fib, :, :])
+                elif len(where_fib) != 0 and combine_mode == "star":
+                    combined_spec[fib, :, :], combined_spec_sig[fib, :, :] = combine_stellar_spectra(
+                        data_list[where_fib, fib, :, :], noise_list[where_fib, fib, :, :])
+                elif len(where_fib) != 0 and combine_mode == "companion":
+                    combined_spec[fib, :, :], combined_spec_sig[fib, :, :] = combine_science_spectra(
+                        data_list[where_fib, fib, :, :], noise_list[where_fib, fib, :, :])
 
-            self.data = np.reshape(combined_spec,(nfib,Norder*Npix)).T
-            self.noise = np.reshape(combined_spec_sig,(nfib,Norder*Npix)).T
-            self.bad_pixels = np.reshape(edges2nans(combined_spec/ combined_spec), (nfib, Norder * Npix)).T
+            self.data = np.reshape(combined_spec,(Nfib,Norder*Npix)).T
+            self.noise = np.reshape(combined_spec_sig,(Nfib,Norder*Npix)).T
+            self.bad_pixels = np.reshape(edges2nans(combined_spec/ combined_spec), (Nfib, Norder * Npix)).T
 
             self.bary_RV = np.mean(baryrv_list)
             self.orders = np.arange(0,9)
@@ -161,9 +215,7 @@ class KPIC(Instrument):
                 mask.extend(np.arange(ordersize)+ind*ordersize)
             except:
                 raise ValueError("requested order {0} does not exist in this KPIC data obect".format(order))
-        # import matplotlib.pyplot as plt
-        # plt.plot(mask)
-        # plt.show()
+
         newself = deepcopy(self)
         newself.data = self.data[mask,:]
         newself.noise =  self.noise[mask,:]
@@ -197,22 +249,41 @@ def combine_stellar_spectra(spectra,errors,weights=None):
     return med_spec,errors
 
 def combine_science_spectra(spectra,errors):
+    # out_spec = np.nansum(spectra, axis=0)
     out_spec = np.nanmean(spectra, axis=0)
+    # out_spec = np.nanmedian(spectra, axis=0)
     mask = np.ones(spectra.shape)
     mask[np.where(np.isnan(errors))] = 0
     out_errors = np.sqrt(np.nansum(errors**2, axis=0))/np.sum(mask,axis=0)
     return out_spec,out_errors
 
-def get_science_fibers(header):
-    sf_id_list = []
-    sf_num_list = []
+
+def get_fib_labels(header):
+    fiblabel_list = []
     for fibid in range(20):
         try:
-            fiblabel = header["FIB{0}".format(fibid)]
-            if "s" in fiblabel:
-                sf_id_list.append(fibid)
-                sf_num_list.append(fiblabel[1:2])
+            fiblabel_list.append(header["FIB{0}".format(fibid)].strip())
         except:
             pass
-    return np.array(sf_id_list)[np.array(sf_num_list,dtype=np.float).argsort()]
-    # return np.array([0,1,2,3])
+    if len(fiblabel_list) == 0:
+        warnings.warn("FIB# keywords not found in file. Assuming [s1,s2,s3,s4] in this order.")
+        return np.array(["s1","s2","s3","s4"])
+    else:
+        return np.array(fiblabel_list)
+
+# def get_science_fibers(header):
+#     sf_id_list = []
+#     sf_num_list = []
+#     for fibid in range(20):
+#         try:
+#             fiblabel = header["FIB{0}".format(fibid)]
+#             if "s" in fiblabel:
+#                 sf_id_list.append(fibid)
+#                 sf_num_list.append(fiblabel[1:2])
+#         except:
+#             pass
+#     if len(sf_num_list) == 0:
+#         warnings.warn("FIB# keywords not found in fluxes file. Assuming [s1,s2,s3,s4] in this order.")
+#         return np.array([0,1,2,3])
+#     else:
+#         return np.array(sf_id_list)[np.array(sf_num_list,dtype=np.float).argsort()]
