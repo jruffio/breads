@@ -2,6 +2,7 @@ import numpy as np
 from scipy.optimize import lsq_linear
 from scipy.special import loggamma
 import matplotlib.pyplot as plt
+import warnings
 
 def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
     """

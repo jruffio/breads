@@ -65,7 +65,7 @@ def get_err_from_posterior(x,posterior):
     return x[argmax_post],x[argmax_post]-lx,rx-x[argmax_post]
 
 def _task_findbadpix(paras):
-    data_arr,noise_arr,badpix_arr,med_spec,M_spline = paras
+    data_arr,noise_arr,badpix_arr,med_spec,M_spline,threshold = paras
     new_data_arr = np.array(copy(data_arr), '<f4')#.byteswap().newbyteorder()
     new_badpix_arr = copy(badpix_arr)
     res = np.zeros(data_arr.shape) + np.nan
@@ -88,7 +88,7 @@ def _task_findbadpix(paras):
         res[where_data_finite[0],k] = d-m
 
         # where_bad = np.where((np.abs(res[:,k])>3*np.nanstd(res[:,k])) | np.isnan(res[:,k]))
-        where_bad = np.where((np.abs(res[:,k])>3*median_absolute_deviation(res[where_data_finite[0],k])) | np.isnan(res[:,k]))
+        where_bad = np.where((np.abs(res[:,k])>threshold*median_absolute_deviation(res[where_data_finite[0],k])) | np.isnan(res[:,k]))
         new_badpix_arr[where_bad[0],k] = np.nan
         where_bad = np.where(np.isnan(np.correlate(new_badpix_arr[:,k] ,np.ones(2),mode="same")))
         new_badpix_arr[where_bad[0],k] = np.nan
@@ -101,14 +101,14 @@ def _task_findbadpix(paras):
 def _remove_edges(paras):
     slices,nan_mask_boxsize = paras
     cp_slices = copy(slices)
-    for slice in cp_slices:
-        slice[np.where(slice==0)] = np.nan
-        slice[np.where(np.isnan(correlate2d(slice,np.ones((nan_mask_boxsize,nan_mask_boxsize)),mode="same")))] = np.nan
-    cp_slices[:,0:nan_mask_boxsize//2,:] = np.nan
-    cp_slices[:,-nan_mask_boxsize//2+1::,:] = np.nan
-    cp_slices[:,:,0:nan_mask_boxsize//2] = np.nan
-    cp_slices[:,:,-nan_mask_boxsize//2+1::] = np.nan
-
+    if nan_mask_boxsize != 0:
+        for slice in cp_slices:
+            slice[np.where(slice==0)] = np.nan
+            slice[np.where(np.isnan(correlate2d(slice,np.ones((nan_mask_boxsize,nan_mask_boxsize)),mode="same")))] = np.nan
+        cp_slices[:,0:nan_mask_boxsize//2,:] = np.nan
+        cp_slices[:,-nan_mask_boxsize//2+1::,:] = np.nan
+        cp_slices[:,:,0:nan_mask_boxsize//2] = np.nan
+        cp_slices[:,:,-nan_mask_boxsize//2+1::] = np.nan
     return cp_slices
 
 def corrected_wavelengths(data, off0, off1, center_data):
@@ -119,7 +119,7 @@ def corrected_wavelengths(data, off0, off1, center_data):
         wavs = wavs * (1 + off1) + off0 * u.angstrom
     return wavs
 
-def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3):
+def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3,threshold=3):
     if noisecube is None:
         noisecube = np.ones(cube.shape)
     if badpixcube is None:
@@ -127,6 +127,7 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
 
     new_cube = copy(cube)
     new_badpixcube = copy(badpixcube)
+    new_badpixcube[np.where(np.isnan(cube)*np.isnan(noisecube))] = np.nan
     nz,ny,nx = cube.shape
     res = np.zeros(cube.shape) + np.nan
 
@@ -140,9 +141,6 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
         _cube[np.where(_cube<=0)] = np.nan
         med_spec = np.nanmedian(cube,axis=(1,2))
     new_badpixcube[np.where(cube==0)] = np.nan
-
-    # plt.plot(med_spec)
-    # plt.show()
 
     if mypool is None:
         new_badpixcube = _remove_edges((new_badpixcube,nan_mask_boxsize))
@@ -168,7 +166,7 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
         data_list = np.reshape(new_cube,(nz,nx*ny))
         noise_list = np.reshape(noisecube,(nz,nx*ny))
         badpix_list = np.reshape(new_badpixcube,(nz,nx*ny))
-        out_data,out_badpix,out_res = _task_findbadpix((data_list,noise_list,badpix_list,med_spec,M_spline))
+        out_data,out_badpix,out_res = _task_findbadpix((data_list,noise_list,badpix_list,med_spec,M_spline,threshold))
         new_cube = np.reshape(out_data,(nz,ny,nx))
         new_badpixcube = np.reshape(out_badpix,(nz,ny,nx))
         res = np.reshape(out_res,(nz,ny,nx))
@@ -208,7 +206,8 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
 
         outputs_list = mypool.map(_task_findbadpix, zip(data_list,noise_list,badpix_list,
                                                                itertools.repeat(med_spec),
-                                                               itertools.repeat(M_spline)))
+                                                               itertools.repeat(M_spline),
+                                                                itertools.repeat(threshold)))
         for row_indices,col_indices,out in zip(row_indices_list,col_indices_list,outputs_list):
             out_data,out_badpix,out_res = out
             new_cube[:,row_indices,col_indices] = out_data
@@ -219,7 +218,7 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
 
 
 
-def broaden(wvs,spectrum,R,mppool=None):
+def broaden(wvs,spectrum,R,mppool=None,kernel=None):
     """
     Broaden a spectrum to instrument resolution assuming a gaussian line spread function.
 
@@ -237,7 +236,7 @@ def broaden(wvs,spectrum,R,mppool=None):
     """
     if mppool is None:
         # Each wavelength processed sequentially
-        return _task_broaden((np.arange(np.size(spectrum)).astype(np.int),wvs,spectrum,R))
+        return _task_broaden((np.arange(np.size(spectrum)).astype(np.int),wvs,spectrum,R,kernel))
     else:
         conv_spectrum = np.zeros(spectrum.shape)
 
@@ -252,7 +251,8 @@ def broaden(wvs,spectrum,R,mppool=None):
         outputs_list = mppool.map(_task_broaden, zip(indices_list,
                                                                itertools.repeat(wvs),
                                                                itertools.repeat(spectrum),
-                                                               itertools.repeat(R)))
+                                                               itertools.repeat(R),
+                                                               itertools.repeat(kernel)))
         # Retrieve results
         for indices,out in zip(indices_list,outputs_list):
             conv_spectrum[indices] = out
@@ -288,7 +288,7 @@ def _task_broaden(paras):
     """
     Perform the spectrum broadening for broaden().
     """
-    indices, wvs, spectrum, R = paras
+    indices, wvs, spectrum, R,kernel = paras
 
     if type(R) is np.ndarray:
         Rvec = R
@@ -308,7 +308,10 @@ def _task_broaden(paras):
         stamp_wvs = wvs[np.max([0, k - w]):np.min([np.size(wvs), k + w])]
         stamp_dwvs = dwvs[np.max([0, k - w]):np.min([np.size(wvs), k + w])]
 
-        gausskernel = 1 / (np.sqrt(2 * np.pi) * sig) * np.exp(-0.5 * (stamp_wvs - wvs[k]) ** 2 / sig ** 2)
+        if kernel is None:
+            gausskernel = 1 / (np.sqrt(2 * np.pi) * sig) * np.exp(-0.5 * (stamp_wvs - wvs[k]) ** 2 / sig ** 2)
+        else:
+            gausskernel = kernel((stamp_wvs - wvs[k])/wvs[k])
         gausskernel[np.where(np.isnan(stamp_spec))] = np.nan
         conv_spectrum[l] = np.nansum(gausskernel*stamp_spec*stamp_dwvs) / np.nansum(gausskernel*stamp_dwvs)
 
@@ -399,3 +402,28 @@ def get_spline_model(x_knots, x_samples, spline_degree=3):
             M[inbounds[0], chunk] = spl(_x)
         M_list.append(M)
     return np.concatenate(M_list, axis=1)
+
+
+def broaden_kernel(wvs,spectrum,kernel):
+    """
+    Broaden a spectrum to instrument resolution assuming a custom kernel.
+
+    Args:
+        wvs: Wavelength vector (ndarray).
+        spectrum: Spectrum vector (ndarray).
+        kernel: custom broadening kernel as a function kernel((wvs - wvs_curr) / wvs_curr)
+
+    Returns
+        Broadened spectrum
+    """
+    cp_spectrum = copy(spectrum)
+    dwvs = wvs[1::] - wvs[0:(np.size(wvs) - 1)]
+    dwvs = np.append(dwvs, dwvs[-1])  # Size of each wavelength bin
+    where_nans = np.where(np.isnan(cp_spectrum))
+    cp_spectrum[where_nans] = 0
+    dwvs[where_nans] = 0
+
+    wvs_mat = np.tile(wvs[None, :],(np.size(wvs),1))
+    kernel_mat = kernel((wvs_mat - wvs[:,None]) / wvs[:,None])
+    conv_spectrum = np.dot(kernel_mat,cp_spectrum * dwvs)#/np.dot(kernel_mat,dwvs)
+    return conv_spectrum
