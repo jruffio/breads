@@ -25,7 +25,7 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     return gaussA + bkg
 
 
-def iso_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, transmission=None,boxw=1, psfw=1.2,nodes=20,badpixfraction=0.75,loc=None):
+def iso_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, transmission=None,boxw=1, psfw=1.2,nodes=20,badpixfraction=0.75,loc=None,fix_parameters=None):
     """
     For characterization of isolated objects, so no speckle.
     Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
@@ -53,8 +53,11 @@ def iso_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None
         nodes: If int, number of nodes equally distributed. If list, custom locations of nodes [x1,x2,..].
             To model discontinous functions, use a list of list [[x1,...],[xn,...]].
         badpixfraction: Max fraction of bad pixels in data.
-        loc: (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
+        loc: Deprecated, Use fix_parameters.
+            (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
             When loc is not None, the x,y non-linear parameters should not be given.
+        fix_parameters: List. Use to fix the value of some non-linear parameters. The values equal to None are being
+                    fitted for, other elements will be fixed to the value specified.
 
 
     Returns:
@@ -63,9 +66,15 @@ def iso_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None
             vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
+    if fix_parameters is not None:
+        _nonlin_paras = np.array(fix_parameters)
+        _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
+    else:
+        _nonlin_paras = nonlin_paras
+
     Natmparas = len(atm_grid.values.shape)-1
-    atm_paras = [p for p in nonlin_paras[0:Natmparas]]
-    other_nonlin_paras = nonlin_paras[Natmparas::]
+    atm_paras = [p for p in _nonlin_paras[0:Natmparas]]
+    other_nonlin_paras = _nonlin_paras[Natmparas::]
 
     # Handle the different data dimensions
     # Convert everything to 3D cubes (wv,y,x) for the followying

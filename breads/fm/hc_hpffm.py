@@ -24,7 +24,7 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
 
 
 def hc_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,
-             badpixfraction=0.75,hpf_mode=None,res_hpf=50,cutoff=5,fft_bounds=None,loc=None):
+             badpixfraction=0.75,hpf_mode=None,res_hpf=50,cutoff=5,fft_bounds=None,loc=None,fix_parameters=None):
     """
     For high-contrast companions (planet + speckles).
     Generate forward model removing the continuum with a fourier based high pass filter.
@@ -56,8 +56,11 @@ def hc_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spect
             See breads.utils.LPFvsHPF().
         fft_bounds: [l1,l2,..ln] if hpf_mode is "fft", divide the spectrum into n chunks [l1,l2],..[..,ln] on which the
             fft high-pass filter is run separately.
-        loc: (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
+        loc: Deprecated, Use fix_parameters.
+            (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
             When loc is not None, the x,y non-linear parameters should not be given.
+        fix_parameters: List. Use to fix the value of some non-linear parameters. The values equal to None are being
+                    fitted for, other elements will be fixed to the value specified.
 
     Returns:
         d: Data as a 1d vector with bad pixels removed (no nans)
@@ -65,6 +68,12 @@ def hc_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spect
             vector.
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
+    if fix_parameters is not None:
+        _nonlin_paras = np.array(fix_parameters)
+        _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
+    else:
+        _nonlin_paras = nonlin_paras
+
     if hpf_mode is None:
         hpf_mode = "gauss"
 
@@ -87,7 +96,7 @@ def hc_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spect
     else:
         refpos = cubeobj.refpos
 
-    rv = nonlin_paras[0]
+    rv = _nonlin_paras[0]
     # Defining the position of companion
     # If loc is not defined, then the x,y position is assume to be a non linear parameter.
     if np.size(loc) ==2:
@@ -98,9 +107,9 @@ def hc_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spect
         if len(cubeobj.data.shape)==1:
             x,y = 0,0
         elif len(cubeobj.data.shape)==2:
-            x,y = 0,nonlin_paras[1]
+            x,y = 0,_nonlin_paras[1]
         elif len(cubeobj.data.shape)==3:
-            x,y = nonlin_paras[2],nonlin_paras[1]
+            x,y = _nonlin_paras[2],_nonlin_paras[1]
 
     nz, ny, nx = data.shape
     if fft_bounds is None:

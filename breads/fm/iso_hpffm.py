@@ -20,13 +20,13 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     else:
         hdfactor = xhdgrid.shape[0] // ny
     gaussA_hd = A / (2 * np.pi * w ** 2) * np.exp(
-        -0.5 * ((xA - xhdgrid + 0.5) ** 2 + (yA - yhdgrid + 0.5) ** 2) / w ** 2)
+        -0.5 * ((xA - xhdgrid) ** 2 + (yA - yhdgrid) ** 2) / w ** 2)
     gaussA = np.nanmean(np.reshape(gaussA_hd, (ny, hdfactor, nx, hdfactor)), axis=(1, 3))
     return gaussA + bkg
 
 
 def iso_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None,boxw=1, psfw=1.2,badpixfraction=0.75,
-             hpf_mode=None,res_hpf=50,cutoff=5,fft_bounds=None,loc=None):
+             hpf_mode=None,res_hpf=50,cutoff=5,fft_bounds=None,loc=None,fix_parameters=None):
     """
     For isolated objects, so no speckle.
     Generate forward model removing the continuum with a fourier based high pass filter.
@@ -55,8 +55,11 @@ def iso_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None,boxw=1, ps
             See breads.utils.LPFvsHPF().
         fft_bounds: [l1,l2,..ln] if hpf_mode is "fft", divide the spectrum into n chunks [l1,l2],..[..,ln] on which the
             fft high-pass filter is run separately.
-        loc: (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
+        loc: Deprecated, Use fix_parameters.
+            (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
             When loc is not None, the x,y non-linear parameters should not be given.
+        fix_parameters: List. Use to fix the value of some non-linear parameters. The values equal to None are being
+                    fitted for, other elements will be fixed to the value specified.
 
     Returns:
         d: Data as a 1d vector with bad pixels removed (no nans)
@@ -64,6 +67,12 @@ def iso_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None,boxw=1, ps
             vector.
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
+    if fix_parameters is not None:
+        _nonlin_paras = np.array(fix_parameters)
+        _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
+    else:
+        _nonlin_paras = nonlin_paras
+
     # Handle the different data dimensions
     # Convert everything to 3D cubes (wv,y,x) for the followying
     if len(cubeobj.data.shape)==1:
@@ -84,7 +93,7 @@ def iso_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None,boxw=1, ps
         refpos = cubeobj.refpos
 
 
-    rv = nonlin_paras[0]
+    rv = _nonlin_paras[0]
     # Defining the position of companion
     # If loc is not defined, then the x,y position is assume to be a non linear parameter.
     if np.size(loc) ==2:
@@ -95,9 +104,9 @@ def iso_hpffm(nonlin_paras, cubeobj, planet_f=None, transmission=None,boxw=1, ps
         if len(cubeobj.data.shape)==1:
             x,y = 0,0
         elif len(cubeobj.data.shape)==2:
-            x,y = 0,nonlin_paras[1]
+            x,y = 0,_nonlin_paras[1]
         elif len(cubeobj.data.shape)==3:
-            x,y = nonlin_paras[2],nonlin_paras[1]
+            x,y = _nonlin_paras[2],_nonlin_paras[1]
 
     nz, ny, nx = data.shape
     if fft_bounds is None:

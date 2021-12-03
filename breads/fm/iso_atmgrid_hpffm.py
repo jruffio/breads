@@ -25,7 +25,7 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     return gaussA + bkg
 
 # pos: (x,y) or fiber, position of the companion
-def hc_atmgrid_hpffm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,
+def iso_atmgrid_hpffm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, transmission=None,boxw=1, psfw=1.2,
              badpixfraction=0.75,hpf_mode=None,res_hpf=50,cutoff=5,fft_bounds=None,loc=None,fix_parameters=None):
     """
     For high-contrast companions (planet + speckles).
@@ -44,9 +44,6 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, tr
             wavelength coverage of the grid is just right and not too big as it will slow down the spin broadening.
         atm_grid_wvs: Wavelength sampling on which atm_grid is defined. Wavelength needs to be uniformly sampled.
         transmission: Transmission spectrum (tellurics and instrumental).
-            np.ndarray of size the number of wavelength bins.
-        star_spectrum: Stellar spectrum to be continuum renormalized to fit the speckle noise at each location. It is
-            (for now) assumed to be the same everywhere which is not compatible with a field dependent wavelength solution.
             np.ndarray of size the number of wavelength bins.
         boxw: size of the stamp to be extracted and modeled around the (x,y) location of the planet.
             Must be odd. Default is 1.
@@ -142,12 +139,12 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, tr
 
 
     # remove pixels that are bad in the transmission or the star spectrum
-    bad_pixels[np.where(np.isnan(star_spectrum*transmission))[0],:,:] = np.nan
+    bad_pixels[np.where(np.isnan(transmission))[0],:,:] = np.nan
 
     # Extract stamp data cube cropping at the edges
     w = int((boxw - 1) // 2)
     # Number of linear parameters
-    N_linpara = 2 # planet flux + speckle flux
+    N_linpara = 1 # planet flux
 
     _paddata =np.pad(data,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     _padnoise =np.pad(noise,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
@@ -196,8 +193,6 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, tr
         data_lpf = np.zeros((nz,boxw,boxw))+np.nan
         # Stamp cube that will contain the planet model
         scaled_psfs_hpf = np.zeros((nz,boxw,boxw))+np.nan
-        # Stamp cube that will contain the speckle model
-        M_speckles_hpf = np.zeros((nz,boxw,boxw))+np.nan
 
         # Loop over each spaxel in the stamp cube (boxw,boxw)
         for _k in range(boxw):
@@ -216,17 +211,11 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, tr
 
                     scaled_vec_lpf = broaden(lwvs,scaled_vec*badpix_stamp[:,_k,_l],res_hpf)
                     scaled_psfs_hpf[:,_k,_l] = scaled_vec-scaled_vec_lpf
-
-                    star_spectrum_lpf = broaden(lwvs,star_spectrum*badpix_stamp[:,_k,_l],res_hpf)
-                    M_speckles_hpf[:,_k,_l] = (star_spectrum-star_spectrum_lpf)/star_spectrum_lpf*data_lpf[:,_k,_l]
                 elif hpf_mode == "fft":
                     for lb,rb in zip(fft_bounds[0:-1],fft_bounds[1::]):
                         data_lpf[lb:rb, _k, _l],data_hpf[lb:rb,_k,_l] = LPFvsHPF(cube_stamp[lb:rb,_k,_l]*badpix_stamp[lb:rb,_k,_l],cutoff)
 
                         _,scaled_psfs_hpf[lb:rb,_k,_l] = LPFvsHPF(scaled_vec[lb:rb]*badpix_stamp[lb:rb,_k,_l],cutoff)
-
-                        star_spectrum_lpf,star_spectrum_hpf = LPFvsHPF(star_spectrum[lb:rb]*badpix_stamp[lb:rb,_k,_l],cutoff)
-                        M_speckles_hpf[lb:rb,_k,_l] = LPFvsHPF(star_spectrum_hpf/star_spectrum_lpf*data_lpf[lb:rb,_k,_l],cutoff)[1]
 
                 # import matplotlib.pyplot as plt
                 # plt.plot(cube_stamp[:,_k,_l]*badpix_stamp[:,_k,_l])
@@ -237,7 +226,8 @@ def hc_atmgrid_hpffm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, tr
         d = np.ravel(data_hpf)
 
         # combine planet model with speckle model
-        M = np.concatenate([scaled_psfs_hpf[:, :, :, None], M_speckles_hpf[:, :, :, None]], axis=3)
+        # M = np.concatenate([scaled_psfs_hpf[:, :, :, None], M_speckles_hpf[:, :, :, None]], axis=3)
+        M = scaled_psfs_hpf[:, :, :, None]
         # Ravel data dimension
         M = np.reshape(M, (nz * boxw * boxw, N_linpara))
         # Get rid of bad pixels

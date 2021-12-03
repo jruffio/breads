@@ -23,7 +23,7 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
 
 
 def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,
-                badpixfraction=0.75,loc=None):
+                badpixfraction=0.75,loc=None,fix_parameters=None):
     """
     For high-contrast companions (planet + speckles).
     Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
@@ -50,8 +50,11 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         nodes: If int, number of nodes equally distributed. If list, custom locations of nodes [x1,x2,..].
             To model discontinous functions, use a list of list [[x1,...],[xn,...]].
         badpixfraction: Max fraction of bad pixels in data.
-        loc: (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
+        loc: Deprecated, Use fix_parameters.
+            (x,y) position of the planet for spectral cubes, or fiber position (y position) for 2d data.
             When loc is not None, the x,y non-linear parameters should not be given.
+        fix_parameters: List. Use to fix the value of some non-linear parameters. The values equal to None are being
+                    fitted for, other elements will be fixed to the value specified.
 
     Returns:
         d: Data as a 1d vector with bad pixels removed (no nans)
@@ -59,6 +62,12 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
             vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
+    if fix_parameters is not None:
+        _nonlin_paras = np.array(fix_parameters)
+        _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
+    else:
+        _nonlin_paras = nonlin_paras
+
     # Handle the different data dimensions
     # Convert everything to 3D cubes (wv,y,x) for the followying
     if len(cubeobj.data.shape)==1:
@@ -78,7 +87,7 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
     else:
         refpos = cubeobj.refpos
 
-    rv = nonlin_paras[0]
+    rv = _nonlin_paras[0]
     # Defining the position of companion
     # If loc is not defined, then the x,y position is assume to be a non linear parameter.
     if np.size(loc) ==2:
@@ -89,9 +98,9 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         if len(cubeobj.data.shape)==1:
             x,y = 0,0
         elif len(cubeobj.data.shape)==2:
-            x,y = 0,nonlin_paras[1]
+            x,y = 0,_nonlin_paras[1]
         elif len(cubeobj.data.shape)==3:
-            x,y = nonlin_paras[2],nonlin_paras[1]
+            x,y = _nonlin_paras[2],_nonlin_paras[1]
 
     nz, ny, nx = data.shape
 
