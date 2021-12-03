@@ -24,7 +24,7 @@ class KPIC(Instrument):
         else:
             self.read_data_file(spec, trace, wvs,err,badpix,baryrv,orders,combine_mode,fiber_goal_list)
 
-    def read_data_file(self, spec, trace, wvs, err=None, badpix=None,baryrv=None,orders=None,combine_mode=None,fiber_goal_list = None):
+    def read_data_file(self, spec, trace, wvs, err=None, badpix=None,baryrv=None,orders=None,combine_mode=None,fiber_goal_list = None,identifybadpix = False):
         """
         Read OSIRIS spectral cube, also checks validity at the end
 
@@ -70,7 +70,7 @@ class KPIC(Instrument):
             for k,fib_label in enumerate(self.res_fib_labels):
                 fibnum = int(fib_label[1:2])
                 # print(fib_label,fibnum,np.where("s{0}".format((fibnum%N_science_fibers)+1)==self.wvs_fib_labels)[0])
-                new_wvs[k,:] = self.wavelengths[np.where("s{0}".format((fibnum%N_science_fibers)+1)==self.wvs_fib_labels)[0],:]
+                new_wvs[k,:] = self.wavelengths[np.where("s{0}".format(((fibnum-1)%N_science_fibers)+1)==self.wvs_fib_labels)[0],:]
                 new_wvs_fib_labels.append("s{0}".format(fibnum))
             self.wavelengths = new_wvs
             self.wvs_fib_labels = new_wvs_fib_labels
@@ -152,14 +152,15 @@ class KPIC(Instrument):
                 else:
                     combine_mode = "companion"
 
-            for fib in range(Nfib):
-                where_fib = np.where(self.fiber_goal_list == fib)[0]
-                if len(where_fib) == 0:
-                    continue
-                for order in range(Norder):
-                    badpix = findbadpix(data_list[where_fib,fib,order,:].T[:,:,None], noisecube=noise_list[where_fib,fib,order,:].T[:,:,None], badpixcube=None,
-                                        chunks=5, mypool=None, med_spec=None,nan_mask_boxsize=0,threshold=5)[0][:,:,0].T
-                    data_list[where_fib,fib,order,:] *= badpix
+            if identifybadpix:
+                for fib in range(Nfib):
+                    where_fib = np.where(self.fiber_goal_list == fib)[0]
+                    if len(where_fib) == 0:
+                        continue
+                    for order in range(Norder):
+                        badpix = findbadpix(data_list[where_fib,fib,order,:].T[:,:,None], noisecube=noise_list[where_fib,fib,order,:].T[:,:,None], badpixcube=None,
+                                            chunks=5, mypool=None, med_spec=None,nan_mask_boxsize=0,threshold=5)[0][:,:,0].T
+                        data_list[where_fib,fib,order,:] *= badpix
 
             for fib in range(Nfib):
                 where_fib = np.where(self.fiber_goal_list == fib)[0]
