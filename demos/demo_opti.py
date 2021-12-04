@@ -159,7 +159,7 @@ if __name__ == "__main__":
 
     from scipy.optimize import minimize
     res = minimize(nlog_prob, paras0, args=(dataobj, fm_func, fm_paras,nonlin_lnprior_func), method="nelder-mead",
-                           options={"xatol": 1e-2, "maxiter": 5e3,"initial_simplex":initial_simplex,"disp":True})
+                           options={"xatol":np.inf,"fatol":1e-2,"maxiter": 5e3,"initial_simplex":initial_simplex,"disp":True})
     print("Best fit values:")
     print(nonlin_labels)
     print(res.x)
