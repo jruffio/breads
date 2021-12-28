@@ -5,6 +5,7 @@ from breads.instruments.instrument import Instrument
 from breads.calibration import TelluricCalibration
 import breads.utils as utils
 from photutils.aperture import EllipticalAperture, aperture_photometry
+from matplotlib import pyplot as plt
 
 def read_planet_info(model, broaden, crop, margin, dataobj):
     if type(model) == interp1d:
@@ -64,6 +65,62 @@ def read_star_info(star):
 
 def inject_planet(dataobj: Instrument, location, model, star, transmission, planet_star_ratio, \
     broaden=True, crop=True, margin=0.2):
+    return inject_planet_stamp(dataobj, location, model, star, transmission, planet_star_ratio, \
+    broaden, crop, margin)
+
+def inject_planet_stamp(dataobj: Instrument, location, model, star, transmission, planet_star_ratio, \
+    broaden=True, crop=True, margin=0.2, stamp_size = 5):
+
+    # plt.figure()
+    # plt.imshow(np.nanmedian(dataobj.data, axis=0))
+
+    planet_f = read_planet_info(model, broaden, crop, margin, dataobj)
+    star_x, star_y, sigx, sigy, star_flux, aperture_sigmas = read_star_info(star)
+    transmission = read_transmission_info(transmission)
+    x, y = location
+    planet_x, planet_y = star_x + x, star_y + y 
+    planet_data = np.zeros_like(dataobj.data)
+    nz, ny, nx = dataobj.data.shape
+    planet_f_vals = planet_f(dataobj.wavelengths)
+    planet_flux = 0.0
+
+    star_med_x, star_med_y = int(np.nanmedian(star_x)), int(np.nanmedian(star_y))
+    pl_med_x, pl_med_y = int(np.nanmedian(planet_x)), int(np.nanmedian(planet_y))
+
+    stamp_cube = dataobj.data[:, star_med_x-stamp_size:star_med_x+stamp_size+1, star_med_y-stamp_size:star_med_y+stamp_size+1]
+    total_flux = np.sum(stamp_cube)
+    stamp_cube = stamp_cube/np.nansum(stamp_cube,axis=(1,2))[:,None,None]
+    for ind, val in zip(range(nz), \
+        planet_f_vals[:, star_med_x-stamp_size:star_med_x+stamp_size+1, star_med_y-stamp_size:star_med_y+stamp_size+1]):
+        stamp_cube[ind] = stamp_cube[ind] * val * transmission[ind]
+    stamp_cube = stamp_cube / np.sum(stamp_cube) * total_flux
+    
+    planet_data[:, pl_med_x-stamp_size:pl_med_x+stamp_size+1, pl_med_y-stamp_size:pl_med_y+stamp_size+1] = stamp_cube
+    for ind, val in zip(range(nz), planet_f_vals):
+        # aperture photometry
+        aper_photo = aperture_photometry(planet_data[ind], \
+            EllipticalAperture((planet_y[ind], planet_x[ind]), \
+                aperture_sigmas*sigy[ind], aperture_sigmas*sigx[ind])) 
+        # weirdly photutils uses order y, x
+        planet_flux += aper_photo['aperture_sum'][0]
+        
+    print("normalizing and adding to data")
+    const = planet_star_ratio * star_flux / planet_flux
+    dataobj.data += planet_data * const
+
+    # plt.figure()
+    # plt.imshow(np.nanmedian(dataobj.data, axis=0))
+
+    # plt.figure()
+    # plt.plot(dataobj.read_wavelengths, np.nanmedian(stamp_cube, axis=(1,2)) / np.nanmedian(np.nanmedian(stamp_cube, axis=(1,2))))
+    # plt.plot(dataobj.read_wavelengths, (planet_f(dataobj.read_wavelengths) * transmission) / np.nanmedian((planet_f(dataobj.read_wavelengths) * transmission)))
+
+    # plt.show()
+    # exit()
+
+
+def inject_planet_real(dataobj: Instrument, location, model, star, transmission, planet_star_ratio, \
+    broaden=True, crop=True, margin=0.2):
 
     planet_f = read_planet_info(model, broaden, crop, margin, dataobj)
     star_x, star_y, sigx, sigy, star_flux, aperture_sigmas = read_star_info(star)
@@ -78,7 +135,7 @@ def inject_planet(dataobj: Instrument, location, model, star, transmission, plan
     print("start injection")
     for ind, val in zip(range(nz), planet_f_vals):
         planet_data[ind] = val * utils.gaussian2D(ny, nx, planet_x[ind], planet_y[ind], \
-            sigx[ind], sigy[ind], 1 / (2*np.pi*sigx[ind]*sigy[ind])) * transmission[ind]
+            sigy[ind], sigx[ind], 1 / (2*np.pi*sigx[ind]*sigy[ind])) * transmission[ind]
         
         # aperture photometry
         aper_photo = aperture_photometry(planet_data[ind], \
@@ -90,3 +147,34 @@ def inject_planet(dataobj: Instrument, location, model, star, transmission, plan
     print("normalizing and adding to data")
     const = planet_star_ratio * star_flux / planet_flux
     dataobj.data += planet_data * const
+
+def inject_planet_test(dataobj: Instrument, location, model, star, transmission, planet_star_ratio, \
+    broaden=True, crop=True, margin=0.2):
+
+    planet_f = read_planet_info(model, broaden, crop, margin, dataobj)
+    star_x, star_y, sigx, sigy, star_flux, aperture_sigmas = read_star_info(star)
+    transmission = read_transmission_info(transmission)
+    x, y = location
+    planet_x, planet_y = np.nanmedian(star_x) + x, np.nanmedian(star_y) + y 
+    planet_data = np.zeros_like(dataobj.data)
+    nz, ny, nx = dataobj.data.shape
+    planet_f_vals = planet_f(dataobj.wavelengths)
+    planet_flux = 0.0
+
+    sigx, sigy = 1, 1
+
+    print("start injection")
+    for ind, val in zip(range(nz), planet_f_vals):
+        planet_data[ind] = val * utils.gaussian2D(ny, nx, planet_x, planet_y, \
+            sigy, sigx, 1 / (2*np.pi*sigx*sigy)) * transmission[ind]
+        
+        # aperture photometry
+        aper_photo = aperture_photometry(planet_data[ind], \
+            EllipticalAperture((planet_y, planet_x), \
+                aperture_sigmas*sigy, aperture_sigmas*sigx)) 
+        # weirdly photutils uses order y, x
+        planet_flux += aper_photo['aperture_sum'][0]
+         
+    print("normalizing and adding to data")
+    const = planet_star_ratio * star_flux / planet_flux
+    dataobj.data = planet_data * const
