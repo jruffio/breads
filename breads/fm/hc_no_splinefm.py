@@ -59,14 +59,16 @@ def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wi
                 # plt.plot(wvs, data_f)
                 # plt.figure()
                 # plt.plot(wvs, grad)
-                plt.figure()
-                plt.plot(wvs, ddata)
-                plt.plot(x_pos, np.zeros_like(x_pos), "rX")
-                plt.plot(lin_x, np.zeros_like(lin_x) + 0.5, "bX")
-                plt.plot(x_knots, np.ones_like(x_knots), "gX")
-                plt.show()
-                plt.close()
-                # exit()
+                # plt.figure()
+                # plt.plot(wvs, ddata)
+                # plt.plot(x_pos, np.zeros_like(x_pos), "rX")
+                # plt.plot(lin_x, np.zeros_like(lin_x) + 0.5, "bX")
+                # plt.plot(x_knots, np.ones_like(x_knots), "gX")
+                plt.figure(0)
+                plt.subplot(2, 1, 1)
+                for x_knot in x_knots:
+                    plt.axvline(x_knot, linestyle=":", color="black")
+                plt.grid()
         else:
             if wavelengths.size == 0:
                 gmin, gmax = np.nan, np.nan
@@ -185,6 +187,10 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
         data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = np.nan
         star_spectrum = np.array([np.nanmean(star_slice) for star_slice in star])
         data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = dat
+        # print(star[0])
+        # plt.figure()
+        # plt.imshow(cubeobj.data[0])
+        # plt.figure()
         # plt.plot(star_spectrum)
         # plt.title(str(k) + " " + str(l) + ", " + str(star_flux))
         # plt.show()
@@ -231,7 +237,8 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
     else:
         N_linpara = boxw * boxw * N_nodes +1
 
-
+    # plt.plot(wvs[:, padk-w:padk+w+1, padl-w:padl+w+1][:, 0, 0], d/np.nanmax(d), label="data")
+    # plt.legend()
 
     where_finite = np.where(np.isfinite(badpixs))
     if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(badpixs) or \
@@ -245,6 +252,16 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
             for _l in range(boxw):
                 lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
                 M_spline = get_spline_model(x_knots, lwvs, spline_degree=3)
+                # print(M_spline.shape, "Mspline")
+                # plt.subplot(2, 1, 2)
+                # plt.plot(star_spectrum/np.nanmax(star_spectrum), label="star-spectrum")
+                # for k in range(M_spline.shape[-1]):
+                #     print(k)
+                #     plt.plot(M_spline[:,k],label="spline {0}".format(k+1))
+                # plt.legend()
+                # plt.grid()
+                # plt.xlabel("wavelength/index")
+                # plt.savefig("./plots/TEMP3.png")
                 M_speckles[:, _k, _l, _k, _l, :] = M_spline * star_spectrum[:, None]
         M_speckles = np.reshape(M_speckles, (nz, boxw, boxw, boxw * boxw * N_nodes))
 
