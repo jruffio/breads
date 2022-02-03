@@ -13,6 +13,7 @@ from scipy.stats import median_absolute_deviation
 from scipy.optimize import lsq_linear
 from scipy.signal import correlate2d
 from  scipy.interpolate import interp1d
+import astropy.io.fits as pyfits
 
 
 def get_err_from_posterior(x,posterior):
@@ -403,7 +404,6 @@ def get_spline_model(x_knots, x_samples, spline_degree=3):
         M_list.append(M)
     return np.concatenate(M_list, axis=1)
 
-
 def broaden_kernel(wvs,spectrum,kernel):
     """
     Broaden a spectrum to instrument resolution assuming a custom kernel.
@@ -427,3 +427,43 @@ def broaden_kernel(wvs,spectrum,kernel):
     kernel_mat = kernel((wvs_mat - wvs[:,None]) / wvs[:,None])
     conv_spectrum = np.dot(kernel_mat,cp_spectrum * dwvs)#/np.dot(kernel_mat,dwvs)
     return conv_spectrum
+
+def open_psg_allmol(filename,l0,l1):
+	"""
+	Open psg model for all molecules
+	returns wavelength, h2o, co2, ch4, co for l0-l1 range specified
+
+	no o3 here .. make this more flexible
+	--------
+	"""
+	f = pyfits.getdata(filename)
+
+	x = f['Wave/freq']
+
+	h2o = f['H2O']
+	co2 = f['CO2']
+	ch4 = f['CH4']
+	co  = f['CO']
+	o3  = f['O3'] # O3 messes up in PSG at lam<550nm and high resolution bc computationally expensive, so don't use it if l1<550
+	n2o = f['N2O']
+	o2  = f['O2']
+	# also dont use rayleigh scattering, it fails at NIR wavelengths. absorbs into a continuum fit anyhow
+
+	idelete = np.where(np.diff(x) < .0001)[0]  # delete non unique points - though I fixed it in code but seems to pop up still at very high resolutions
+	x, h2o, co2, ch4, co, o3, n2o, o2= np.delete(x,idelete),np.delete(h2o,idelete), np.delete(co2,idelete),np.delete(ch4,idelete),np.delete(co,idelete),np.delete(o3,idelete),np.delete(n2o,idelete),np.delete(o2,idelete)
+
+	isub = np.where((x > l0) & (x < l1))[0]
+	return x[isub], (h2o[isub], co2[isub], ch4[isub], co[isub], o3[isub], n2o[isub], o2[isub])
+
+
+def scale_psg(psg_tuple, airmass, pwv):
+	"""
+	psg_tuple : (tuple) of loaded psg spectral components from "open_psg_allmol" fxn
+	airmass: (float) airmass of final spectrum applied to all molecules spectra
+	pwv: (float) extra scaling for h2o spectrum to account for changes in the precipitable water vapor
+	"""
+	h2o, co2, ch4, co, o3, n2o, o2 = psg_tuple
+
+	model = h2o**(airmass + pwv) * (co2 * ch4 * co * o3 * n2o * o2)**airmass # do the scalings
+
+	return model

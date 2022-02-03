@@ -3,8 +3,9 @@ from scipy.optimize import lsq_linear
 from scipy.special import loggamma
 import matplotlib.pyplot as plt
 import warnings
+from copy import copy
 
-def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
+def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = None):
     """
     Fit a forard model to data returning probabilities and best fit linear parameters.
 
@@ -17,6 +18,11 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
         computeH0: If true (default), compute the probability of the model removing the first element of the linear
             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
             non-linear parameters
+        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+            Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
+            e.g. ([0,0,...], [np.inf,np.inf,...]) default no bounds.
+            Each numpy array must have shape (N_linear_parameters,).
+
 
     Returns:
         log_prob: Probability of the model marginalized over linear parameters.
@@ -30,7 +36,13 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
     if N_linpara == 1:
         computeH0 = False
 
+    if bounds is None:
+        _bounds = ([-np.inf,]*N_linpara,[np.inf,]*N_linpara)
+    else:
+        _bounds = (copy(bounds[0]),copy(bounds[1]))
+
     validpara = np.where(np.nansum(M,axis=0)!=0)
+    _bounds = (np.array(_bounds[0])[validpara[0]],np.array(_bounds[1])[validpara[0]])
     M = M[:,validpara[0]]
 
     d = d / s
@@ -45,7 +57,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
         rchi2 = np.inf
     else:
         logdet_Sigma = np.sum(2 * np.log(s))
-        paras = lsq_linear(M, d).x
+        paras = lsq_linear(M, d,bounds=_bounds).x
 
         m = np.dot(M, paras)
         r = d  - m
@@ -66,7 +78,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
         paras_err = np.sqrt(np.diag(covphi))
 
         if computeH0:
-            paras_H0 = lsq_linear(M[:,1::], d).x
+            paras_H0 = lsq_linear(M[:,1::], d,bounds=(np.array(_bounds[0])[1::],np.array(_bounds[1])[1::])).x
             m_H0 = np.dot(M[:,1::] , paras_H0)
             r_H0 = d  - m_H0
             chi2_H0 = np.nansum(r_H0**2)
@@ -93,7 +105,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True):
 
     return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
-def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None):
+def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=None):
     """
     Wrapper to fit_fm() but only returns the log probability marginalized over the linear parameters.
 
@@ -106,6 +118,10 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None):
         computeH0: If true (default), compute the probability of the model removing the first element of the linear
             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
             non-linear parameters
+        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+            Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
+            e.g. ([0,0,...], [np.inf,np.inf,...]). default no bounds.
+            Each numpy array must have shape (N_linear_parameters,).
 
     Returns:
         log_prob: Probability of the model marginalized over linear parameters.
@@ -115,13 +131,13 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None):
     else:
         prior = 0
     try:
-        lnprob = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False)[0]+prior
+        lnprob = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False,bounds=bounds)[0]+prior
     except:
         lnprob =  -np.inf
     return lnprob
 
 
-def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None):
+def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=(-np.inf, np.inf)):
     """
    Returns the negative of the log_prob() for minimization routines.
 
@@ -134,8 +150,14 @@ def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None)
         computeH0: If true (default), compute the probability of the model removing the first element of the linear
             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
             non-linear parameters
+        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+            Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
+            e.g. ([0,0,...], [np.inf,np.inf,...]) default no bounds.
+            Each numpy array must have shape (N_linear_parameters,).
 
     Returns:
         log_prob: Probability of the model marginalized over linear parameters.
     """
-    return - log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func)
+    nlogprob_val =  - log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func,bounds)
+    # print( nlogprob_val, nonlin_paras)
+    return nlogprob_val
