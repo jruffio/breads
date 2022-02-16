@@ -82,7 +82,8 @@ class OSIRIS(Instrument):
         self.bad_pixels[:trim] = np.nan
         self.bad_pixels[nz-trim:] = np.nan
 
-    def remove_bad_pixels(self, chunks=20, mypool=None, med_spec=None, nan_mask_boxsize=3, w=5):
+    def remove_bad_pixels(self, chunks=20, mypool=None, med_spec=None, nan_mask_boxsize=3, w=5, \
+        num_threads = 16, wid_mov=None):
         if med_spec == "transmission" or med_spec == "pair subtraction":
             img_mean = np.nanmean(self.data, axis=0)
             x, y = np.unravel_index(np.nanargmax(img_mean), img_mean.shape)
@@ -93,6 +94,24 @@ class OSIRIS(Instrument):
             utils.findbadpix(self.data, self.noise, self.bad_pixels, chunks, mypool, med_spec, nan_mask_boxsize)
         self.bad_pixels = new_badpixcube
         self.data = new_cube
+        try:
+            temp = self.continuum
+        except:
+            nz, ny, nx = self.data.shape
+            my_pool = mp.Pool(processes=num_threads)
+            if wid_mov is None:
+                wid_mov = nz // 10
+            args = []
+            for i in range(ny):
+                for j in range(nx):
+                    args += [self.data[:, i, j]]
+            output = my_pool.map(set_continnuum, zip(args, repeat(wid_mov)))
+            self.continuum = np.zeros((nz, ny, nx))
+            for i in range(ny):
+                for j in range(nx):
+                    self.continuum[:, i, j] = output[(i*nx+j)]
+            
+        utils.mask_bleeding(self)
         utils.clean_nans(self.data)
         return res
 
@@ -160,30 +179,36 @@ class OSIRIS(Instrument):
         return broaden(wvs, spectrum, self.R, mppool=mppool)
 
     def set_noise(self, method="sqrt_cont", num_threads = 16, wid_mov=None):
-        nz, ny, nx = self.data.shape
-        my_pool = mp.Pool(processes=num_threads)
-        if wid_mov is None:
-            wid_mov = nz // 10
-        args = []
-        for i in range(ny):
-            for j in range(nx):
-                args += [self.data[:, i, j]]
-        output = my_pool.map(set_continnuum, zip(args, repeat(wid_mov)))
-        self.continuum = np.zeros((nz, ny, nx))
-        for i in range(ny):
-            for j in range(nx):
-                self.continuum[:, i, j] = output[(i*nx+j)]
-        # self.continuum = np.reshape(self.continuum, (nz, ny, nx), order='F')
-        if method == "sqrt_cont":
-            self.noise = np.sqrt(np.abs(self.continuum))
-        if method == "cont":
-            self.noise = self.continuum
+        try:
+            temp = self.continuum
+        except:
+            nz, ny, nx = self.data.shape
+            my_pool = mp.Pool(processes=num_threads)
+            if wid_mov is None:
+                wid_mov = nz // 10
+            args = []
+            for i in range(ny):
+                for j in range(nx):
+                    args += [self.data[:, i, j]]
+            output = my_pool.map(set_continnuum, zip(args, repeat(wid_mov)))
+            self.continuum = np.zeros((nz, ny, nx))
+            for i in range(ny):
+                for j in range(nx):
+                    self.continuum[:, i, j] = output[(i*nx+j)]
+            # self.continuum = np.reshape(self.continuum, (nz, ny, nx), order='F')
+            if method == "sqrt_cont":
+                self.noise = np.sqrt(np.abs(self.continuum))
+            if method == "cont":
+                self.noise = self.continuum
 
 def set_continnuum(args):
     data, window = args
     tmp = np.array(pd.DataFrame(np.concatenate([data, data[::-1]], axis=0)).interpolate(method="linear").fillna(method="bfill").fillna(method="ffill"))
     myvec_cp_lpf = np.array(pd.DataFrame(tmp).rolling(window=window, center=True).median().interpolate(method="linear").fillna(method="bfill").fillna(method="ffill"))[0:np.size(data), 0]
-    return myvec_cp_lpf
+    data = data[::-1]
+    tmp = np.array(pd.DataFrame(np.concatenate([data, data[::-1]], axis=0)).interpolate(method="linear").fillna(method="bfill").fillna(method="ffill"))
+    myvec_cp_lpf_r = np.array(pd.DataFrame(tmp).rolling(window=window, center=True).median().interpolate(method="linear").fillna(method="bfill").fillna(method="ffill"))[0:np.size(data), 0]
+    return (myvec_cp_lpf + myvec_cp_lpf_r[::-1]) / 2
 
 def return_64x19(cube):
     """

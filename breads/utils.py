@@ -13,6 +13,7 @@ from scipy.stats import median_absolute_deviation
 from scipy.optimize import lsq_linear
 from scipy.signal import correlate2d
 from  scipy.interpolate import interp1d
+from matplotlib import pyplot as plt
 
 
 def get_err_from_posterior(x,posterior):
@@ -118,6 +119,29 @@ def corrected_wavelengths(data, off0, off1, center_data):
     else:
         wavs = wavs * (1 + off1) + off0 * u.angstrom
     return wavs
+
+def mask_bleeding(data, threshold=1.5, mask=1.1, per=[5, 95]):
+    nz, ny, nx = data.data.shape
+    for i in range(ny):
+        for j in range(nx):
+            # i, j = 35, 35
+            # i, j = 35, 25
+            data_f = data.continuum[:, i, j] * data.bad_pixels[:,i,j]
+            percentiles = np.nanpercentile(data_f, per)
+            # print(percentiles)
+            # plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
+            # plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
+            if percentiles[1] / percentiles[0] > threshold:
+                outliers = data_f > mask * np.nanmedian(data_f)
+                left, right = np.where(outliers)[0][0], np.where(outliers)[0][-1]
+                if left < nz-right:
+                    data.bad_pixels[:right+1, i, j] = np.nan 
+                else:
+                    data.bad_pixels[left:, i, j] = np.nan
+            # plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
+            # plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
+            # plt.show()
+            # exit()
 
 def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3,threshold=3):
     if noisecube is None:

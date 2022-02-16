@@ -59,16 +59,18 @@ def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wi
                 # plt.plot(wvs, data_f)
                 # plt.figure()
                 # plt.plot(wvs, grad)
-                # plt.figure()
-                # plt.plot(wvs, ddata)
-                # plt.plot(x_pos, np.zeros_like(x_pos), "rX")
-                # plt.plot(lin_x, np.zeros_like(lin_x) + 0.5, "bX")
-                # plt.plot(x_knots, np.ones_like(x_knots), "gX")
-                plt.figure(0)
+                plt.figure()
+                plt.plot(wvs, ddata)
+                plt.plot(x_pos, np.zeros_like(x_pos), "rX")
+                plt.plot(lin_x, np.zeros_like(lin_x) + 0.5, "bX")
+                plt.plot(x_knots, np.ones_like(x_knots), "gX")
+                plt.figure()
                 plt.subplot(2, 1, 1)
                 for x_knot in x_knots:
                     plt.axvline(x_knot, linestyle=":", color="black")
                 plt.grid()
+                # plt.show()
+                # exit()
         else:
             if wavelengths.size == 0:
                 gmin, gmax = np.nan, np.nan
@@ -86,7 +88,7 @@ def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wi
         raise ValueError("Unknown format for nodes.")
     return N_nodes, x_knots
 
-def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2,nodes=20, star_flux=None,
+def hc_mask_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2,nodes=20, star_flux=None,
                 badpixfraction=0.75,loc=None, optimize_nodes=True, wid_mov=None, opt_p=0.7, knot_margin=1e-4, star_loc=None):
     """
     For high-contrast companions (planet + speckles).
