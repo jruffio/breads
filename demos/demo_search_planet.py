@@ -6,7 +6,7 @@ import scipy.io as scio
 import astropy.io.fits as pyfits
 
 from breads.instruments.OSIRIS import OSIRIS
-from breads.search_planet import search_planet
+from breads.grid_search import grid_search
 from breads.fm.hc_splinefm import hc_splinefm
 from breads.fm.iso_hpffm import iso_hpffm
 from breads.fm.hc_hpffm import hc_hpffm
@@ -24,8 +24,8 @@ if __name__ == "__main__":
     dataobj = OSIRIS(filename)
     #dataobj.refpos = (10,-15)
     nz,ny,nx = dataobj.data.shape
-    dataobj.noise = np.ones((nz,ny,nx))
-    # plt.imshow(dataobj.data[1000,:,:])
+    dataobj.noise = np.tile(np.nanstd(dataobj.data,axis=0),(nz,1,1))#np.ones((nz,ny,nx))
+    # plt.imshow(dataobj.noise[1000,:,:])
     # plt.show()
 
     if 1:
@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
     # Definition of the (extra) parameters for splinefm()
     fm_paras = {"planet_f":planet_f,"transmission":transmission,"star_spectrum":star_spectrum,
-                "boxw":3,"nodes":20,"psfw":1.2,"nodes":20,"badpixfraction":0.75}
+                "boxw":3,"nodes":20,"psfw":1.2,"badpixfraction":0.75}
     fm_func = hc_splinefm
     # fm_paras = {"planet_f":planet_f,"transmission":transmission,"boxw":1,"res_hpf":100,"psfw":1.2,"badpixfraction":0.75}
     # fm_func = iso_hpffm
@@ -60,7 +60,9 @@ if __name__ == "__main__":
     # fm_func = hc_hpffm
 
     if 0: # Example code to test the forward model
-        nonlin_paras = [-15,30,9] # rv (km/s), y (pix), x (pix)
+        # nonlin_paras = [-15,37,10] # rv (km/s), y (pix), x (pix)
+        nonlin_paras = [-15,33+0,4-0] # rv (km/s), y (pix), x (pix)
+        # nonlin_paras = [-15,46,14] # rv (km/s), y (pix), x (pix)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
         # s is the vector of uncertainties corresponding to d
@@ -73,14 +75,21 @@ if __name__ == "__main__":
         from scipy.optimize import lsq_linear
         paras = lsq_linear(M, d).x
         m = np.dot(M,paras)
+        paras_H0 = lsq_linear(M[:,1::], d).x
+        m_H0 = np.dot(M[:,1::],paras_H0)
 
-        plt.subplot(2,1,1)
+        plt.subplot(3,1,1)
         plt.plot(d,label="data")
         plt.plot(m,label="model")
+        plt.plot(m_H0,label="model H0")
         plt.plot(paras[0]*M[:,0],label="planet model")
         plt.plot(m-paras[0]*M[:,0],label="starlight model")
         plt.legend()
-        plt.subplot(2,1,2)
+        plt.subplot(3,1,2)
+        plt.plot(d-m,label="residuals")
+        plt.plot(d-m_H0,label="residuals H0")
+        plt.legend()
+        plt.subplot(3,1,3)
         plt.plot(M[:,0]/np.max(M[:,0]),label="planet model")
         for k in range(M.shape[-1]-1):
             plt.plot(M[:,k+1]/np.nanmax(M[:,k+1]),label="starlight model {0}".format(k+1))
@@ -95,15 +104,26 @@ if __name__ == "__main__":
     rvs = np.array([-15])
     ys = np.arange(ny)
     xs = np.arange(nx)
-    out = search_planet([rvs,ys,xs],dataobj,fm_func,fm_paras,numthreads=numthreads)
-    N_linpara = (out.shape[-1]-2)//2
-    print(out.shape)
+    log_prob,log_prob_H0,rchi2,linparas,linparas_err = grid_search([rvs,ys,xs],dataobj,fm_func,fm_paras,numthreads=numthreads)
+    N_linpara = linparas.shape[-1]
+
+    k,l,m = np.unravel_index(np.nanargmax(log_prob-log_prob_H0),log_prob.shape)
+    print("best fit parameters: rv={0},y={1},x={2}".format(rvs[k],ys[l],xs[m]) )
+    print(np.nanmax(log_prob-log_prob_H0))
+    best_log_prob,best_log_prob_H0,_,_,_ = grid_search([[rvs[k]], [ys[l]], [xs[m]]], dataobj, fm_func, fm_paras, numthreads=None)
+    print(best_log_prob-best_log_prob_H0)
 
     plt.figure(1)
-    plt.imshow(out[0,:,:,3]/out[0,:,:,3+N_linpara],origin="lower")
-    # plt.imshow(out[0,:,:,0]-out[0,:,:,1],origin="lower")
-    # plt.clim([0,20])
+    plt.subplot(1,2,1)
+    snr_map = linparas[k,:,:,0]/linparas_err[k,:,:,0]
+    plt.imshow(snr_map,origin="lower")
+    plt.clim([0,50])
     cbar = plt.colorbar()
     cbar.set_label("SNR")
     # plt.plot(out[:,0,0,2])
+    plt.subplot(1,2,2)
+    plt.imshow(log_prob[k,:,:]-log_prob_H0[k,:,:],origin="lower")
+    plt.clim([0,100])
+    cbar = plt.colorbar()
+    cbar.set_label("log_prob_H1 - log_prob_H0")
     plt.show()

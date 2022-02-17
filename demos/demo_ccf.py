@@ -8,7 +8,7 @@ from glob import glob
 import multiprocessing as mp
 
 from breads.instruments.KPIC import KPIC
-from breads.search_planet import search_planet
+from breads.grid_search import grid_search
 
 if __name__ == "__main__":
     try:
@@ -114,7 +114,7 @@ if __name__ == "__main__":
     # /!\ Optional but recommended
     # Test the forward model for a fixed value of the non linear parameter.
     # Make sure it does not crash and look the way you want
-    if 1:
+    if 0:
         nonlin_paras = [-2] # rv (km/s)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
@@ -147,25 +147,30 @@ if __name__ == "__main__":
 
     # fit rv
     rvs = np.linspace(-400,400,401)
-    out = search_planet([rvs],dataobj,fm_func,fm_paras,numthreads=numthreads)
-    N_linpara = (out.shape[-1]-2)//2
-    print(out.shape)
+    log_prob,log_prob_H0,rchi2,linparas,linparas_err = grid_search([rvs],dataobj,fm_func,fm_paras,numthreads=numthreads)
+    N_linpara = linparas.shape[-1]
+
+    k = np.unravel_index(np.nanargmax(log_prob-log_prob_H0),log_prob.shape)
+    print("best fit parameters: rv={0}".format(rvs[k]) )
+    print(np.nanmax(log_prob-log_prob_H0))
+    best_log_prob,best_log_prob_H0,_,_,_ = grid_search([[rvs[k]]], dataobj, fm_func, fm_paras, numthreads=None)
+    print(best_log_prob-best_log_prob_H0)
 
     plt.figure(1,figsize=(12,4))
     plt.subplot(1,3,1)
-    snr = out[:,3]/out[:,3+N_linpara]
+    snr = linparas[:,0]/linparas_err[:,0]
     plt.plot(rvs,snr)
     plt.plot(rvs,snr-np.nanmedian(snr),label="spline CCF")
     plt.ylabel("SNR")
     plt.xlabel("RV (km/s)")
 
     plt.subplot(1,3,2)
-    plt.plot(rvs,out[:,0]-out[:,1])
+    plt.plot(rvs,log_prob - log_prob_H0)
     plt.ylabel("ln(Bayes factor)")
     plt.xlabel("RV (km/s)")
 
     plt.subplot(1,3,3)
-    plt.plot(rvs,np.exp(out[:,0]-np.max(out[:,0])))
+    plt.plot(rvs,np.exp(log_prob-np.max(log_prob)))
     plt.ylabel("RV posterior")
     plt.xlabel("RV (km/s)")
     plt.show()

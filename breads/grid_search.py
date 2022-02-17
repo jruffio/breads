@@ -21,12 +21,12 @@ def process_chunk(args):
     """
     Process for search_planet()
     """
-    nonlin_paras_list, dataobj, fm_func, fm_paras = args
+    nonlin_paras_list, dataobj, fm_func, fm_paras, bounds = args
 
     for k, nonlin_paras in enumerate(zip(*nonlin_paras_list)):
         try:
         # if 1:
-            log_prob,log_prob_H0,rchi2,linparas,linparas_err = fitfm(nonlin_paras,dataobj,fm_func,fm_paras)
+            log_prob,log_prob_H0,rchi2,linparas,linparas_err = fitfm(nonlin_paras,dataobj,fm_func,fm_paras,bounds=bounds)
             N_linpara = np.size(linparas)
             if k == 0:
                 out_chunk = np.zeros((np.size(nonlin_paras_list[0]),1+1+1+2*N_linpara))+np.nan
@@ -41,7 +41,7 @@ def process_chunk(args):
     return out_chunk
 
 
-def search_planet(para_vecs,dataobj,fm_func,fm_paras,numthreads=None):
+def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None):
     """
     Planet detection, CCF, or grid search routine.
     It fits for the non linear parameters of a forward model over a user-specified grid of values while marginalizing
@@ -62,24 +62,23 @@ def search_planet(para_vecs,dataobj,fm_func,fm_paras,numthreads=None):
         fm_func: A forward model function. See breads.fm.template.template() for an example.
         fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
         numthreads: Number of processes to be used in parallelization. Non parallization if defined as None (default).
+        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+            Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
+            e.g. ([0,0,...], [np.inf,np.inf,...]). default no bounds.
+            Each numpy array must have shape (N_linear_parameters,).
 
     Returns:
-        Out: An array of dimension (Nnl_1,Nnl_2,....,3+Nl*2) containing the marginalized probabilities, the noise
-            scaling factor, and best fit linear parameters with associated uncertainties calculated over the grid of
-            non-linear parameters. (Nnl_1,Nnl_2,..) is the shape of the non linear parameter grid with Nnl_1 the size of
-            para_vecs[1] and so on. Nl is the number of linear parameters in the forward model. The last dimension
-            is defined as follow:
-                Out[:,...,0]: Probability of the model marginalized over linear parameters.
-                Out[:,...,1]: Probability of the model without the planet marginalized over linear parameters.
-                Out[:,...,2]: noise scaling factor
-                Out[:,...,3:3+Nl]: Best fit linear parameters
-                Out[:,...,3+Nl:3+2*Nl]: Uncertainties of best fit linear parameters
+        log_prob: Probability of the model marginalized over linear parameters.
+        log_prob_H0: Probability of the model without the planet marginalized over linear parameters.
+        rchi2: noise scaling factor
+        linparas: Best fit linear parameters
+        linparas_err: Uncertainties of best fit linear parameters
 
     """
-    para_grids = [np.ravel(pgrid) for pgrid in np.meshgrid(*para_vecs)]
+    para_grids = [np.ravel(pgrid) for pgrid in np.meshgrid(*para_vecs,indexing="ij")]
 
     if numthreads is None:
-        _out = process_chunk((para_grids,dataobj,fm_func,fm_paras))
+        _out = process_chunk((para_grids,dataobj,fm_func,fm_paras,bounds))
         out_shape = [np.size(v) for v in para_vecs]+[_out.shape[-1],]
         out = np.reshape(_out,out_shape)
     else:
@@ -97,7 +96,8 @@ def search_planet(para_vecs,dataobj,fm_func,fm_paras,numthreads=None):
         output_lists = mypool.map(process_chunk, zip(nonlin_paras_lists,
                                                      itertools.repeat(dataobj),
                                                      itertools.repeat(fm_func),
-                                                     itertools.repeat(fm_paras)))
+                                                     itertools.repeat(fm_paras),
+                                                     itertools.repeat(bounds)))
 
         for k,(indices, output_list) in enumerate(zip(indices_lists,output_lists)):
             if k ==0:
@@ -108,4 +108,13 @@ def search_planet(para_vecs,dataobj,fm_func,fm_paras,numthreads=None):
 
         mypool.close()
         mypool.join()
-    return out
+
+    N_linpara = int((out.shape[-1]-3)/2)
+    out = np.moveaxis(out, -1, 0)
+    log_prob = out[0]
+    log_prob_H0 = out[1]
+    rchi2 = out[2]
+    linparas = np.moveaxis(out[3:3+N_linpara], 0, -1)
+    linparas_err = np.moveaxis(out[3+N_linpara:3+2*N_linpara], 0, -1)
+
+    return log_prob,log_prob_H0,rchi2,linparas,linparas_err
