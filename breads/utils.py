@@ -121,27 +121,36 @@ def corrected_wavelengths(data, off0, off1, center_data):
         wavs = wavs * (1 + off1) + off0 * u.angstrom
     return wavs
 
-def mask_bleeding(data, threshold=1.5, mask=1.1, per=[5, 95]):
+def mask_bleeding(data, threshold=1.3, mask=1.1, per=[5, 95], width=10):
     nz, ny, nx = data.data.shape
+    img_mean = np.nanmedian(data.data, axis=0)
+    star_y, _ = np.unravel_index(np.nanargmax(img_mean), img_mean.shape)
     for i in range(ny):
         for j in range(nx):
-            # i, j = 35, 35
-            # i, j = 35, 25
+            # i, j = 24, 47
+            if not (star_y - width <= i <= star_y + width):
+                continue
             data_f = data.continuum[:, i, j] * data.bad_pixels[:,i,j]
             percentiles = np.nanpercentile(data_f, per)
             # print(percentiles)
-            # plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
-            # plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
-            if percentiles[1] / percentiles[0] > threshold:
-                outliers = data_f > mask * np.nanmedian(data_f)
-                left, right = np.where(outliers)[0][0], np.where(outliers)[0][-1]
-                if left < nz-right:
-                    data.bad_pixels[:right+1, i, j] = np.nan 
-                else:
-                    data.bad_pixels[left:, i, j] = np.nan
+            # plt.figure()
             # plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
             # plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
             # plt.show()
+            if percentiles[1] / percentiles[0] > threshold:
+                outliers = data_f > mask * np.nanmedian(data_f)
+                if len(np.where(outliers)[0]) == 0:
+                    data.bad_pixels[:, i, j] = np.nan
+                else:
+                    left, right = np.where(outliers)[0][0], np.where(outliers)[0][-1]
+                    if left < nz-right:
+                        data.bad_pixels[:right+1, i, j] = np.nan 
+                    else:
+                        data.bad_pixels[left:, i, j] = np.nan
+            # plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
+            # plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
+            # plt.show()
+            # plt.close()
             # exit()
 
 def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3,threshold=3):

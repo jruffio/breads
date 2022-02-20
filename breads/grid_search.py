@@ -19,7 +19,7 @@ except ImportError:
 
 def process_chunk(args):
     """
-    Process for search_planet()
+    Process for grid_search()
     """
     nonlin_paras_list, dataobj, fm_func, fm_paras, bounds = args
 
