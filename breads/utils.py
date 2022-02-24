@@ -121,15 +121,17 @@ def corrected_wavelengths(data, off0, off1, center_data):
         wavs = wavs * (1 + off1) + off0 * u.angstrom
     return wavs
 
-def mask_bleeding(data, threshold=1.3, mask=1.1, per=[5, 95], width=10):
+def mask_bleeding(data, threshold=1.5, mask=1.1, per=[5, 95], width=10):
     nz, ny, nx = data.data.shape
     img_mean = np.nanmedian(data.data, axis=0)
     star_y, _ = np.unravel_index(np.nanargmax(img_mean), img_mean.shape)
+    # num_mask = np.zeros((ny, nx))
     for i in range(ny):
         for j in range(nx):
             # i, j = 24, 47
             if not (star_y - width <= i <= star_y + width):
                 continue
+            # num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j]))
             data_f = data.continuum[:, i, j] * data.bad_pixels[:,i,j]
             percentiles = np.nanpercentile(data_f, per)
             # print(percentiles)
@@ -147,11 +149,17 @@ def mask_bleeding(data, threshold=1.3, mask=1.1, per=[5, 95], width=10):
                         data.bad_pixels[:right+1, i, j] = np.nan 
                     else:
                         data.bad_pixels[left:, i, j] = np.nan
+            # num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j])) - num_mask[i, j]
             # plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
             # plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
             # plt.show()
             # plt.close()
             # exit()
+    # plt.figure()
+    # plt.imshow(num_mask / nz, origin="lower")
+    # plt.colorbar()
+    # plt.show()
+    # exit()
 
 def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3,threshold=3):
     if noisecube is None:

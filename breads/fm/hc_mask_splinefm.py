@@ -5,6 +5,7 @@ from astropy import constants as const
 from scipy.optimize.linesearch import line_search_armijo
 from copy import deepcopy
 from breads.utils import get_spline_model
+from copy import copy
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     """
@@ -187,25 +188,15 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
 
     if star_spectrum is None:
         assert star_loc is not None, "both star_spectrum and star_loc cannot be None"
-        star_spectrum = np.zeros_like(transmission)
         sy, sx = star_loc
         # aper_s, mask_sx, mask_sy = 5.0, int(2.0*sigx)+1, int(2.0*sigy)+1
         aper_s, mask_sx, mask_sy = 5.0, w, w
-        dat = deepcopy(data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1])
-        star = data[:, int(np.round(sx-aper_s*sigx)):int(np.round(sx+aper_s*sigx)), int(np.round(sy-aper_s*sigy)):int(np.round(sy+aper_s*sigy))]
         if star_flux is None:
-            star_flux = np.nanmean(star) * star.size
-        data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = np.nan
-        star_spectrum = np.nanmean(star, axis=(1, 2))
-        data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = dat
-        # print(star[0])
-        # plt.figure()
-        # plt.imshow(cubeobj.data[0])
-        # plt.figure()
-        # plt.plot(star_spectrum)
-        # plt.title(str(k) + " " + str(l) + ", " + str(star_flux))
-        # plt.show()
-        # exit()
+            star_flux = np.nanmean(data) * data.size
+        data_cp = copy(data)
+        data_cp[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = np.nan
+        star = data_cp[:, int(np.round(sx-aper_s*sigx)):int(np.round(sx+aper_s*sigx)), int(np.round(sy-aper_s*sigy)):int(np.round(sy+aper_s*sigy))]
+        star_spectrum = np.nanmean(star, axis=(1, 2))    
     else:
         # flux ratio normalization
         star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
