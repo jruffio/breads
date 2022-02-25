@@ -121,7 +121,7 @@ def corrected_wavelengths(data, off0, off1, center_data):
         wavs = wavs * (1 + off1) + off0 * u.angstrom
     return wavs
 
-def mask_bleeding(data, threshold=1.5, mask=1.1, per=[5, 95], width=10):
+def mask_bleeding(data, threshold=1.5, mask=1.1, per=[3, 97], width=10):
     nz, ny, nx = data.data.shape
     img_mean = np.nanmedian(data.data, axis=0)
     star_y, _ = np.unravel_index(np.nanargmax(img_mean), img_mean.shape)

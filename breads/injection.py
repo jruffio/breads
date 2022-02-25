@@ -69,7 +69,7 @@ def inject_planet(dataobj: Instrument, location, model, star, transmission, plan
     broaden, crop, margin)
 
 def inject_planet_stamp(dataobj: Instrument, location, model, star, transmission, planet_star_ratio, \
-    broaden=True, crop=True, margin=0.2, stamp_size = 10):
+    broaden=True, crop=True, margin=0.2, stamp_size = 25, padding=50):
 
     # plt.figure()
     # plt.imshow(np.nanmedian(dataobj.data, axis=0))
@@ -79,24 +79,36 @@ def inject_planet_stamp(dataobj: Instrument, location, model, star, transmission
     transmission = read_transmission_info(transmission)
     x, y = location
     planet_x, planet_y = star_x + x, star_y + y 
-    planet_data = np.zeros_like(dataobj.data)
+    
     nz, ny, nx = dataobj.data.shape
+    planet_data = np.zeros((nz, 2 * padding + ny, 2 * padding + nx))
+
     planet_f_vals = planet_f(dataobj.wavelengths)
+    planet_f_vals = np.pad(planet_f_vals, [(0,0),(padding,padding),(padding,padding)],mode="median")
 
     star_med_x, star_med_y = int(np.nanmedian(star_x)), int(np.nanmedian(star_y))
     pl_med_x, pl_med_y = int(np.nanmedian(planet_x)), int(np.nanmedian(planet_y))
-
-    stamp_cube = dataobj.data[:, star_med_x-stamp_size:star_med_x+stamp_size+1, star_med_y-stamp_size:star_med_y+stamp_size+1]
+    
+    data_padded = np.pad(dataobj.data, [(0,0),(padding,padding),(padding,padding)],mode="constant",constant_values=0)
+    stamp_cube = data_padded[:, padding+star_med_x-stamp_size:padding+star_med_x+stamp_size+1, padding+star_med_y-stamp_size:padding+star_med_y+stamp_size+1]
     total_flux = np.size(stamp_cube) * np.nanmean(stamp_cube)
     stamp_cube = stamp_cube/np.nansum(stamp_cube,axis=(1,2))[:,None,None]
-    stamp_cube = stamp_cube * transmission[:, None, None] * planet_f_vals[:, pl_med_x-stamp_size:pl_med_x+stamp_size+1, pl_med_y-stamp_size:pl_med_y+stamp_size+1]
+    stamp_cube = stamp_cube * transmission[:, None, None] \
+        # * planet_f_vals[:, padding+pl_med_x-stamp_size:padding+pl_med_x+stamp_size+1, padding+pl_med_y-stamp_size:padding+pl_med_y+stamp_size+1]
     
-    planet_data[:, pl_med_x-stamp_size:pl_med_x+stamp_size+1, pl_med_y-stamp_size:pl_med_y+stamp_size+1] = stamp_cube
+    planet_data[:, padding+pl_med_x-stamp_size:padding+pl_med_x+stamp_size+1, \
+        padding+pl_med_y-stamp_size:padding+pl_med_y+stamp_size+1] = stamp_cube
+    # planet_data[:, padding+pl_med_x-stamp_size:padding+pl_med_x+stamp_size+1, \
+    #     padding+pl_med_y-stamp_size:padding+pl_med_y+stamp_size+1] *= transmission[:, None, None] * \
+    #     planet_f_vals[:, pl_med_x-stamp_size:pl_med_x+stamp_size+1, pl_med_y-stamp_size:pl_med_y+stamp_size+1]
+    planet_data = planet_data * planet_f_vals
+    stamp_cube = planet_data[:, padding+pl_med_x-stamp_size:padding+pl_med_x+stamp_size+1, \
+        padding+pl_med_y-stamp_size:padding+pl_med_y+stamp_size+1]
     planet_flux = np.size(stamp_cube) * np.nanmean(stamp_cube)
         
     print("normalizing and adding to data")
     const = planet_star_ratio * total_flux / planet_flux
-    dataobj.data += planet_data * const
+    dataobj.data += planet_data[:, padding:-padding, padding:-padding] * const
 
     # plt.figure()
     # plt.imshow(np.nanmedian(dataobj.data, axis=0))
