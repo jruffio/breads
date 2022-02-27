@@ -111,7 +111,7 @@ class OSIRIS(Instrument):
                 for j in range(nx):
                     self.continuum[:, i, j] = output[(i*nx+j)]
             
-        # utils.mask_bleeding(self)
+        utils.mask_bleeding(self)
         utils.clean_nans(self.data)
         return res
 
