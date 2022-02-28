@@ -5,6 +5,7 @@ from astropy import constants as const
 from scipy.optimize.linesearch import line_search_armijo
 from copy import deepcopy
 from breads.utils import get_spline_model
+from copy import copy
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     """
@@ -59,16 +60,18 @@ def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wi
                 # plt.plot(wvs, data_f)
                 # plt.figure()
                 # plt.plot(wvs, grad)
-                # plt.figure()
-                # plt.plot(wvs, ddata)
-                # plt.plot(x_pos, np.zeros_like(x_pos), "rX")
-                # plt.plot(lin_x, np.zeros_like(lin_x) + 0.5, "bX")
-                # plt.plot(x_knots, np.ones_like(x_knots), "gX")
-                plt.figure(0)
+                plt.figure()
+                plt.plot(wvs, ddata)
+                plt.plot(x_pos, np.zeros_like(x_pos), "rX")
+                plt.plot(lin_x, np.zeros_like(lin_x) + 0.5, "bX")
+                plt.plot(x_knots, np.ones_like(x_knots), "gX")
+                plt.figure()
                 plt.subplot(2, 1, 1)
                 for x_knot in x_knots:
                     plt.axvline(x_knot, linestyle=":", color="black")
                 plt.grid()
+                # plt.show()
+                # exit()
         else:
             if wavelengths.size == 0:
                 gmin, gmax = np.nan, np.nan
@@ -86,7 +89,7 @@ def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wi
         raise ValueError("Unknown format for nodes.")
     return N_nodes, x_knots
 
-def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2,nodes=20, star_flux=None,
+def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2,nodes=20, star_flux=None,
                 badpixfraction=0.75,loc=None, optimize_nodes=True, wid_mov=None, opt_p=0.7, knot_margin=1e-4, star_loc=None):
     """
     For high-contrast companions (planet + speckles).
@@ -175,42 +178,33 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
 
     k, l = int(np.round(refpos[1] + y)), int(np.round(refpos[0] + x))
 
+    if boxw % 2 == 0:
+        raise ValueError("boxw, the width of stamp around the planet, must be odd in splinefm().")
+    if boxw > ny or boxw > nx:
+        raise ValueError("boxw cannot be bigger than the data in splinefm().")
+
+    # Extract stamp data cube cropping at the edges
+    w = int((boxw - 1) // 2)
+
     if star_spectrum is None:
         assert star_loc is not None, "both star_spectrum and star_loc cannot be None"
-        star_spectrum = np.zeros_like(transmission)
         sy, sx = star_loc
-        aper_s, mask_sx, mask_sy = 5.0, int(2.0*sigx)+1, int(2.0*sigy)+1
-        dat = deepcopy(data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1])
-        star = data[:, int(np.round(sx-aper_s*sigx)):int(np.round(sx+aper_s*sigx)), int(np.round(sy-aper_s*sigy)):int(np.round(sy+aper_s*sigy))]
+        # aper_s, mask_sx, mask_sy = 5.0, int(2.0*sigx)+1, int(2.0*sigy)+1
+        aper_s, mask_sx, mask_sy = 5.0, w, w
         if star_flux is None:
-            star_flux = np.nanmean(star) * star.size
-        data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = np.nan
-        star_spectrum = np.array([np.nanmean(star_slice) for star_slice in star])
-        data[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = dat
-        # print(star[0])
-        # plt.figure()
-        # plt.imshow(cubeobj.data[0])
-        # plt.figure()
-        # plt.plot(star_spectrum)
-        # plt.title(str(k) + " " + str(l) + ", " + str(star_flux))
-        # plt.show()
-        # exit()
+            star_flux = np.nanmean(data) * data.size
+        data_cp = copy(data)
+        data_cp[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = np.nan
+        star = data_cp[:, int(np.round(sx-aper_s*sigx)):int(np.round(sx+aper_s*sigx)), int(np.round(sy-aper_s*sigy)):int(np.round(sy+aper_s*sigy))]
+        star_spectrum = np.nanmean(star, axis=(1, 2))    
     else:
         # flux ratio normalization
         star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
 
     star_spectrum = star_spectrum / (np.nanmean(star_spectrum) * star_spectrum.size)
 
-    if boxw % 2 == 0:
-        raise ValueError("boxw, the width of stamp around the planet, must be odd in splinefm().")
-    if boxw > ny or boxw > nx:
-        raise ValueError("boxw cannot be bigger than the data in splinefm().")
-
     # remove pixels that are bad in the transmission or the star spectrum
     bad_pixels[np.where(np.isnan(star_spectrum*transmission))[0],:,:] = np.nan
-
-    # Extract stamp data cube cropping at the edges
-    w = int((boxw - 1) // 2)
 
     _paddata =np.pad(data,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     _padnoise =np.pad(noise,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
@@ -275,13 +269,19 @@ def hc_no_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star
                     M_background[:, _k, _l, _k, _l, 2] = lwvs**2
             M_background = np.reshape(M_background, (nz, boxw, boxw, 3*boxw**2))
 
-        psfs = np.zeros((nz, boxw, boxw))
-        # Technically allows super sampled PSF to account for a true 2d gaussian integration of the area of a pixel.
-        # But this is disabled for now with hdfactor=1.
-        hdfactor = 1#5
-        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor,
-                                       np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor)
-        psfs += pixgauss2d([1., w+dx, w+dy, sigx, sigy, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
+        if stamp is None:
+            psfs = np.zeros((nz, boxw, boxw))
+            # Technically allows super sampled PSF to account for a true 2d gaussian integration of the area of a pixel.
+            # But this is disabled for now with hdfactor=1.
+            hdfactor = 1#5
+            xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor,
+                                        np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor)
+            psfs += pixgauss2d([1., w+dx, w+dy, sigx, sigy, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
+        else:
+            _, sy, sx = stamp.shape
+            assert (sy == sx == boxw), "stamp should be of shape (nz, boxw, boxw)"
+            psfs = stamp
+
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 
         scaled_psfs = np.zeros((nz,boxw,boxw))+np.nan
