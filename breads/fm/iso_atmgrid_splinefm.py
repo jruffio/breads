@@ -208,7 +208,7 @@ def iso_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 
         # The planet spectrum model is RV shifted and multiplied by the tranmission
-        planet_spec = transmission * planet_f(wvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
+        # planet_spec = transmission * planet_f(wvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
         # Go from a 1d spectrum to the 3D scaled PSF
         scaled_psfs = np.zeros((nz,boxw,boxw,N_nodes))+np.nan
         for _k in range(boxw):
