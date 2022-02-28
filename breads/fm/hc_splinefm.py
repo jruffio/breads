@@ -62,6 +62,12 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
             vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
+    if transmission is None:
+        transmission = np.ones(cubeobj.data.shape[0])
+    # import matplotlib.pyplot as plt
+    # plt.plot(star_spectrum)
+    # plt.show()
+
     if fix_parameters is not None:
         _nonlin_paras = np.array(fix_parameters)
         _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
