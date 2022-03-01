@@ -2,8 +2,10 @@ import numpy as np
 
 from scipy.interpolate import InterpolatedUnivariateSpline
 from astropy import constants as const
+import scipy.ndimage as ndi
+from scipy.interpolate import interp1d
 
-from breads.utils import get_spline_model
+from breads.utils import get_spline_model, scale_psg
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     """
@@ -22,13 +24,14 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     return gaussA + bkg
 
 
-def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,
-                badpixfraction=0.75,loc=None,fix_parameters=None):
+
+def hc_kpicrvfm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,nodes_pl=None,
+                badpixfraction=0.75,loc=None,fix_parameters=None,telluric_wvs=None,psg_tuple=None,fit_background=False):
     """
+    Measuring RV of a companion for KPIC.
     For high-contrast companions (planet + speckles).
     Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
-    The spline are defined with a linear model. Each spaxel (if applicable) is independently modeled which means the
-    number of linear parameters increases as N_nodes*boxw^2+1.
+    The spline are defined with a linear model.
 
     Args:
         nonlin_paras: Non-linear parameters of the model, which are the radial velocity and the position (if loc is not
@@ -62,12 +65,6 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
             vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
-    if transmission is None:
-        transmission = np.ones(cubeobj.data.shape[0])
-    # import matplotlib.pyplot as plt
-    # plt.plot(star_spectrum)
-    # plt.show()
-
     if fix_parameters is not None:
         _nonlin_paras = np.array(fix_parameters)
         _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
@@ -93,7 +90,11 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
     else:
         refpos = cubeobj.refpos
 
+    N_nonlinparas = 1 + (len(cubeobj.data.shape)-1)
     rv = _nonlin_paras[0]
+    if psg_tuple is not None:
+        N_nonlinparas += 2
+        airmass, pwv = _nonlin_paras[1],_nonlin_paras[2]
     # Defining the position of companion
     # If loc is not defined, then the x,y position is assume to be a non linear parameter.
     if np.size(loc) ==2:
@@ -104,9 +105,9 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         if len(cubeobj.data.shape)==1:
             x,y = 0,0
         elif len(cubeobj.data.shape)==2:
-            x,y = 0,_nonlin_paras[1]
+            x,y = 0,_nonlin_paras[N_nonlinparas-1]
         elif len(cubeobj.data.shape)==3:
-            x,y = _nonlin_paras[2],_nonlin_paras[1]
+            x,y = _nonlin_paras[N_nonlinparas-1],_nonlin_paras[N_nonlinparas-2]
 
     nz, ny, nx = data.shape
 
@@ -157,14 +158,24 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
     else:
         raise ValueError("Unknown format for nodes.")
 
-
-    fitback = False
-    if fitback:
-        N_linpara = boxw * boxw * N_nodes +1 + 3*boxw**2
+    if nodes_pl is None:
+        N_nodes_pl= 1
+    elif type(nodes_pl) is int:
+        N_nodes_pl = nodes_pl
+        x_knots_pl = np.linspace(np.min(wvs), np.max(wvs), N_nodes_pl, endpoint=True).tolist()
+    elif type(nodes_pl) is list  or type(nodes_pl) is np.ndarray :
+        x_knots_pl = nodes_pl
+        if type(nodes_pl[0]) is list or type(nodes_pl[0]) is np.ndarray :
+            N_nodes_pl = np.sum([np.size(n) for n in nodes_pl])
+        else:
+            N_nodes_pl = np.size(nodes_pl)
     else:
-        N_linpara = boxw * boxw * N_nodes +1
+        raise ValueError("Unknown format for nodes_pl.")
 
-
+    if fit_background:
+        N_linpara = boxw * boxw * N_nodes +1*N_nodes_pl + 3*boxw**2
+    else:
+        N_linpara = boxw * boxw * N_nodes +1*N_nodes_pl
 
     where_finite = np.where(np.isfinite(badpixs))
     if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(badpixs) or \
@@ -172,23 +183,51 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         # don't bother to do a fit if there are too many bad pixels
         return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
     else:
+
+        if psg_tuple is not None:
+            reduc_factor = 40
+            _telluric_wvs = telluric_wvs[0:(np.size(telluric_wvs) // reduc_factor) * reduc_factor]
+            _telluric_wvs = np.mean(np.reshape(_telluric_wvs, ((np.size(_telluric_wvs) // reduc_factor), reduc_factor)), axis=1)
+
+            telluric_spec = scale_psg(psg_tuple, airmass, pwv)
+
+            telluric_spec = telluric_spec[0:(np.size(telluric_spec) // reduc_factor) * reduc_factor]
+            telluric_spec = np.mean(np.reshape(telluric_spec, ((np.size(telluric_spec) // reduc_factor), reduc_factor)), axis=1)
+            where_order_wvs = np.where((np.nanmin(wvs)<_telluric_wvs)*(_telluric_wvs<np.nanmax(wvs)))
+            _telluric_wvs = _telluric_wvs[where_order_wvs]
+            telluric_spec = telluric_spec[where_order_wvs]
+            star_model_r = np.median(_telluric_wvs) / np.median(_telluric_wvs - np.roll(_telluric_wvs, 1))
+            star_model_downsample = star_model_r / 35000 / (2 * np.sqrt(2 * np.log(2)))
+            conv_telluric_spec = ndi.gaussian_filter(telluric_spec, star_model_downsample)
+            add_tel_func = interp1d(_telluric_wvs,conv_telluric_spec,bounds_error=False,fill_value=0)
+
+            # import matplotlib.pyplot as plt
+            # plt.plot(_telluric_wvs,conv_telluric_spec)
+            # plt.show()
+
         # Get the linear model (ie the matrix) for the spline
         M_speckles = np.zeros((nz, boxw, boxw, boxw, boxw, N_nodes))
         for _k in range(boxw):
             for _l in range(boxw):
                 lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
                 M_spline = get_spline_model(x_knots, lwvs, spline_degree=3)
+                # if psg_tuple is not None:
+                #     M_speckles[:, _k, _l, _k, _l, :] = M_spline * (add_tel_func(lwvs) *star_spectrum)[:, None]
+                # else:
+                #     M_speckles[:, _k, _l, _k, _l, :] = M_spline * star_spectrum[:, None]
                 M_speckles[:, _k, _l, _k, _l, :] = M_spline * star_spectrum[:, None]
         M_speckles = np.reshape(M_speckles, (nz, boxw, boxw, boxw * boxw * N_nodes))
 
-        if fitback:
+        if fit_background:
             M_background = np.zeros((nz, boxw, boxw, boxw, boxw,3))
             for _k in range(boxw):
                 for _l in range(boxw):
                     lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
-                    M_background[:, _k, _l, _k, _l, 0] = 1
-                    M_background[:, _k, _l, _k, _l, 1] = lwvs
-                    M_background[:, _k, _l, _k, _l, 2] = lwvs**2
+                    M_spline = get_spline_model(np.linspace(np.min(wvs), np.max(wvs), 3, endpoint=True).tolist(), lwvs, spline_degree=3)
+                    M_background[:, _k, _l, _k, _l, :] = M_spline
+                    # M_background[:, _k, _l, _k, _l, 0] = 1
+                    # M_background[:, _k, _l, _k, _l, 1] = lwvs
+                    # M_background[:, _k, _l, _k, _l, 2] = lwvs**2
             M_background = np.reshape(M_background, (nz, boxw, boxw, 3*boxw**2))
 
         psfs = np.zeros((nz, boxw, boxw))
@@ -200,26 +239,54 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         psfs += pixgauss2d([1., w+dx, w+dy, psfw, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 
-        # flux ratio normalization
-        star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
+        if nodes_pl is None:
+            pass
+            scaled_psfs = np.zeros((nz,boxw,boxw))+np.nan
+            for _k in range(boxw):
+                for _l in range(boxw):
+                    lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
+                    # The planet spectrum model is RV shifted and multiplied by the tranmission
+                    if psg_tuple is not None:
+                        planet_spec = add_tel_func(lwvs) * transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
+                    else:
+                        planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
+                    scaled_psfs[:,_k,_l] = psfs[:, _k,_l] * planet_spec
 
-        scaled_psfs = np.zeros((nz,boxw,boxw))+np.nan
-        for _k in range(boxw):
-            for _l in range(boxw):
-                lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
-                # The planet spectrum model is RV shifted and multiplied by the tranmission
-                planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
-                scaled_psfs[:,_k,_l] = psfs[:, _k,_l] * planet_spec
+            # flux ratio normalization
+            star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
+            planet_flux = np.size(scaled_psfs) * np.nanmean(scaled_psfs)
+            scaled_psfs = scaled_psfs / planet_flux * star_flux
+            # print(np.nansum(scaled_psfs))
 
-        planet_flux = np.size(scaled_psfs) * np.nanmean(scaled_psfs)
-        scaled_psfs = scaled_psfs / planet_flux * star_flux
-        # print(np.nansum(scaled_psfs))
+            if fit_background:
+                M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles,M_background], axis=3)
+            else:
+                M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles], axis=3)
+        else:
+            scaled_psfs = np.zeros((nz,boxw,boxw,N_nodes_pl))+np.nan
+            for _k in range(boxw):
+                for _l in range(boxw):
+                    lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
+                    M_spline = get_spline_model(x_knots_pl, lwvs, spline_degree=3)
+                    # The planet spectrum model is RV shifted and multiplied by the tranmission
+                    if psg_tuple is not None:
+                        planet_spec = add_tel_func(lwvs) * transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
+                    else:
+                        planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
+                    scaled_psfs[:,_k,_l,:] = M_spline*psfs[:, _k,_l][:,None] * planet_spec[:,None]
+
+            # flux ratio normalization
+            star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
+            planet_flux = np.size(scaled_psfs) * np.nanmean(scaled_psfs)
+            scaled_psfs = scaled_psfs / planet_flux * star_flux
+            # print(np.nansum(scaled_psfs))
+
+            if fit_background:
+                M = np.concatenate([scaled_psfs, M_speckles, M_background], axis=3)
+            else:
+                M = np.concatenate([scaled_psfs, M_speckles], axis=3)
 
         # combine planet model with speckle model
-        if fitback:
-            M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles,M_background], axis=3)
-        else:
-            M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles], axis=3)
         # Ravel data dimension
         M = np.reshape(M, (nz * boxw * boxw, N_linpara))
         # Get rid of bad pixels

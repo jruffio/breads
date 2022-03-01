@@ -22,10 +22,10 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     return gaussA + bkg
 
 
-def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,
-                badpixfraction=0.75,loc=None,fix_parameters=None):
+def iso_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, boxw=1, psfw=1.2,nodes=20,
+                badpixfraction=0.75,loc=None,fix_parameters=None,fit_background=False):
     """
-    For high-contrast companions (planet + speckles).
+    For isolated objects.
     Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
     The spline are defined with a linear model. Each spaxel (if applicable) is independently modeled which means the
     number of linear parameters increases as N_nodes*boxw^2+1.
@@ -40,9 +40,6 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
             Must inherit breads.instruments.instrument.Instrument.
         planet_f: Planet atmospheric model spectrum as an interp1d object. Wavelength in microns.
         transmission: Transmission spectrum (tellurics and instrumental).
-            np.ndarray of size the number of wavelength bins.
-        star_spectrum: Stellar spectrum to be continuum renormalized to fit the speckle noise at each location. It is
-            (for now) assumed to be the same everywhere which is not compatible with a field dependent wavelength solution.
             np.ndarray of size the number of wavelength bins.
         boxw: size of the stamp to be extracted and modeled around the (x,y) location of the planet.
             Must be odd. Default is 1.
@@ -62,12 +59,6 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
             vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
-    if transmission is None:
-        transmission = np.ones(cubeobj.data.shape[0])
-    # import matplotlib.pyplot as plt
-    # plt.plot(star_spectrum)
-    # plt.show()
-
     if fix_parameters is not None:
         _nonlin_paras = np.array(fix_parameters)
         _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
@@ -124,7 +115,7 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         raise ValueError("boxw cannot be bigger than the data in splinefm().")
 
     # remove pixels that are bad in the transmission or the star spectrum
-    bad_pixels[np.where(np.isnan(star_spectrum*transmission))[0],:,:] = np.nan
+    bad_pixels[np.where(np.isnan(transmission))[0],:,:] = np.nan
 
     # Extract stamp data cube cropping at the edges
     w = int((boxw - 1) // 2)
@@ -158,11 +149,10 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         raise ValueError("Unknown format for nodes.")
 
 
-    fitback = False
-    if fitback:
-        N_linpara = boxw * boxw * N_nodes +1 + 3*boxw**2
+    if fit_background:
+        N_linpara = N_nodes + 3*boxw**2
     else:
-        N_linpara = boxw * boxw * N_nodes +1
+        N_linpara =N_nodes
 
 
 
@@ -172,16 +162,7 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         # don't bother to do a fit if there are too many bad pixels
         return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
     else:
-        # Get the linear model (ie the matrix) for the spline
-        M_speckles = np.zeros((nz, boxw, boxw, boxw, boxw, N_nodes))
-        for _k in range(boxw):
-            for _l in range(boxw):
-                lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
-                M_spline = get_spline_model(x_knots, lwvs, spline_degree=3)
-                M_speckles[:, _k, _l, _k, _l, :] = M_spline * star_spectrum[:, None]
-        M_speckles = np.reshape(M_speckles, (nz, boxw, boxw, boxw * boxw * N_nodes))
-
-        if fitback:
+        if fit_background:
             M_background = np.zeros((nz, boxw, boxw, boxw, boxw,3))
             for _k in range(boxw):
                 for _l in range(boxw):
@@ -200,26 +181,27 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         psfs += pixgauss2d([1., w+dx, w+dy, psfw, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 
-        # flux ratio normalization
-        star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
 
-        scaled_psfs = np.zeros((nz,boxw,boxw))+np.nan
+        lwvs = wvs[:,np.clip(k-2*w,0,nywv-1),np.clip(l-2*w,0,nxwv-1)]
+        # Get the linear model (ie the matrix) for the spline
+        M_spline = get_spline_model(x_knots, lwvs, spline_degree=3)
+
+        scaled_psfs = np.zeros((nz,boxw,boxw,N_nodes))+np.nan
         for _k in range(boxw):
             for _l in range(boxw):
-                lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
-                # The planet spectrum model is RV shifted and multiplied by the tranmission
+                lwvs = wvs[:,np.clip(k-2*w+_k,0,nywv-1),np.clip(l-2*w+_l,0,nxwv-1)]
                 planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
-                scaled_psfs[:,_k,_l] = psfs[:, _k,_l] * planet_spec
+                scaled_psfs[:,_k,_l,:] = psfs[:, _k,_l,None] * M_spline * planet_spec[:,None]
 
         planet_flux = np.size(scaled_psfs) * np.nanmean(scaled_psfs)
-        scaled_psfs = scaled_psfs / planet_flux * star_flux
+        scaled_psfs = scaled_psfs / planet_flux
         # print(np.nansum(scaled_psfs))
 
         # combine planet model with speckle model
-        if fitback:
-            M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles,M_background], axis=3)
+        if fit_background:
+            M = np.concatenate([scaled_psfs[:, :, :, None],M_background], axis=3)
         else:
-            M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles], axis=3)
+            M = np.concatenate([scaled_psfs[:, :, :, None]], axis=3)
         # Ravel data dimension
         M = np.reshape(M, (nz * boxw * boxw, N_linpara))
         # Get rid of bad pixels

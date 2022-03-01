@@ -117,16 +117,24 @@ class KPIC(Instrument):
                     except:
                         GOALNM_exists = False
 
-                sf_id_list = []
-                sf_num_list = []
+                self.data_fib_labels = []
                 for fibid in range(20):
                     try:
                         fiblabel = header["FIB{0}".format(fibid)]
-                        if "s" in fiblabel:
-                            sf_id_list.append(fibid)
-                            sf_num_list.append(fiblabel[1:2])
+                        self.data_fib_labels.append(fiblabel)
                     except:
                         pass
+
+                # sf_id_list = []
+                # sf_num_list = []
+                # for fibid in range(20):
+                #     try:
+                #         fiblabel = header["FIB{0}".format(fibid)]
+                #         if "s" in fiblabel:
+                #             sf_id_list.append(fibid)
+                #             sf_num_list.append(fiblabel[1:2])
+                #     except:
+                #         pass
 
             data_list = np.array(data_list)
             noise_list = np.array(noise_list)
@@ -175,6 +183,7 @@ class KPIC(Instrument):
                     combined_spec[fib, :, :], combined_spec_sig[fib, :, :] = combine_science_spectra(
                         data_list[where_fib, fib, :, :], noise_list[where_fib, fib, :, :])
 
+            combined_spec_sig = np.tile(np.nanmedian(combined_spec_sig,axis=2)[:,:,None],(1,1,combined_spec_sig.shape[2]))
             self.data = np.reshape(combined_spec,(Nfib,Norder*Npix)).T
             self.noise = np.reshape(combined_spec_sig,(Nfib,Norder*Npix)).T
             self.bad_pixels = np.reshape(edges2nans(combined_spec/ combined_spec), (Nfib, Norder * Npix)).T
@@ -202,7 +211,7 @@ class KPIC(Instrument):
         Return:
             Broadened spectrum
         """
-        fill_value = (self.resolution[:,loc][0],self.resolution[:,loc][-1])
+        fill_value = (self.resolution[:,loc][5],self.resolution[:,loc][-5])
         res_func = interp1d(self.wavelengths[:,loc], self.resolution[:,loc], bounds_error=False, fill_value=fill_value)
         return broaden(wvs, spectrum, res_func(wvs), mppool=mppool)
 
