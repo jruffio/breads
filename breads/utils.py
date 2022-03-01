@@ -121,22 +121,22 @@ def corrected_wavelengths(data, off0, off1, center_data):
         wavs = wavs * (1 + off1) + off0 * u.angstrom
     return wavs
 
-def mask_bleeding(data, threshold=1.5, mask=1.05, per=[5, 95], width=10):
+def mask_bleeding(data, threshold=1.5, mask=1.05, per=[5, 95], width_mask=10, edge=5):
     nz, ny, nx = data.data.shape
     img_mean = np.nanmedian(data.data, axis=0)
     star_y, _ = np.unravel_index(np.nanargmax(img_mean), img_mean.shape)
-    num_mask = np.zeros((ny, nx))
+    # num_mask = np.zeros((ny, nx))
     for i in range(ny):
         for j in range(nx):
             # i, j = 24, 47
             # i, j = 45, 24
-            if not (star_y - width <= i <= star_y + width):
+            if not (star_y - width_mask <= i <= star_y + width_mask):
                 continue
                 # exit()
-            num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j]))
+            # num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j]))
             data_f = data.continuum[:, i, j] * data.bad_pixels[:,i,j]
             percentiles = np.nanpercentile(data_f, per)
-            high_end = np.nanmax([np.nanmean(data_f[:6]), np.nanmean(data_f[-6:])])
+            high_end = np.nanmax([np.nanmean(data_f[:edge]), np.nanmean(data_f[-edge:])])
             # print(percentiles)
             if high_end / np.nanmedian(data_f) > threshold:                
                 # plt.figure()
@@ -157,13 +157,13 @@ def mask_bleeding(data, threshold=1.5, mask=1.05, per=[5, 95], width=10):
                 # plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
                 # plt.show()
                 # plt.close()
-            num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j])) - num_mask[i, j]
+            # num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j])) - num_mask[i, j]
             # exit()
-    plt.figure()
-    plt.imshow(num_mask / nz, origin="lower")
-    plt.colorbar()
-    plt.show()
-    exit()
+    # plt.figure()
+    # plt.imshow(num_mask / nz, origin="lower", vmin=0, vmax=1)
+    # plt.colorbar()
+    # plt.show()
+    # exit()
 
 def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3,threshold=3):
     if noisecube is None:
