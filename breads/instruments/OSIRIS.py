@@ -9,7 +9,7 @@ import ctypes
 from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
 from astropy.time import Time
-from copy import copy
+from copy import copy, deepcopy
 from breads.utils import broaden
 from breads.calibration import SkyCalibration
 import multiprocessing as mp
@@ -178,7 +178,7 @@ class OSIRIS(Instrument):
         """
         return broaden(wvs, spectrum, self.R, mppool=mppool)
 
-    def set_noise(self, method="sqrt_cont", num_threads = 16, wid_mov=None):
+    def set_noise(self, method="sqrt_cont", num_threads = 16, wid_mov=None, noise_floor=True):
         try:
             temp = self.continuum
         except:
@@ -200,6 +200,15 @@ class OSIRIS(Instrument):
                 self.noise = np.sqrt(np.abs(self.continuum))
             if method == "cont":
                 self.noise = self.continuum
+            if noise_floor:
+                val = get_noise_floor(self)
+                self.noise[self.noise < val] = val
+
+def get_noise_floor(dataobj):
+    arr = deepcopy(dataobj.continuum * dataobj.bad_pixels)
+    arr[arr > np.nanmedian(arr)] = np.nan
+    return np.nanstd(arr)
+
 
 def set_continnuum(args):
     data, window = args
