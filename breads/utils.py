@@ -121,43 +121,64 @@ def corrected_wavelengths(data, off0, off1, center_data):
         wavs = wavs * (1 + off1) + off0 * u.angstrom
     return wavs
 
-def mask_bleeding(data, threshold=1.5, mask=1.05, per=[5, 95], width_mask=10, edge=5):
+def mask_bleeding(data, threshold=1.05, mask=0.9, per=[5, 95], mask_region = (5, 6, 2), edge=5):
     nz, ny, nx = data.data.shape
+    width_mask_y, region_mask_x_left, region_mask_x_right = mask_region
     img_mean = np.nanmedian(data.data, axis=0)
-    star_y, _ = np.unravel_index(np.nanargmax(img_mean), img_mean.shape)
-    # num_mask = np.zeros((ny, nx))
+    star_y, star_x = np.unravel_index(np.nanargmax(img_mean), img_mean.shape)
+    num_mask = np.zeros((ny, nx))
     for i in range(ny):
         for j in range(nx):
             # i, j = 24, 47
             # i, j = 45, 24
-            if not (star_y - width_mask <= i <= star_y + width_mask):
+            if not (star_y - width_mask_y <= i <= star_y + width_mask_y):
+                continue
+            if not (j < star_x - region_mask_x_left or j > star_x + region_mask_x_right):
                 continue
                 # exit()
-            # num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j]))
+            num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j]))
             data_f = data.continuum[:, i, j] * data.bad_pixels[:,i,j]
+            data_f_nonans = data_f[~np.isnan(data_f)]
             percentiles = np.nanpercentile(data_f, per)
-            high_end = np.nanmax([np.nanmean(data_f[:edge]), np.nanmean(data_f[-edge:])])
+            high_end = np.nanmax([np.nanmean(data_f_nonans[:edge]), np.nanmean(data_f_nonans[-edge:])])
             # print(percentiles)
-            if high_end / np.nanmedian(data_f) > threshold:                
-                # plt.figure()
-                # plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
-                # plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
-                # plt.show()
-                outliers = np.logical_or(data_f > mask * np.nanmedian(data_f), np.isnan(data_f))
-                if len(np.where(outliers)[0]) == 0:
-                    data.bad_pixels[:, i, j] = np.nan
-                else:
-                    # first false value from
-                    left, right = np.where(~outliers)[0][0], np.where(~outliers)[0][-1]
-                    if np.nanmean(data_f[:6]) > np.nanmean(data_f[-6:]):
-                        data.bad_pixels[:left, i, j] = np.nan 
-                    else:
-                        data.bad_pixels[right+1:, i, j] = np.nan
-                # plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
-                # plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
-                # plt.show()
-                # plt.close()
-            # num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j])) - num_mask[i, j]
+            if sum(~np.isnan(data.data[:,i,j] * data.bad_pixels[:,i,j])) < nz / 5:
+                # if not all(np.isnan(data.data[:,i,j] * data.bad_pixels[:,i,j])):
+                #     print("low count")
+                #     print(sum(np.isnan(data.data[:,i,j] * data.bad_pixels[:,i,j])) < nz / 5, sum(np.isnan(data.data[:,i,j] * data.bad_pixels[:,i,j])), nz / 5)
+                #     plt.figure()
+                #     plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
+                #     plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
+                #     plt.show()
+                data.bad_pixels[:, i, j] = np.nan
+            if high_end / np.nanmedian(data_f) > threshold:  
+                data.bad_pixels[:, i, j] = np.nan
+            # else:
+            #     if not all(np.isnan(data.data[:,i,j] * data.bad_pixels[:,i,j])):
+            #         # print(sum(np.isnan(data.data[:,i,j] * data.bad_pixels[:,i,j])) < nz / 5, sum(np.isnan(data.data[:,i,j] * data.bad_pixels[:,i,j])), nz / 5)
+            #         # print(high_end / np.nanmedian(data_f), high_end, np.nanmedian(data_f), [np.nanmean(data_f_nonans[:edge]), np.nanmean(data_f_nonans[-edge:])])
+            #         plt.figure()
+            #         plt.title(f"{i}, {j}")
+            #         plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
+            #         plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
+            #         plt.show()
+
+            #     outliers = np.logical_or(data_f > mask * np.nanmedian(data_f), np.isnan(data_f))
+            #     if len(np.where(~outliers)[0]) == 0:
+            #         data.bad_pixels[:, i, j] = np.nan
+            #     else:
+            #         # first false value from
+            #         left, right = np.where(~outliers)[0][0], np.where(~outliers)[0][-1]
+            #         data_f = data_f[~np.isnan(data_f)]
+            #         if np.nanmean(data_f[:6]) > np.nanmean(data_f[-6:]):
+            #             data.bad_pixels[:left, i, j] = np.nan 
+            #         else:
+            #             data.bad_pixels[right+1:, i, j] = np.nan
+            #     plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
+            #     plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
+            #     plt.show()
+            #     plt.close()
+            num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j])) - num_mask[i, j]
             # exit()
     # plt.figure()
     # plt.imshow(num_mask / nz, origin="lower", vmin=0, vmax=1)
