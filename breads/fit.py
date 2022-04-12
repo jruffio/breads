@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import warnings
 from copy import copy
 
-def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = None):
+def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = None,residuals=None,residuals_H0=None):
     """
     Fit a forard model to data returning probabilities and best fit linear parameters.
 
@@ -64,6 +64,8 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
         chi2 = np.nansum(r**2)
         rchi2 = chi2 / N_data
 
+        if residuals is not None:
+            residuals[:] = r*s
         # plt.figure()
         # for col in M.T:
         #     plt.plot(col / np.nanmean(col))
@@ -86,6 +88,8 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
             #todo check the maths when N_linpara is different from M.shape[1]. E.g. at the edge of the FOV
             log_prob_H0 = -0.5*logdet_Sigma - 0.5*slogdet_icovphi0_H0[1] - (N_data-1+N_linpara-1-1)/2*np.log(chi2_H0)+ \
                           loggamma((N_data-1+(N_linpara-1)-1)/2)+((N_linpara-1)-N_data)/2*np.log(2*np.pi)
+            if residuals_H0 is not None:
+                residuals_H0[:] = r_H0*s
         else:
             log_prob_H0 = np.nan
 

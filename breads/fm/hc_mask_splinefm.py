@@ -6,6 +6,7 @@ from scipy.optimize.linesearch import line_search_armijo
 from copy import deepcopy
 from breads.utils import get_spline_model
 from copy import copy
+from scipy.optimize import lsq_linear
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     """
@@ -90,7 +91,8 @@ def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wi
     return N_nodes, x_knots
 
 def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2,nodes=20, star_flux=None,
-                badpixfraction=0.75,loc=None, optimize_nodes=True, wid_mov=None, opt_p=0.7, knot_margin=1e-4, star_loc=None):
+                badpixfraction=0.75,loc=None, optimize_nodes=True, wid_mov=None, opt_p=0.7, knot_margin=1e-4, star_loc=None,
+                     KLmodes=None,fit_background=False,recalc_noise=True):
     """
     For high-contrast companions (planet + speckles).
     Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
@@ -196,7 +198,7 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
         data_cp = copy(data)
         data_cp[:, k-mask_sx:k+mask_sx+1, l-mask_sy:l+mask_sy+1] = np.nan
         star = data_cp[:, int(np.round(sx-aper_s*sigx)):int(np.round(sx+aper_s*sigx)), int(np.round(sy-aper_s*sigy)):int(np.round(sy+aper_s*sigy))]
-        star_spectrum = np.nanmean(star, axis=(1, 2))    
+        star_spectrum = np.nanmean(star, axis=(1, 2))
     else:
         # flux ratio normalization
         star_flux = np.nanmean(star_spectrum) * np.size(star_spectrum)
@@ -225,11 +227,15 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
     N_nodes, x_knots = set_nodes(cubeobj.continuum[:, padk-w:padk+w+1, padl-w:padl+w+1], _padnoise[:, padk-w:padk+w+1, padl-w:padl+w+1], \
         wvs[:, padk-w:padk+w+1, padl-w:padl+w+1], nodes, optimize_nodes, opt_p, wid_mov, knot_margin)
 
-    fitback = False
-    if fitback:
-        N_linpara = boxw * boxw * N_nodes +1 + 3*boxw**2
+    if fit_background:
+        N_background_linpara = 3*boxw**2
     else:
-        N_linpara = boxw * boxw * N_nodes +1
+        N_background_linpara = 0
+    if KLmodes is not None:
+        N_KLmodes = KLmodes.shape[1]*boxw**2
+    else:
+        N_KLmodes = 0
+    N_linpara = boxw * boxw * N_nodes +1 + N_background_linpara + N_KLmodes
 
     # plt.plot(wvs[:, padk-w:padk+w+1, padl-w:padl+w+1][:, 0, 0], d/np.nanmax(d), label="data")
     # plt.legend()
@@ -240,6 +246,16 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
         # don't bother to do a fit if there are too many bad pixels
         return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
     else:
+        if KLmodes is not None:
+            # Get the linear model (ie the matrix) for the KL modes
+            M_KLmodes = np.zeros((nz, boxw, boxw, boxw, boxw, KLmodes.shape[1]))
+            for _k in range(boxw):
+                for _l in range(boxw):
+                    M_KLmodes[:, _k, _l, _k, _l, :] = KLmodes
+            M_KLmodes = np.reshape(M_KLmodes, (nz, boxw, boxw, boxw * boxw * KLmodes.shape[1]))
+        else:
+            M_KLmodes = np.tile(np.array([])[None,None,None,:],(nz, boxw, boxw,0))
+
         # Get the linear model (ie the matrix) for the spline
         M_speckles = np.zeros((nz, boxw, boxw, boxw, boxw, N_nodes))
         for _k in range(boxw):
@@ -259,7 +275,7 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
                 M_speckles[:, _k, _l, _k, _l, :] = M_spline * star_spectrum[:, None]
         M_speckles = np.reshape(M_speckles, (nz, boxw, boxw, boxw * boxw * N_nodes))
 
-        if fitback:
+        if fit_background:
             M_background = np.zeros((nz, boxw, boxw, boxw, boxw,3))
             for _k in range(boxw):
                 for _l in range(boxw):
@@ -268,6 +284,8 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
                     M_background[:, _k, _l, _k, _l, 1] = lwvs
                     M_background[:, _k, _l, _k, _l, 2] = lwvs**2
             M_background = np.reshape(M_background, (nz, boxw, boxw, 3*boxw**2))
+        else:
+            M_background =  np.tile(np.array([])[None,None,None,:],(nz, boxw, boxw,0))
 
         if stamp is None:
             psfs = np.zeros((nz, boxw, boxw))
@@ -297,15 +315,38 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
         # print(np.nansum(scaled_psfs))
 
         # combine planet model with speckle model
-        if fitback:
-            M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles,M_background], axis=3)
-        else:
-            M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles], axis=3)
+        M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles,M_KLmodes,M_background], axis=3)
         # Ravel data dimension
         M = np.reshape(M, (nz * boxw * boxw, N_linpara))
         # Get rid of bad pixels
         sr = s[where_finite]
         dr = d[where_finite]
         Mr = M[where_finite[0], :]
+
+        if recalc_noise:
+            d,M,s = dr, Mr, sr
+
+            _bounds = ([-np.inf,]*N_linpara,[np.inf,]*N_linpara)
+
+            validpara = np.where(np.nansum(M,axis=0)!=0)
+            _bounds = (np.array(_bounds[0])[validpara[0]],np.array(_bounds[1])[validpara[0]])
+            M = M[:,validpara[0]]
+
+            d = d / s
+            M = M / s[:, None]
+
+            N_data = np.size(d)
+            if N_data == 0 or 0 not in validpara[0]:
+                pass
+            else:
+                paras = lsq_linear(M, d,bounds=_bounds).x
+                m = np.dot(M, paras)
+                r = d  - m
+                chi2 = np.nansum(r**2)
+                rchi2 = chi2 / N_data
+                canvas_res = np.zeros(badpix_stamp.shape)+np.nan
+                canvas_res[np.where(np.isfinite(badpix_stamp))] = r*s
+                new_noise_stamp = np.tile(np.nanstd(canvas_res,axis=0)[None,:,:],(nz,1,1))
+                sr = np.ravel(new_noise_stamp)[where_finite]
 
         return dr, Mr, sr

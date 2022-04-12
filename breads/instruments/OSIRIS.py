@@ -201,13 +201,17 @@ class OSIRIS(Instrument):
             if method == "cont":
                 self.noise = self.continuum
             if noise_floor:
-                val = get_noise_floor(self)
-                self.noise[self.noise < val] = val
+                noise_floor = get_noise_floor(self)
+                where_below_thresh = np.where(self.noise < noise_floor)
+                self.noise[where_below_thresh] = noise_floor[where_below_thresh]
 
 def get_noise_floor(dataobj):
-    arr = deepcopy(dataobj.continuum * dataobj.bad_pixels)
-    arr[arr > np.nanmedian(arr)] = np.nan
-    return np.nanstd(arr)
+    noise_floor = np.zeros(dataobj.data.shape)
+    for sliceid in range(dataobj.data.shape[0]):
+        arr = (dataobj.data[sliceid,:,:]-dataobj.continuum[sliceid,:,:]) * dataobj.bad_pixels[sliceid,:,:]
+        arr[dataobj.continuum[sliceid,:,:] > np.nanmedian(dataobj.continuum[sliceid,:,:]* dataobj.bad_pixels[sliceid,:,:])] = np.nan
+        noise_floor[sliceid,:,:] = np.nanstd(arr)
+    return noise_floor
 
 
 def set_continnuum(args):
