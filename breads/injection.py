@@ -64,12 +64,14 @@ def read_star_info(star):
         return star
 
 def inject_planet(dataobj: Instrument, location, model, star, transmission, planet_star_ratio, \
-    broaden=True, crop=True, margin=0.2, stamp_size = 25, padding=50, rotated_90=False):
+    broaden=True, crop=True, margin=0.2, stamp_size = 25, padding=50):
+    # , rotated_90=False):
     return inject_planet_stamp(dataobj, location, model, star, transmission, planet_star_ratio, \
-    broaden, crop, margin, stamp_size, padding, rotated_90)
+    broaden, crop, margin, stamp_size, padding) #, rotated_90)
 
 def inject_planet_stamp(dataobj: Instrument, location, model, star, transmission, planet_star_ratio, \
-    broaden=True, crop=True, margin=0.2, stamp_size = 25, padding=50, rotated_90=False):
+    broaden=True, crop=True, margin=0.2, stamp_size = 25, padding=50):
+    # , rotated_90=False):
 
     # plt.figure()
     # plt.imshow(np.nanmedian(dataobj.data, axis=0))
@@ -77,11 +79,12 @@ def inject_planet_stamp(dataobj: Instrument, location, model, star, transmission
     planet_f = read_planet_info(model, broaden, crop, margin, dataobj)
     star_x, star_y, sigx, sigy, star_flux, aperture_sigmas = read_star_info(star)
     transmission = read_transmission_info(transmission)
-    if rotated_90:
-        y, x = location
-        y *= -1
-    else:
-        x, y = location
+    # if rotated_90:
+    #     y, x = location
+    #     y *= -1
+    # else:
+    #     x, y = location
+    x, y = location
     planet_x, planet_y = star_x + x, star_y + y 
     
     nz, ny, nx = dataobj.data.shape
