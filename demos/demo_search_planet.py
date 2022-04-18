@@ -19,6 +19,7 @@ if __name__ == "__main__":
         pass
 
     numthreads = 16
+    #test
 
     filename = "../../public_osiris_data/kap_And/20161106/science/s161106_a020002_Kbb_020.fits"
     dataobj = OSIRIS(filename)
