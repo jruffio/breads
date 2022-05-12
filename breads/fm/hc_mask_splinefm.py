@@ -92,7 +92,7 @@ def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wi
 
 def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2,nodes=20, star_flux=None,
                 badpixfraction=0.75,loc=None, optimize_nodes=True, wid_mov=None, opt_p=0.7, knot_margin=1e-4, star_loc=None,
-                     KLmodes=None,fit_background=False,recalc_noise=True):
+                     KLmodes=None,fit_background=False,recalc_noise=True,just_tellurics=False):
     """
     For high-contrast companions (planet + speckles).
     Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
@@ -188,6 +188,9 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
     # Extract stamp data cube cropping at the edges
     w = int((boxw - 1) // 2)
 
+    dx,dy = x-l+refpos[0],y-k+refpos[1]
+    padk,padl = k+w,l+w
+
     if star_spectrum is None:
         assert star_loc is not None, "both star_spectrum and star_loc cannot be None"
         sy, sx = star_loc
@@ -205,14 +208,16 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
 
     star_spectrum = star_spectrum / (np.nanmean(star_spectrum) * star_spectrum.size)
 
-    # remove pixels that are bad in the transmission or the star spectrum
-    bad_pixels[np.where(np.isnan(star_spectrum*transmission))[0],:,:] = np.nan
+    if np.size(star_spectrum.shape) == 3:
+        bad_pixels[np.where(np.isnan(transmission))[0],:,:] = np.nan
+        bad_pixels[np.isnan(star_spectrum)] = np.nan
+    elif np.size(star_spectrum.shape) == 1:
+        # remove pixels that are bad in the transmission or the star spectrum
+        bad_pixels[np.where(np.isnan(star_spectrum*transmission))[0],:,:] = np.nan
 
     _paddata =np.pad(data,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     _padnoise =np.pad(noise,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
     _padbad_pixels =np.pad(bad_pixels,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
-    dx,dy = x-l+refpos[0],y-k+refpos[1]
-    padk,padl = k+w,l+w
 
     # high pass filter the data
     cube_stamp = _paddata[:, padk-w:padk+w+1, padl-w:padl+w+1]
@@ -221,6 +226,9 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
     d = np.ravel(cube_stamp)
     s = np.ravel(_padnoise[:, padk-w:padk+w+1, padl-w:padl+w+1])
     badpixs[np.where(s==0)] = np.nan
+    if np.size(star_spectrum.shape) == 3:
+        _padref =np.pad(star_spectrum,[(0,0),(w,w),(w,w)],mode="constant",constant_values = np.nan)
+        ref_stamp = _padref[:, padk-w:padk+w+1, padl-w:padl+w+1]
 
     # manage all the different cases to define the position of the spline nodes
     # print(k, l, x, y)
@@ -235,7 +243,11 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
         N_KLmodes = KLmodes.shape[1]*boxw**2
     else:
         N_KLmodes = 0
-    N_linpara = boxw * boxw * N_nodes +1 + N_background_linpara + N_KLmodes
+    if just_tellurics:
+        N_just_tell = 1
+    else:
+        N_just_tell = 0
+    N_linpara = boxw * boxw * N_nodes +1 + N_background_linpara + N_KLmodes+N_just_tell
 
     # plt.plot(wvs[:, padk-w:padk+w+1, padl-w:padl+w+1][:, 0, 0], d/np.nanmax(d), label="data")
     # plt.legend()
@@ -272,7 +284,10 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
                 # plt.grid()
                 # plt.xlabel("wavelength/index")
                 # plt.savefig("./plots/TEMP3.png")
-                M_speckles[:, _k, _l, _k, _l, :] = M_spline * star_spectrum[:, None]
+                if np.size(star_spectrum.shape) == 3:
+                    M_speckles[:, _k, _l, _k, _l, :] = M_spline * ref_stamp[:,_k, _l, None]
+                elif np.size(star_spectrum.shape) == 1:
+                    M_speckles[:, _k, _l, _k, _l, :] = M_spline * star_spectrum[:, None]
         M_speckles = np.reshape(M_speckles, (nz, boxw, boxw, boxw * boxw * N_nodes))
 
         if fit_background:
@@ -303,19 +318,25 @@ def hc_mask_splinefm(nonlin_paras, cubeobj, stamp=None, planet_f=None, transmiss
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 
         scaled_psfs = np.zeros((nz,boxw,boxw))+np.nan
+        if just_tellurics:
+            just_tellurics_psfs = np.zeros((nz,boxw,boxw,1))+np.nan
+        else:
+            just_tellurics_psfs =  np.tile(np.array([])[None,None,None,:],(nz, boxw, boxw,0))
         for _k in range(boxw):
             for _l in range(boxw):
                 lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
                 # The planet spectrum model is RV shifted and multiplied by the tranmission
                 planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
                 scaled_psfs[:,_k,_l] = psfs[:, _k,_l] * planet_spec
+                if just_tellurics:
+                    just_tellurics_psfs[:,_k,_l,0] = psfs[:, _k,_l] * transmission
 
         planet_flux = np.size(scaled_psfs) * np.nanmean(scaled_psfs)
         scaled_psfs = scaled_psfs / planet_flux * star_flux
         # print(np.nansum(scaled_psfs))
 
         # combine planet model with speckle model
-        M = np.concatenate([scaled_psfs[:, :, :, None], M_speckles,M_KLmodes,M_background], axis=3)
+        M = np.concatenate([scaled_psfs[:, :, :, None], just_tellurics_psfs,M_speckles,M_KLmodes,M_background], axis=3)
         # Ravel data dimension
         M = np.reshape(M, (nz * boxw * boxw, N_linpara))
         # Get rid of bad pixels

@@ -36,9 +36,13 @@ def process_chunk(args):
             out_chunk[k,3:(N_linpara+3)] = linparas
             out_chunk[k,(N_linpara+3):(2*N_linpara+3)] = linparas_err
         except Exception as e:
-            print(e)
-            print(nonlin_paras)
-    return out_chunk
+            print(nonlin_paras,e)
+    try:
+    # if 1:
+        return out_chunk
+    except Exception as e:
+        print(nonlin_paras,e)
+        return None
 
 
 def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None):
@@ -100,6 +104,8 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None):
                                                      itertools.repeat(bounds)))
 
         for k,(indices, output_list) in enumerate(zip(indices_lists,output_lists)):
+            if output_list is None:
+                continue
             if k ==0:
                 out_shape = [np.size(v) for v in para_vecs]+[np.size(output_list[0]),]
                 out = np.zeros(out_shape)
