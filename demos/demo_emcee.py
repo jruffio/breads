@@ -9,6 +9,7 @@ import multiprocessing as mp
 import h5py
 from scipy.interpolate import RegularGridInterpolator
 import time
+import datetime
 
 from breads.instruments.KPIC import KPIC
 from breads.fit import log_prob
@@ -44,16 +45,16 @@ if __name__ == "__main__":
     for filenum in filenums_fib:
         A0_filelist.append(os.path.join(datadir, "nspec210704_{0:04d}_fluxes.fits".format(filenum)))
 
-    planet_btsettl = "/scr3/jruffio/models/BT-Settl/BT-Settl_M-0.0_a+0.0/lte018-4.0-0.0a+0.0.BT-Settl.spec.7"
+    planet_btsettl = "/scr3/jruffio/models/BT-Settl/BT-Settl_M-0.0_a+0.0/lte018-5.0-0.0a+0.0.BT-Settl.spec.7"
     trace_filename = "/scr3/kpic/KPIC_Campaign/calibs/20210704/trace/nspec210704_0030_trace.fits"
     wvs_filename = "/scr3/kpic/KPIC_Campaign/calibs/20210704/wave/20210704_HIP81497_psg_wvs.fits"
 
     wvs_phoenix = "/scr3/jruffio/data/kpic/models/phoenix/WAVE_PHOENIX-ACES-AGSS-COND-2011.fits"
     A0_phoenix = "/scr3/jruffio/models/phoenix/fitting/phoenix.astro.physik.uni-goettingen.de/HiResFITS/PHOENIX-ACES-AGSS-COND-2011/Z-0.0/lte09000-4.00-0.0.PHOENIX-ACES-AGSS-COND-2011-HiRes.fits"
 
-    dataobj = KPIC(spec_filelist,trace_filename,wvs_filename,fiber_scan=False)
-    A0obj = KPIC(A0_filelist,trace_filename,wvs_filename,fiber_scan=True)
-    hostobj = KPIC(host_filelist,trace_filename,wvs_filename,fiber_scan=True)
+    dataobj = KPIC(spec_filelist,trace_filename,wvs_filename,combine_mode="companion",fiber_goal_list = [sc_fib,]*len(spec_filelist))
+    A0obj = KPIC(A0_filelist,trace_filename,wvs_filename,combine_mode="star",fiber_goal_list = [1,2,1,2,1,2])
+    hostobj = KPIC(host_filelist,trace_filename,wvs_filename,combine_mode="star",fiber_goal_list = [1,2,1,2])
     A0obj = A0obj.selec_order(orders)
     hostobj = hostobj.selec_order(orders)
     dataobj = dataobj.selec_order(orders)
@@ -64,7 +65,7 @@ if __name__ == "__main__":
 
     # Define planet model grid from BTsettl
     minwv,maxwv= np.min(dataobj.wavelengths),np.max(dataobj.wavelengths)
-    with h5py.File("/scr3/jruffio/code/OSIRIS/scripts/bt-settl_K-band_1000-3000K_KPIC.hdf5", 'r') as hf:
+    with h5py.File("/scr3/jruffio/code/BREADS_KPIC_scripts/bt-settl_K-band_1000-3000K_KPIC.hdf5", 'r') as hf:
         grid_specs = np.array(hf.get("spec"))
         grid_temps = np.array(hf.get("temps"))
         grid_loggs = np.array(hf.get("loggs"))
@@ -94,12 +95,26 @@ if __name__ == "__main__":
     host_spectrum = hostobj.data[:,sc_fib]
 
 
-    # Definition of the (extra) parameters for fm
-    from breads.fm.hc_atmgrid_hpffm import hc_atmgrid_hpffm
-    fm_paras = {"atm_grid":myinterpgrid,"atm_grid_wvs":grid_wvs,"transmission":transmission,"star_spectrum":host_spectrum,
-                "boxw":1,"psfw":0.01,"badpixfraction":0.75,"hpf_mode":"fft","cutoff":10,"loc":sc_fib,
-                "fft_bounds":np.arange(0,dataobj.data.shape[0]+1, 2048)}
-    fm_func = hc_atmgrid_hpffm
+    if 0:
+        # Definition of the (extra) parameters for fm
+        from breads.fm.hc_atmgrid_hpffm import hc_atmgrid_hpffm
+        fm_paras = {"atm_grid":myinterpgrid,"atm_grid_wvs":grid_wvs,"transmission":transmission,"star_spectrum":host_spectrum,
+                    "boxw":1,"psfw":0.01,"badpixfraction":0.75,"hpf_mode":"fft","cutoff":10,"loc":sc_fib,
+                    "fft_bounds":np.arange(0,dataobj.data.shape[0]+1, 2048)}
+        fm_func = hc_atmgrid_hpffm
+    else:
+        from breads.fm.hc_atmgrid_splinefm import hc_atmgrid_splinefm
+        N_nodes_per_order = 5
+        nodes = []
+        nz,nfib = dataobj.data.shape
+        ordersize = int(nz//np.size(dataobj.orders)) # probably equal to 2048...
+        for order_id in range(np.size(dataobj.orders)):
+            minwvord = dataobj.wavelengths[order_id*ordersize,sc_fib]
+            maxwvord = dataobj.wavelengths[(order_id+1)*ordersize-1,sc_fib]
+            nodes.append(np.linspace(minwvord,maxwvord,N_nodes_per_order,endpoint=True))
+        fm_paras = {"atm_grid":myinterpgrid,"atm_grid_wvs":grid_wvs,"transmission":transmission,"star_spectrum":host_spectrum,
+                    "boxw":1,"psfw":0.01,"badpixfraction":0.75,"nodes":nodes,"loc":sc_fib}
+        fm_func = hc_atmgrid_splinefm
     nonlin_labels = ["Teff", "logg", "spin", "RV"]
     nonlin_paras_mins = np.array([1000, 3.5, 0, -50])
     nonlin_paras_maxs = np.array([3000, 5.5, 50, 50])
@@ -152,6 +167,16 @@ if __name__ == "__main__":
     # Caution: Parallelization in emcee can make it much slower than sequential. You should run some tests to make sure
     # what the optimal number of processes is or if sequential is just better.
     mypool = mp.Pool(processes=4)
+
+    #optional: Setup Backend (saves final state of chain, able to load, analyze, or resume MCMC with saved chain)
+    #set backend to None if you don't want to save the chain
+    dt = str(datetime.datetime.now())
+    date = dt[0:10]
+    timenow = dt[11:16]
+    bkend_file = "hd_206893_b_emcee_{0}_{1}-{2}_steps.h5".format(date,timenow,nsteps)
+    backend = emcee.backends.HDFBackend(bkend_file)
+
+
     sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob, args=[dataobj, fm_func, fm_paras,nonlin_lnprior_func],pool=mypool)
     # print(log_prob(p0[0],dataobj, fm_func, fm_paras))
 
@@ -171,4 +196,3 @@ if __name__ == "__main__":
 
     figure = corner.corner(samples, labels=nonlin_labels)
     plt.show()
-
