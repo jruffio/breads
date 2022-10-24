@@ -55,6 +55,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
         log_prob = -np.inf
         log_prob_H0 = -np.inf
         rchi2 = np.inf
+        return log_prob, log_prob_H0, rchi2, linparas, linparas_err
     else:
         logdet_Sigma = np.sum(2 * np.log(s))
         paras = lsq_linear(M, d,bounds=_bounds).x
@@ -71,9 +72,15 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
         #     plt.plot(col / np.nanmean(col))
         # plt.show()
 
-
-        covphi = rchi2 * np.linalg.inv(np.dot(M.T, M))
-        slogdet_icovphi0 = np.linalg.slogdet(np.dot(M.T, M))
+        MTM = np.dot(M.T, M)
+        try:
+            covphi = rchi2 * np.linalg.inv(MTM)
+            slogdet_icovphi0 = np.linalg.slogdet(MTM)
+        except:
+            log_prob = -np.inf
+            log_prob_H0 = -np.inf
+            rchi2 = np.inf
+            return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
         log_prob = -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0[1] - (N_data - N_linpara + 2 - 1) / 2 * np.log(chi2) + \
                     loggamma((N_data - N_linpara + 2 - 1) / 2) + (N_linpara - N_data) / 2 * np.log(2 * np.pi)
@@ -107,7 +114,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
         # plt.show()
 
 
-    return log_prob, log_prob_H0, rchi2, linparas, linparas_err
+        return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
 def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=None):
     """
