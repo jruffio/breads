@@ -27,8 +27,8 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     return gaussA + bkg
 
 # pos: (x,y) or fiber, position of the companion
-def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,
-             badpixfraction=0.75,loc=None,fix_parameters=None,return_where_finite=False):
+def hc_atmgrid_splinefm_jwst_nirspec(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,
+             badpixfraction=0.75,loc=None,fix_parameters=None):
     """
     For high-contrast companions (planet + speckles).
     Generate forward model fitting the continuum with a spline.
@@ -252,7 +252,4 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
         dr = d[where_finite]
         Mr = M[where_finite[0], :]
 
-        if return_where_finite:
-            return dr, Mr, sr, where_finite
-        else:
-            return dr, Mr, sr
+        return dr, Mr, sr

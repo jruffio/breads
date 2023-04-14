@@ -81,8 +81,11 @@ def _task_findbadpix(paras):
 
         M = M_spline[where_data_finite[0],:]*med_spec[where_data_finite[0],None]
 
+        validpara = np.where(np.nansum(M>np.nanmax(M)*1e-6,axis=0)!=0)
+        M = M[:,validpara[0]]
 
-        bounds_min = [0, ]* M.shape[1]
+        # bounds_min = [0, ]* M.shape[1]
+        bounds_min = [-np.inf, ]* M.shape[1]
         bounds_max = [np.inf, ] * M.shape[1]
         p = lsq_linear(M/d_err[:,None],d/d_err,bounds=(bounds_min, bounds_max)).x
         # p,chi2,rank,s = np.linalg.lstsq(M/d_err[:,None],d/d_err,rcond=None)
@@ -90,11 +93,28 @@ def _task_findbadpix(paras):
         res[where_data_finite[0],k] = d-m
 
         # where_bad = np.where((np.abs(res[:,k])>3*np.nanstd(res[:,k])) | np.isnan(res[:,k]))
-        where_bad = np.where((np.abs(res[:,k])>threshold*median_absolute_deviation(res[where_data_finite[0],k])) | np.isnan(res[:,k]))
+        meddev=median_absolute_deviation(res[where_data_finite[0],k])
+        where_bad = np.where((np.abs(res[:,k])>threshold*meddev) | np.isnan(res[:,k]))
         new_badpix_arr[where_bad[0],k] = np.nan
         where_bad = np.where(np.isnan(np.correlate(new_badpix_arr[:,k] ,np.ones(2),mode="same")))
         new_badpix_arr[where_bad[0],k] = np.nan
         new_data_arr[where_bad[0],k] = np.nan
+
+        # print(np.nanmedian(d))
+        # if np.nanmedian(d)>0.5e-10:
+        #     plt.figure(1)
+        #     plt.plot(d,label="d")
+        #     # m0 = med_spec[where_data_finite[0],None]
+        #     # plt.plot(m0/np.nansum(m0)*np.nansum(d),label="m0")
+        #     # plt.plot(m,label="m")
+        #     # plt.plot(d_err,label="err")
+        #     plt.plot(d-m,label="res")
+        #     plt.plot(d/d*threshold*meddev,label="threshold")
+        #     plt.plot(new_data_arr[where_data_finite[0],k],label="new d",linestyle="--")
+        #     plt.legend()
+        #     plt.figure(2)
+        #     plt.plot(new_badpix_arr[where_data_finite[0],k],label="bad pix",linestyle="-")
+        #     plt.show()
 
         new_data_arr[:,k] = np.array(pd.DataFrame(new_data_arr[:,k]).interpolate(method="linear").fillna(method="bfill").fillna(method="ffill"))[:, 0]
 

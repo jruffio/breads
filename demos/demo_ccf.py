@@ -39,7 +39,7 @@ if __name__ == "__main__":
         A0_filelist.append(os.path.join(datadir, "nspec210704_{0:04d}_fluxes.fits".format(filenum)))
 
     planet_btsettl = "/scr3/jruffio/models/BT-Settl/BT-Settl_M-0.0_a+0.0/lte018-5.0-0.0a+0.0.BT-Settl.spec.7"
-    trace_filename = "/scr3/kpic/KPIC_Campaign/calibs/20210704/trace/nspec210704_0030_trace.fits"
+    trace_filename = "/scr3/kpic/KPIC_Campaign/calibs/20210704/trace/ups_Her_trace.fits"
     wvs_filename = "/scr3/kpic/KPIC_Campaign/calibs/20210704/wave/20210704_HIP81497_psg_wvs.fits"
 
     wvs_phoenix = "/scr3/jruffio/data/kpic/models/phoenix/WAVE_PHOENIX-ACES-AGSS-COND-2011.fits"
@@ -114,7 +114,7 @@ if __name__ == "__main__":
     # /!\ Optional but recommended
     # Test the forward model for a fixed value of the non linear parameter.
     # Make sure it does not crash and look the way you want
-    if 0:
+    if 1:
         nonlin_paras = [-2] # rv (km/s)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv

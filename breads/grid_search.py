@@ -103,12 +103,14 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None):
                                                      itertools.repeat(fm_paras),
                                                      itertools.repeat(bounds)))
 
+        outarr_not_created = True
         for k,(indices, output_list) in enumerate(zip(indices_lists,output_lists)):
             if output_list is None:
                 continue
-            if k ==0:
+            if outarr_not_created:
                 out_shape = [np.size(v) for v in para_vecs]+[np.size(output_list[0]),]
                 out = np.zeros(out_shape)
+                outarr_not_created = False
             for l,outvec in zip(indices,output_list):
                 out[np.unravel_index(l,out_shape[0:len(para_vecs)])] = outvec
 

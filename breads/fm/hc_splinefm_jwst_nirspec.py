@@ -1,12 +1,7 @@
 import numpy as np
-from copy import copy
-import pandas as pd
-from astropy import constants as const
-from  scipy.interpolate import interp1d
-from PyAstronomy import pyasl
 
-from breads.utils import broaden
-# from breads.utils import LPFvsHPF
+from scipy.interpolate import InterpolatedUnivariateSpline
+from astropy import constants as const
 
 from breads.utils import get_spline_model
 
@@ -26,25 +21,24 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     gaussA = np.nanmean(np.reshape(gaussA_hd, (ny, hdfactor, nx, hdfactor)), axis=(1, 3))
     return gaussA + bkg
 
-# pos: (x,y) or fiber, position of the companion
-def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,
-             badpixfraction=0.75,loc=None,fix_parameters=None,return_where_finite=False):
+
+def hc_splinefm_jwst_nirpsec(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,
+                badpixfraction=0.75,loc=None,fix_parameters=None,stamp=None,return_where_finite=False):
     """
     For high-contrast companions (planet + speckles).
-    Generate forward model fitting the continuum with a spline.
+    Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
+    The spline are defined with a linear model. Each spaxel (if applicable) is independently modeled which means the
+    number of linear parameters increases as N_nodes*boxw^2+1.
 
     Args:
-        nonlin_paras: Non-linear parameters of the model, which are first the parameters defining the atmopsheric grid
-            (atm_grid). The following parameters are the spin (vsini), the radial velocity, and the position (if loc is
-            not defined) of the planet in the FOV.
-                [atm paras ....,vsini,rv,y,x] for 3d cubes (e.g. OSIRIS)
-                [atm paras ....,vsini,rv,y] for 2d (e.g. KPIC, y being fiber)
-                [atm paras ....,vsini,rv] for 1d spectra
+        nonlin_paras: Non-linear parameters of the model, which are the radial velocity and the position (if loc is not
+            defined) of the planet in the FOV.
+            [rv,y,x] for 3d cubes (e.g. OSIRIS)
+            [rv,y] for 2d (e.g. KPIC, y being fiber)
+            [rv] for 1d spectra
         cubeobj: Data object.
             Must inherit breads.instruments.instrument.Instrument.
-        atm_grid: Planet atmospheric model grid as a scipy.interpolate.RegularGridInterpolator object. Make sure the
-            wavelength coverage of the grid is just right and not too big as it will slow down the spin broadening.
-        atm_grid_wvs: Wavelength sampling on which atm_grid is defined. Wavelength needs to be uniformly sampled.
+        planet_f: Planet atmospheric model spectrum as an interp1d object. Wavelength in microns.
         transmission: Transmission spectrum (tellurics and instrumental).
             np.ndarray of size the number of wavelength bins.
         star_spectrum: Stellar spectrum to be continuum renormalized to fit the speckle noise at each location. It is
@@ -80,16 +74,13 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
     else:
         _nonlin_paras = nonlin_paras
 
-    Natmparas = len(atm_grid.values.shape)-1
-    atm_paras = [p for p in _nonlin_paras[0:Natmparas]]
-    other_nonlin_paras = _nonlin_paras[Natmparas::]
-
     # Handle the different data dimensions
     # Convert everything to 3D cubes (wv,y,x) for the followying
     if len(cubeobj.data.shape)==1:
         data = cubeobj.data[:,None,None]
         noise = cubeobj.noise[:,None,None]
         bad_pixels = cubeobj.bad_pixels[:,None,None]
+        boxw = 1
     elif len(cubeobj.data.shape)==2:
         data = cubeobj.data[:,:,None]
         noise = cubeobj.noise[:,:,None]
@@ -103,7 +94,7 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
     else:
         refpos = cubeobj.refpos
 
-    vsini,rv = other_nonlin_paras[0:2]
+    rv = _nonlin_paras[0]
     # Defining the position of companion
     # If loc is not defined, then the x,y position is assume to be a non linear parameter.
     if np.size(loc) ==2:
@@ -114,16 +105,12 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
         if len(cubeobj.data.shape)==1:
             x,y = 0,0
         elif len(cubeobj.data.shape)==2:
-            x,y = 0,other_nonlin_paras[2]
+            x,y = 0,_nonlin_paras[1]
         elif len(cubeobj.data.shape)==3:
-            x,y = other_nonlin_paras[3],other_nonlin_paras[2]
+            x,y = _nonlin_paras[2],_nonlin_paras[1]
 
     nz, ny, nx = data.shape
 
-    # Handle the different dimensions for the wavelength
-    # Only 2 cases are acceptable, anything else is undefined:
-    # -> 1d wavelength and it is assumed to be position independent
-    # -> The same shape as the data in which case the wavelength at each position is specified and can bary.
     if len(cubeobj.wavelengths.shape)==1:
         wvs = cubeobj.wavelengths[:,None,None]
     elif len(cubeobj.wavelengths.shape)==2:
@@ -171,7 +158,12 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
     else:
         raise ValueError("Unknown format for nodes.")
 
-    # Number of linear parameters
+    # import matplotlib.pyplot as plt
+    # plt.plot(wvs[:,0,0],badpix_stamp[:,0,0])
+    # plt.scatter(x_knots,np.ones(np.size(x_knots)),c="red")
+    # plt.show()
+
+
     fitback = False
     if fitback:
         N_linpara = boxw * boxw * N_nodes +1 + 3*boxw**2
@@ -179,9 +171,8 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
         N_linpara = boxw * boxw * N_nodes +1
 
 
-
     where_finite = np.where(np.isfinite(badpixs))
-    if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(badpixs) or vsini < 0 or \
+    if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(badpixs) or \
             padk > ny+2*w-1 or padk < 0 or padl > nx+2*w-1 or padl < 0:
         # don't bother to do a fit if there are too many bad pixels
         return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
@@ -205,24 +196,16 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
                     M_background[:, _k, _l, _k, _l, 2] = lwvs**2
             M_background = np.reshape(M_background, (nz, boxw, boxw, 3*boxw**2))
 
-        planet_model = atm_grid(atm_paras)[0]
-
-        if np.sum(np.isnan(planet_model)) >= 1 or np.sum(planet_model)==0 or np.size(atm_grid_wvs) != np.size(planet_model):
-            return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
+        if stamp is None:
+            psfs = np.zeros((nz, boxw, boxw))
+            # Technically allows super sampled PSF to account for a true 2d gaussian integration of the area of a pixel.
+            # But this is disabled for now with hdfactor=1.
+            hdfactor = 1#5
+            xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor,
+                                           np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor)
+            psfs += pixgauss2d([1., w+dx, w+dy, psfw, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
         else:
-            if vsini != 0:
-                spinbroad_model = pyasl.fastRotBroad(atm_grid_wvs, planet_model, 0.1, vsini)
-            else:
-                spinbroad_model = planet_model
-            planet_f = interp1d(atm_grid_wvs,spinbroad_model, bounds_error=False, fill_value=0)
-
-        psfs = np.zeros((nz, boxw, boxw))
-        # Technically allows super sampled PSF to account for a true 2d gaussian integration of the area of a pixel.
-        # But this is disabled for now with hdfactor=1.
-        hdfactor = 1#5
-        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor,
-                                       np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor)
-        psfs += pixgauss2d([1., w+dx, w+dy, psfw, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
+            psfs = stamp
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 
         # flux ratio normalization
@@ -233,6 +216,9 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
             for _l in range(boxw):
                 lwvs = wvs[:,np.clip(k-w+_k,0,nywv-1),np.clip(l-w+_l,0,nxwv-1)]
                 # The planet spectrum model is RV shifted and multiplied by the tranmission
+                # import matplotlib.pyplot as plt
+                # plt.plot(lwvs,planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value)))
+                # plt.show()
                 planet_spec = transmission * planet_f(lwvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))
                 scaled_psfs[:,_k,_l] = psfs[:, _k,_l] * planet_spec
 
@@ -251,6 +237,17 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
         sr = s[where_finite]
         dr = d[where_finite]
         Mr = M[where_finite[0], :]
+
+        # import matplotlib.pyplot as plt
+        for k in range(M_speckles.shape[-1]):
+            # print(np.nanmax(star_spectrum))
+            if np.nanmax(np.abs(M[:,k+1]))>0.05*np.nanmax(star_spectrum):
+                continue
+            Mr[:,k+1] = 0
+        #     print("delete")
+        #     plt.plot(M[:,k+1],label="starlight model {0}".format(k+1))
+        # plt.legend()
+        # plt.show()
 
         if return_where_finite:
             return dr, Mr, sr, where_finite
