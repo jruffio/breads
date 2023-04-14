@@ -148,6 +148,24 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,b
     return lnprob
 
 
+def combined_log_prob(nonlin_paras, dataobjlist,fm_funclist, fm_paraslist, nonlin_lnprior_func=None,bounds=None):
+    '''
+    For use when you have multiple data objects and want to combine the log-likelihoods for MCMC sampling
+
+    Args:
+        nonlin_paras: [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
+            parameters depends on the forward model defined.
+        dataobjlist: A list of data objects to combine
+        fm_funclist: A list of fm_func for each data object
+        fm_paraslist: A list of fm_paras to use as arguments for it's respective fm_func
+        nonlin_lnprior_func: A function to compute priors, if None, defaults to zero priors
+    '''
+    combined_lnprob = 0
+    for i, dataobj in enumerate(dataobjlist):
+        lnprob=log_prob(nonlin_paras = nonlin_paras, dataobj=dataobj, fm_func=fm_funclist[i], fm_paras= fm_paraslist[i],nonlin_lnprior_func=None,bounds=None)
+        combined_lnprob += lnprob
+    return combined_lnprob
+
 def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=(-np.inf, np.inf)):
     """
    Returns the negative of the log_prob() for minimization routines.

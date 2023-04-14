@@ -9,6 +9,7 @@ import multiprocessing as mp
 import h5py
 from scipy.interpolate import RegularGridInterpolator
 import time
+import datetime
 
 from breads.instruments.KPIC import KPIC
 from breads.fit import log_prob
@@ -166,6 +167,16 @@ if __name__ == "__main__":
     # Caution: Parallelization in emcee can make it much slower than sequential. You should run some tests to make sure
     # what the optimal number of processes is or if sequential is just better.
     mypool = mp.Pool(processes=4)
+
+    #optional: Setup Backend (saves final state of chain, able to load, analyze, or resume MCMC with saved chain)
+    #set backend to None if you don't want to save the chain
+    dt = str(datetime.datetime.now())
+    date = dt[0:10]
+    timenow = dt[11:16]
+    bkend_file = "hd_206893_b_emcee_{0}_{1}-{2}_steps.h5".format(date,timenow,nsteps)
+    backend = emcee.backends.HDFBackend(bkend_file)
+
+
     sampler = emcee.EnsembleSampler(nwalkers, ndim, log_prob, args=[dataobj, fm_func, fm_paras,nonlin_lnprior_func],pool=mypool)
     # print(log_prob(p0[0],dataobj, fm_func, fm_paras))
 
@@ -185,4 +196,3 @@ if __name__ == "__main__":
 
     figure = corner.corner(samples, labels=nonlin_labels)
     plt.show()
-
