@@ -9,7 +9,7 @@ import multiprocessing as mp
 import pandas as pd
 import itertools
 from py.path import local
-from scipy.stats import median_absolute_deviation
+from scipy.stats import median_abs_deviation
 from scipy.optimize import lsq_linear
 from scipy.signal import correlate2d
 from  scipy.interpolate import interp1d
@@ -93,7 +93,7 @@ def _task_findbadpix(paras):
         res[where_data_finite[0],k] = d-m
 
         # where_bad = np.where((np.abs(res[:,k])>3*np.nanstd(res[:,k])) | np.isnan(res[:,k]))
-        meddev=median_absolute_deviation(res[where_data_finite[0],k])
+        meddev=median_abs_deviation(res[where_data_finite[0],k])
         where_bad = np.where((np.abs(res[:,k])>threshold*meddev) | np.isnan(res[:,k]))
         new_badpix_arr[where_bad[0],k] = np.nan
         where_bad = np.where(np.isnan(np.correlate(new_badpix_arr[:,k] ,np.ones(2),mode="same")))
@@ -553,3 +553,28 @@ def scale_psg(psg_tuple, airmass, pwv):
 	model = h2o**(airmass + pwv) * (co2 * ch4 * co * o3 * n2o * o2)**airmass # do the scalings
 
 	return model
+
+
+def rotate_coordinates(x, y, angle, flipx=False):
+    x_shape = x.shape
+    if flipx:
+        _x,_y = -x.ravel(),y.ravel()
+    else:
+        _x,_y = x.ravel(),y.ravel()
+    # Convert angle to radians
+    angle_rad = np.radians(angle)
+
+    # Create a 2D array of coordinates
+    coordinates = np.array([_x, _y])
+
+    # Create the rotation matrix
+    rotation_matrix = np.array([[np.cos(angle_rad), np.sin(angle_rad)],
+                                [-np.sin(angle_rad), np.cos(angle_rad)]])
+
+    # Apply the rotation transformation
+    rotated_coordinates = np.dot(rotation_matrix, coordinates)
+
+    # Split the rotated coordinates back into separate arrays
+    rotated_x, rotated_y = rotated_coordinates
+    return np.reshape(rotated_x,x_shape), np.reshape(rotated_y,x_shape)
+

@@ -31,8 +31,23 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
         linparas: Best fit linear parameters
         linparas_err: Uncertainties of best fit linear parameters
     """
-    d,M,s = fm_func(nonlin_paras,dataobj,**fm_paras)
+    fm_out = fm_func(nonlin_paras,dataobj,**fm_paras)
+
+    if len(fm_out) == 3:
+        d, M, s = fm_out
+    if len(fm_out) == 4:
+        d, M, s,extra_outputs = fm_out
+
     N_linpara = M.shape[1]
+    N_data = np.size(d)
+    linparas = np.ones(N_linpara)+np.nan
+    linparas_err = np.ones(N_linpara)+np.nan
+    if N_data == 0:
+        log_prob = -np.inf
+        log_prob_H0 = -np.inf
+        rchi2 = np.inf
+        return log_prob, log_prob_H0, rchi2, linparas, linparas_err
+
     if N_linpara == 1:
         computeH0 = False
 
@@ -41,17 +56,29 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
     else:
         _bounds = (copy(bounds[0]),copy(bounds[1]))
 
-    validpara = np.where(np.nansum(M,axis=0)!=0)
+    validpara = np.where(np.nanmax(np.abs(M),axis=0)!=0)
     _bounds = (np.array(_bounds[0])[validpara[0]],np.array(_bounds[1])[validpara[0]])
     M = M[:,validpara[0]]
 
     d = d / s
     M = M / s[:, None]
 
-    N_data = np.size(d)
-    linparas = np.ones(N_linpara)+np.nan
-    linparas_err = np.ones(N_linpara)+np.nan
-    if N_data == 0 or 0 not in validpara[0]:
+    if len(fm_out) == 4:
+        if "regularization" in extra_outputs.keys():
+            d_reg,s_reg = extra_outputs["regularization"]
+            s_reg = s_reg[validpara]
+            d_reg = d_reg[validpara]
+            where_reg = np.where(np.isfinite(s_reg))
+            s_reg = s_reg[where_reg]
+            d_reg = d_reg[where_reg]
+            M_reg = np.zeros((np.size(where_reg[0]),M.shape[1]))
+            M_reg[np.arange(np.size(where_reg[0])),where_reg[0]] = 1/s_reg
+            M = np.concatenate([M,M_reg],axis=0)
+            d = np.concatenate([d,d_reg/s_reg])
+            s = np.concatenate([s,s_reg])
+
+
+    if 0 not in validpara[0]:
         log_prob = -np.inf
         log_prob_H0 = -np.inf
         rchi2 = np.inf
@@ -82,9 +109,12 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
             rchi2 = np.inf
             return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
+        # print("log_prob",logdet_Sigma,slogdet_icovphi0[1],(N_data - N_linpara + 2 - 1),chi2)
         log_prob = -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0[1] - (N_data - N_linpara + 2 - 1) / 2 * np.log(chi2) + \
                     loggamma((N_data - N_linpara + 2 - 1) / 2) + (N_linpara - N_data) / 2 * np.log(2 * np.pi)
-        paras_err = np.sqrt(np.diag(covphi))
+        diagcovphi = copy(np.diag(covphi))
+        diagcovphi[np.where(diagcovphi<0.0)] = np.nan
+        paras_err = np.sqrt(diagcovphi)
 
         if computeH0:
             paras_H0 = lsq_linear(M[:,1::], d,bounds=(np.array(_bounds[0])[1::],np.array(_bounds[1])[1::])).x
