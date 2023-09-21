@@ -53,7 +53,7 @@ from scipy.ndimage import generic_filter
 
 
 
-class jwstnirpsec_cal(Instrument):
+class JWSTNirspec_cal(Instrument):
     def __init__(self, filename=None, crds_dir=None, utils_dir=None, save_utils=True,
                  load_utils=True,
                  load_coords=True,
@@ -64,10 +64,10 @@ class jwstnirpsec_cal(Instrument):
                  spec_R_sampling=None, N_nodes=None, recenter_from_webbpsf=True, coords_offset=None,
                  regwvs_sampling=None, wpsffit_IWA=0.0, wpsffit_OWA=1.0,threshold_badpix=10,
                  apply_chargediff_mask=True):
-        super().__init__('jwstnirpsec')
+        super().__init__('jwstnirspec')
         if filename is None:
             warning_text = "No data file provided. " + \
-                           "Please manually add data or use jwstnirpsec.read_data_file()"
+                           "Please manually add data or use JWSTNirspec.read_data_file()"
             warn(warning_text)
         else:
             self.read_data_file(filename, crds_dir=crds_dir, utils_dir=utils_dir, save_utils=save_utils,

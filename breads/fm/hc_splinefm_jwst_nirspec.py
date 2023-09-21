@@ -22,8 +22,8 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     return gaussA + bkg
 
 
-def hc_splinefm_jwst_nirpsec(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,
-                badpixfraction=0.75,loc=None,fix_parameters=None,stamp=None,return_where_finite=False):
+def hc_splinefm_jwst_nirspec(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None, boxw=1, psfw=1.2, nodes=20,
+                             badpixfraction=0.75, loc=None, fix_parameters=None, stamp=None, return_where_finite=False):
     """
     For high-contrast companions (planet + speckles).
     Generate forward model fitting the continuum with a spline. No high pass filter or continuum normalization here.
