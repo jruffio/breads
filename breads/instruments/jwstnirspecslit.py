@@ -32,7 +32,7 @@ def get_wavelen_values(header, wavelen_axis=3):
 
 class JWSTNirspecslit(Instrument):
     def __init__(self, filename=None,data_type="DRP"):
-        super().__init__('JWSTNirspec')
+        super().__init__('jwstnirspec')
         if filename is None:
             warning_text = "No data file provided. " + \
             "Please manually add data or use JWSTNirspec.read_data_file()"
