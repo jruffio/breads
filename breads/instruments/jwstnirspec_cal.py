@@ -163,33 +163,16 @@ class JWSTNirspec_cal(Instrument):
 
         self.coords_filename = os.path.join(utils_dir, os.path.basename(filename).replace(".fits", "_relcoords.fits"))
         print(len(glob(self.coords_filename)), self.coords_filename)
-        if 1 and load_utils and load_coords and len(glob(self.coords_filename)):
+        if load_utils and load_coords and len(glob(self.coords_filename)):
             with pyfits.open(self.coords_filename) as hdulist:
                 wavelen_array = hdulist[0].data
                 dra_as_array = hdulist[1].data
                 ddec_as_array = hdulist[2].data
                 area2d = hdulist[3].data
         else:
-            Simbad.add_votable_fields("pmra")  # Store proper motion in RA
-            Simbad.add_votable_fields("pmdec")  # Store proper motion in Dec.
 
-            result_table = Simbad.query_object(self.priheader["TARGNAME"])
-            # Get the coordinates and proper motion from the result table
-            ra = result_table["RA"][0]
-            dec = result_table["DEC"][0]
-            pm_ra = result_table["PMRA"][0]
-            pm_dec = result_table["PMDEC"][0]
-
-            # Create a SkyCoord object with the coordinates and proper motion
-            HD19467_coord = SkyCoord(ra, dec, unit=(u.hourangle, u.deg),
-                                     pm_ra_cosdec=pm_ra * u.mas / u.year,
-                                     pm_dec=pm_dec * u.mas / u.year,
-                                     frame='icrs', obstime='J2000.0')
-            desired_date = self.priheader["DATE-OBS"]  # '2023-01-25'  # Example date in ISO format
-            # Convert the desired date to an astropy Time object
-            t = Time(desired_date)
             # Calculate the updated SkyCoord object for the desired date
-            host_coord = HD19467_coord.apply_space_motion(new_obstime=t)
+            host_coord = utils.propagate_coordinates_at_epoch(self.priheader["TARGNAME"], self.priheader["DATE-OBS"])
             host_ra_deg = host_coord.ra.deg
             host_dec_deg = host_coord.dec.deg
 
