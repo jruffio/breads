@@ -63,8 +63,41 @@ class JWSTNirspec_cal(Instrument):
                  compute_interp_regwvs=True, fit_wpsf=True,init_fit_psf=False,
                  spec_R_sampling=None, N_nodes=None, recenter_from_webbpsf=True, coords_offset=None,
                  regwvs_sampling=None, wpsffit_IWA=0.0, wpsffit_OWA=1.0,threshold_badpix=10,
-                 apply_chargediff_mask=True):
-        super().__init__('jwstnirspec')
+                 apply_chargediff_mask=True,
+                 verbose=True):
+        """JWST NIRSpec 2D calibrated data.
+
+
+        Parameters
+        ----------
+        filename
+        crds_dir
+        utils_dir
+        save_utils
+        load_utils
+        load_coords
+        load_interpdata_regwvs
+        external_dir
+        mppool
+        mask_charge_bleeding
+        compute_wpsf
+        compute_starspec_contnorm
+        compute_starsub
+        compute_interp_regwvs
+        fit_wpsf
+        init_fit_psf
+        spec_R_sampling
+        N_nodes
+        recenter_from_webbpsf
+        coords_offset
+        regwvs_sampling
+        wpsffit_IWA
+        wpsffit_OWA
+        threshold_badpix
+        apply_chargediff_mask
+        verbose
+        """
+        super().__init__('jwstnirspec', verbose=verbose)
         if filename is None:
             warning_text = "No data file provided. " + \
                            "Please manually add data or use JWSTNirspec.read_data_file()"
@@ -83,7 +116,9 @@ class JWSTNirspec_cal(Instrument):
                                 recenter_from_webbpsf=recenter_from_webbpsf,
                                 coords_offset=coords_offset, regwvs_sampling=regwvs_sampling,
                                 wpsffit_IWA=wpsffit_IWA, wpsffit_OWA=wpsffit_OWA,threshold_badpix=threshold_badpix,
-                       apply_chargediff_mask=apply_chargediff_mask)
+                                apply_chargediff_mask=apply_chargediff_mask)
+
+
 
     def read_data_file(self, filename, crds_dir=None, utils_dir=None, save_utils=True, external_dir=None,
                        load_utils=True,
@@ -95,12 +130,48 @@ class JWSTNirspec_cal(Instrument):
                        spec_R_sampling=None, N_nodes=None, recenter_from_webbpsf=True, max_MJy=1e-5,
                        coords_offset=None, regwvs_sampling=None, wpsffit_IWA=0.0, wpsffit_OWA=1.0,threshold_badpix=10,
                        apply_chargediff_mask=True):
+        """Read JWST NIRSpec IFU 2D Cal file.  Also checks validity at the end
+
+        Parameters
+        ----------
+        filename
+        crds_dir
+        utils_dir
+        save_utils
+        external_dir
+        load_utils
+        load_coords
+        load_interpdata_regwvs
+        mppool
+        mask_charge_bleeding
+        compute_wpsf
+        compute_starspec_contnorm
+        compute_starsub
+        compute_interp_regwvs
+        fit_wpsf
+        init_fit_psf
+        spec_R_sampling
+        N_nodes
+        recenter_from_webbpsf
+        max_MJy
+        coords_offset
+        regwvs_sampling
+        wpsffit_IWA
+        wpsffit_OWA
+        threshold_badpix
+        apply_chargediff_mask
+
+        Returns
+        -------
+
         """
-        Read OSIRIS spectral cube, also checks validity at the end
-        """
+        if self.verbose:
+            print(f"Reading data from {filename}")
         self.filename = filename
         if utils_dir is None:
             utils_dir = os.path.dirname(self.filename)
+
+        ## Part 1: Loading information from the FITS file and its header metadata
         hdulist_sc = pyfits.open(self.filename)
         priheader = hdulist_sc[0].header
         extheader = hdulist_sc[1].header
@@ -715,7 +786,6 @@ class JWSTNirspec_cal(Instrument):
                 except TypeError:
                     hdulist_sc.writeto(os.path.join(utils_dir, "starsub", os.path.basename(filename)), clobber=True)
                 hdulist_sc.close()
-        # exit()
 
         if apply_chargediff_mask:
             self.bad_pixels = self.bad_pixels * self.bar_mask
@@ -930,8 +1000,8 @@ class JWSTNirspec_cal(Instrument):
         return ifuX, ifuY
 
     def broaden(self, wvs, spectrum, loc=None, mppool=None):
-        """
-        Broaden a spectrum to the resolution of this data object using the resolution attribute (self.R).
+        """ Broaden a spectrum to the resolution of this data object using the resolution attribute (self.R).
+
         LSF is assumed to be a 1D gaussian.
         The broadening is technically fiber dependent so you need to specify which fiber calibration to use.
 
@@ -949,12 +1019,36 @@ class JWSTNirspec_cal(Instrument):
         return broaden(wvs, spectrum, self.R, mppool=mppool)
 
     def get_regwvs_sampling(self):
+        """ Get a regular wavelength sampling
+
+        Determines the min and max values, and median step size, for the provided wavelengths array
+        Computes a regular grid using that median sampling
+
+        Returns
+        -------
+        wv_sampling : array
+            Even regular wavelength values
+
+        """
         wv_min, wv_max = np.nanmin(self.wavelengths), np.nanmax(self.wavelengths)
         sampling_dw = np.nanmedian(self.wavelengths[:, 1::] - self.wavelengths[:, 0:self.wavelengths.shape[1] - 1])
         wv_sampling = np.arange(wv_min, wv_max, sampling_dw)
         return wv_sampling
 
     def interpdata_regwvs(self, wv_sampling=None, modelfit=True, out_filename=None, load_interpdata_regwvs=True):
+        """Interpolate onto a regular wavelength sampling.
+
+        Parameters
+        ----------
+        wv_sampling
+        modelfit
+        out_filename
+        load_interpdata_regwvs
+
+        Returns
+        -------
+
+        """
 
         print(len(glob(out_filename)), out_filename)
         if 1 and load_interpdata_regwvs and len(glob(out_filename)):
@@ -1043,6 +1137,16 @@ class JWSTNirspec_cal(Instrument):
 
 
 def untangle_dq(arr):
+    """Reshape Data Quality array
+
+    Parameters
+    ----------
+    arr
+
+    Returns
+    -------
+
+    """
     # # Assume arr is your input numpy array of shape (ny, nx)
     # ny, nx = arr.shape
     #
@@ -1077,6 +1181,18 @@ def untangle_dq(arr):
 
 
 def set_nans(arr, n):
+    """
+
+
+    Parameters
+    ----------
+    arr
+    n
+
+    Returns
+    -------
+
+    """
     # remove the edges of the spectrum
     # for i in range(arr.shape[0]):
     #     row = arr[i, :]
@@ -1239,7 +1355,31 @@ def _task_normrows(paras):
 
 def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nodes=40, mypool=None, nan_mask_boxsize=3,
                    threshold=10, star_sub_mode=False, use_set_nans=True,x_knots=None,regularization=False,reg_mean_map=None,reg_std_map=None):
+    """Normalize Rows
 
+
+    Parameters
+    ----------
+    image
+    im_wvs
+    noise
+    badpixs
+    star_model
+    nodes
+    mypool
+    nan_mask_boxsize
+    threshold
+    star_sub_mode
+    use_set_nans
+    x_knots
+    regularization
+    reg_mean_map
+    reg_std_map
+
+    Returns
+    -------
+
+    """
     if noise is None:
         noise = np.ones(image.shape)
     if badpixs is None:
@@ -1352,6 +1492,24 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
 
 
 def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array, interpolator, psf_wv0, fix_cen=None):
+    """Fit a webbpsf model to an image
+
+    Parameters
+    ----------
+    sc_im
+    sc_im_wvs
+    noise
+    bad_pixels
+    dra_as_array
+    ddec_as_array
+    interpolator
+    psf_wv0
+    fix_cen
+
+    Returns
+    -------
+
+    """
     wv_min, wv_max = np.nanmin(sc_im_wvs), np.nanmax(sc_im_wvs)
     wv_sampling = np.exp(np.arange(np.log(wv_min), np.log(wv_max), np.log(1 + 0.5 / 2700.)))
 
@@ -1499,9 +1657,6 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
         psfsub_sc_im[where_sc_mask] = psfsub_Zsc
 
     return bestfit_paras, psfsub_model_im, psfsub_sc_im
-
-
-import numpy as np
 
 
 def where_point_source(dataobj, radec_as, rad_as):
@@ -2044,9 +2199,34 @@ def _interp_psf(paras):
 
 
 def fitpsf(dataobj_list, psfs, psfX, psfY, out_filename=None, load=True, IWA=0, OWA=np.inf, mppool=None,
-           init_centroid=None, run_init=False,fit_cen=True, fit_angle = False,
+           init_centroid=None, run_init=False, fit_cen=True, fit_angle = False,
            ann_width=None, padding=0.0, sector_area=None, RDI_folder_suffix=None,
-           linear_interp=True,rotate_psf=0.0,flipx=False,psf_spaxel_area=None):
+           linear_interp=True, rotate_psf=0.0, flipx=False, psf_spaxel_area=None):
+    """
+
+    :param dataobj_list:
+    :param psfs:
+    :param psfX:
+    :param psfY:
+    :param out_filename:
+    :param load:
+    :param IWA:
+    :param OWA:
+    :param mppool:
+    :param init_centroid:
+    :param run_init:
+    :param fit_cen:
+    :param fit_angle:
+    :param ann_width:
+    :param padding:
+    :param sector_area:
+    :param RDI_folder_suffix:
+    :param linear_interp:
+    :param rotate_psf:
+    :param flipx:
+    :param psf_spaxel_area:
+    :return:
+    """
     if RDI_folder_suffix is None:
         RDI_folder_suffix = ""
 
