@@ -671,7 +671,7 @@ class JWSTNirspec_cal(Instrument):
                 wpsfsfit_header = {"INIT_ANG": self.wpsf_angle_offset,
                                    "INIT_RA": self.wpsf_ra_offset, "INIT_DEC": self.wpsf_dec_offset}
                 hdulist = pyfits.HDUList()
-                hdulist.append(pyfits.PrimaryHDU(data=bestfit_coords, header=pyfits.Header(cards=wpsfsfit_header)))
+                hdulist.append(pyfits.PrimaryHDU(data=bestfit_coords, header=pyfits.Header(cards=wpsfsfit_header), name='FIT_COORDS'))
                 try:
                     hdulist.writeto(self.webbpsffit_filename, overwrite=True)
                 except TypeError:
@@ -768,8 +768,6 @@ class JWSTNirspec_cal(Instrument):
 
     def compute_coordinates_arrays(self, save_utils=True):
         """ Compute the coordinates {wavelen, delta_ra, delta_dec, area} for each pixel in a 2D image
-
-
 
         Parameters
         ----------
@@ -904,11 +902,11 @@ class JWSTNirspec_cal(Instrument):
                             "offset_x": wpsfs_header["offset_x"], "offset_y": wpsfs_header["offset_y"]}
             _hdulist = pyfits.HDUList()
             _hdulist.append(pyfits.PrimaryHDU(data=wpsfs, header=pyfits.Header(cards=wpsfs_header)))
-            _hdulist.append(pyfits.ImageHDU(data=wepsfs))
-            _hdulist.append(pyfits.ImageHDU(data=webbpsf_wvs))
-            _hdulist.append(pyfits.ImageHDU(data=webbpsf_X))
-            _hdulist.append(pyfits.ImageHDU(data=webbpsf_Y))
-            _hdulist.append(pyfits.ImageHDU(data=peak_webb_epsf / aper_phot_webb_psf))
+            _hdulist.append(pyfits.ImageHDU(data=wepsfs, name='EPSFS'))
+            _hdulist.append(pyfits.ImageHDU(data=webbpsf_wvs, name='WAVELEN'))
+            _hdulist.append(pyfits.ImageHDU(data=webbpsf_X, name='X'))
+            _hdulist.append(pyfits.ImageHDU(data=webbpsf_Y, name='Y'))
+            _hdulist.append(pyfits.ImageHDU(data=peak_webb_epsf / aper_phot_webb_psf, name='RATIO'))  # TODO what exactly is this? needs a better name
             try:
                 _hdulist.writeto(self.webbpsf_filename, overwrite=True)
             except TypeError:
@@ -981,11 +979,11 @@ class JWSTNirspec_cal(Instrument):
                             }
             hdulist = pyfits.HDUList()
             hdulist.append(pyfits.PrimaryHDU(data=wpsfs, header=pyfits.Header(cards=wpsfs_header)))
-            hdulist.append(pyfits.ImageHDU(data=wepsfs))
-            hdulist.append(pyfits.ImageHDU(data=wv_sampling))
-            hdulist.append(pyfits.ImageHDU(data=webbpsf_X))
-            hdulist.append(pyfits.ImageHDU(data=webbpsf_Y))
-            hdulist.append(pyfits.ImageHDU(data=peak_webb_epsf / aper_phot_webb_psf))
+            hdulist.append(pyfits.ImageHDU(data=wepsfs, name='EPSFS'))
+            hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WAVELEN'))
+            hdulist.append(pyfits.ImageHDU(data=webbpsf_X, name='X'))
+            hdulist.append(pyfits.ImageHDU(data=webbpsf_Y, name='Y'))
+            hdulist.append(pyfits.ImageHDU(data=peak_webb_epsf / aper_phot_webb_psf, name='RATIO'))  # TODO what exactly is this for? Needs a better name
             try:
                 hdulist.writeto(self.webbpsf_filename, overwrite=True)
             except TypeError:
@@ -1190,12 +1188,12 @@ class JWSTNirspec_cal(Instrument):
             if out_filename is not None:
                 hdulist = pyfits.HDUList()
                 hdulist.append(pyfits.PrimaryHDU(data=interp_flux))
-                hdulist.append(pyfits.ImageHDU(data=interp_err))
-                hdulist.append(pyfits.ImageHDU(data=interp_ra))
-                hdulist.append(pyfits.ImageHDU(data=interp_dec))
-                hdulist.append(pyfits.ImageHDU(data=interp_wvs))
-                hdulist.append(pyfits.ImageHDU(data=interp_badpix))
-                hdulist.append(pyfits.ImageHDU(data=interp_area2d))
+                hdulist.append(pyfits.ImageHDU(data=interp_err, name='INTERP_ERR'))
+                hdulist.append(pyfits.ImageHDU(data=interp_ra, name='INTERP_RA'))
+                hdulist.append(pyfits.ImageHDU(data=interp_dec, name='INTERP_DEC'))
+                hdulist.append(pyfits.ImageHDU(data=interp_wvs, name='INTERP_WAVE'))
+                hdulist.append(pyfits.ImageHDU(data=interp_badpix, name='INTERP_BADPIX'))
+                hdulist.append(pyfits.ImageHDU(data=interp_area2d, name='INTERP_AREA2D'))
                 try:
                     hdulist.writeto(out_filename, overwrite=True)
                 except TypeError:
@@ -2532,8 +2530,8 @@ def fitpsf(dataobj_list, psfs, psfX, psfY, out_filename=None, load=True, IWA=0, 
                                "INIT_RA": init_paras[0], "INIT_DEC": init_paras[1]}
             hdulist = pyfits.HDUList()
             hdulist.append(pyfits.PrimaryHDU(data=bestfit_coords, header=pyfits.Header(cards=wpsfsfit_header)))
-            hdulist.append(pyfits.ImageHDU(data=(all_interp_psfsub/psf_spaxel_area)*all_interp_area2d))
-            hdulist.append(pyfits.ImageHDU(data=all_interp_psfmodel))
+            hdulist.append(pyfits.ImageHDU(data=(all_interp_psfsub/psf_spaxel_area)*all_interp_area2d, name='PSF_AREA_NORM'))  # TODO better name for this
+            hdulist.append(pyfits.ImageHDU(data=all_interp_psfmodel, name='PSFMODEL'))
             try:
                 hdulist.writeto(out_filename, overwrite=True)
             except TypeError:
@@ -2721,10 +2719,10 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
     if out_filename is not None:
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(data=flux_map))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_map))
-        hdulist.append(pyfits.ImageHDU(data=snr_map))
-        hdulist.append(pyfits.ImageHDU(data=ra_grid))
-        hdulist.append(pyfits.ImageHDU(data=dec_grid))
+        hdulist.append(pyfits.ImageHDU(data=fluxerr_map, name='FLUXERR'))
+        hdulist.append(pyfits.ImageHDU(data=snr_map, name='SNR'))
+        hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
+        hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
         try:
             hdulist.writeto(out_filename, overwrite=True)
         except TypeError:
@@ -2880,12 +2878,12 @@ def matchedfilter_perwv(wv_sampling,east2V2_deg,
     if out_filename is not None:
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(data=flux_cube))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_cube))
-        hdulist.append(pyfits.ImageHDU(data=flux_map))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_map))
-        hdulist.append(pyfits.ImageHDU(data=snr_map))
-        hdulist.append(pyfits.ImageHDU(data=ra_grid))
-        hdulist.append(pyfits.ImageHDU(data=dec_grid))
+        hdulist.append(pyfits.ImageHDU(data=fluxerr_cube, name='FLUXERR_CUBE'))
+        hdulist.append(pyfits.ImageHDU(data=flux_map, name='FLUX'))
+        hdulist.append(pyfits.ImageHDU(data=fluxerr_map, name='FLUXERR'))
+        hdulist.append(pyfits.ImageHDU(data=snr_map, name='SNR'))
+        hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
+        hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
         try:
             hdulist.writeto(out_filename, overwrite=True)
         except TypeError:
@@ -2938,8 +2936,8 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=N
         if out_filename is not None:
             hdulist = pyfits.HDUList()
             hdulist.append(pyfits.PrimaryHDU(data=new_wavelengths))
-            hdulist.append(pyfits.ImageHDU(data=combined_fluxes))
-            hdulist.append(pyfits.ImageHDU(data=combined_errors))
+            hdulist.append(pyfits.ImageHDU(data=combined_fluxes, name='COM_FLUXES'))
+            hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
             try:
                 hdulist.writeto(out_filename, overwrite=True)
             except TypeError:
