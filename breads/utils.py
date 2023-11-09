@@ -15,6 +15,10 @@ from scipy.signal import correlate2d
 from  scipy.interpolate import interp1d
 from matplotlib import pyplot as plt
 import astropy.io.fits as pyfits
+import astropy.coordinates
+
+from astroquery.simbad import Simbad
+
 
 
 def get_err_from_posterior(x,posterior):
@@ -594,7 +598,7 @@ def propagate_coordinates_at_epoch(targetname, date, verbose=True):
     if 'plx' not in Simbad._VOTABLE_FIELDS:
         Simbad.add_votable_fields("plx")  # Retrieve parallax
 
-    if self.verbose:
+    if verbose:
         print(f"Retrieving SIMBAD coordinates for {targetname}")
 
     result_table = Simbad.query_object(targetname)
@@ -618,7 +622,7 @@ def propagate_coordinates_at_epoch(targetname, date, verbose=True):
     # Calculate the updated SkyCoord object for the desired date
     host_coord_at_date = target_coord_j2000.apply_space_motion(new_obstime=t)
 
-    if self.verbose:
+    if verbose:
         print(f"Coordinates at J2000:  {target_coord_j2000.icrs.to_string('hmsdms')}")
         print(f"Coordinates at {date}:  {host_coord_at_date.icrs.to_string('hmsdms')}")
 
