@@ -10,6 +10,11 @@ Welcome to breads's documentation!
    :maxdepth: 2
    :caption: Contents:
 
+   overview.rst
+   data_classes.rst
+   forward_models.rst
+   fitting.rst
+
 
 
 Indices and tables
