@@ -9,6 +9,8 @@ from astropy import constants as const
 
 from breads.fit import fitfm
 
+__all__ = ('grid_search', 'process_chunk')
+
 try:
     import mkl
     mkl_exists = True

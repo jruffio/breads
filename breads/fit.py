@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import warnings
 from copy import copy
 
+__all__ =  ('fitfm', 'log_prob', 'combined_log_prob', 'nlog_prob')
+
 def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = None,residuals=None,residuals_H0=None):
     """
     Fit a forard model to data returning probabilities and best fit linear parameters.
