@@ -3,7 +3,14 @@ import breads.utils as utils
 from warnings import warn
 
 class Instrument:
-    def __init__(self, ins_type):
+    def __init__(self, ins_type, verbose=True):
+        """Initialize instrument
+
+        Parameters
+        ----------
+        ins_type
+        verbose
+        """
         self.ins_type = ins_type
         assert self.check_instrument_type(), "Instrument Not Implemented Yet"
         self.wavelengths = None
@@ -12,8 +19,16 @@ class Instrument:
         self.bad_pixels = None
         self.bary_RV = None
         self.refpos = None
+
+        self.verbose = verbose
         
     def check_instrument_type(self):
+        """ Check that an instrument type is implemented and supported.
+
+        Returns
+        -------
+
+        """
         implemented = self.instruments_implemented()
         if self.ins_type in implemented:
             return True
@@ -21,6 +36,12 @@ class Instrument:
         return False
     
     def instruments_implemented(self):
+        """ Infer the list of implemented instruments based on introspection of python files in this package
+
+        Returns
+        -------
+
+        """
         files = os.listdir(utils.file_directory(__file__))
         implemented = []
         for file in files:

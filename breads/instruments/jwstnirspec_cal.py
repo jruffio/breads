@@ -20,7 +20,6 @@ import astropy
 import jwst.datamodels, jwst.assign_wcs
 from astropy.coordinates import SkyCoord
 from astropy import units as u
-from astroquery.simbad import Simbad
 from astropy.time import Time
 from glob import glob
 import itertools
@@ -63,8 +62,41 @@ class JWSTNirspec_cal(Instrument):
                  compute_interp_regwvs=True, fit_wpsf=True,init_fit_psf=False,
                  spec_R_sampling=None, N_nodes=None, recenter_from_webbpsf=True, coords_offset=None,
                  regwvs_sampling=None, wpsffit_IWA=0.0, wpsffit_OWA=1.0,threshold_badpix=10,
-                 apply_chargediff_mask=True):
-        super().__init__('jwstnirspec')
+                 apply_chargediff_mask=True,
+                 verbose=True):
+        """JWST NIRSpec 2D calibrated data.
+
+
+        Parameters
+        ----------
+        filename
+        crds_dir
+        utils_dir
+        save_utils
+        load_utils
+        load_coords
+        load_interpdata_regwvs
+        external_dir
+        mppool
+        mask_charge_bleeding
+        compute_wpsf
+        compute_starspec_contnorm
+        compute_starsub
+        compute_interp_regwvs
+        fit_wpsf
+        init_fit_psf
+        spec_R_sampling
+        N_nodes
+        recenter_from_webbpsf
+        coords_offset
+        regwvs_sampling
+        wpsffit_IWA
+        wpsffit_OWA
+        threshold_badpix
+        apply_chargediff_mask
+        verbose
+        """
+        super().__init__('jwstnirspec', verbose=verbose)
         if filename is None:
             warning_text = "No data file provided. " + \
                            "Please manually add data or use JWSTNirspec.read_data_file()"
@@ -83,7 +115,9 @@ class JWSTNirspec_cal(Instrument):
                                 recenter_from_webbpsf=recenter_from_webbpsf,
                                 coords_offset=coords_offset, regwvs_sampling=regwvs_sampling,
                                 wpsffit_IWA=wpsffit_IWA, wpsffit_OWA=wpsffit_OWA,threshold_badpix=threshold_badpix,
-                       apply_chargediff_mask=apply_chargediff_mask)
+                                apply_chargediff_mask=apply_chargediff_mask)
+
+
 
     def read_data_file(self, filename, crds_dir=None, utils_dir=None, save_utils=True, external_dir=None,
                        load_utils=True,
@@ -95,12 +129,48 @@ class JWSTNirspec_cal(Instrument):
                        spec_R_sampling=None, N_nodes=None, recenter_from_webbpsf=True, max_MJy=1e-5,
                        coords_offset=None, regwvs_sampling=None, wpsffit_IWA=0.0, wpsffit_OWA=1.0,threshold_badpix=10,
                        apply_chargediff_mask=True):
+        """Read JWST NIRSpec IFU 2D Cal file.  Also checks validity at the end
+
+        Parameters
+        ----------
+        filename
+        crds_dir
+        utils_dir
+        save_utils
+        external_dir
+        load_utils
+        load_coords
+        load_interpdata_regwvs
+        mppool
+        mask_charge_bleeding
+        compute_wpsf
+        compute_starspec_contnorm
+        compute_starsub
+        compute_interp_regwvs
+        fit_wpsf
+        init_fit_psf
+        spec_R_sampling
+        N_nodes
+        recenter_from_webbpsf
+        max_MJy
+        coords_offset
+        regwvs_sampling
+        wpsffit_IWA
+        wpsffit_OWA
+        threshold_badpix
+        apply_chargediff_mask
+
+        Returns
+        -------
+
         """
-        Read OSIRIS spectral cube, also checks validity at the end
-        """
+        if self.verbose:
+            print(f"Reading data from {filename}")
         self.filename = filename
         if utils_dir is None:
             utils_dir = os.path.dirname(self.filename)
+
+        ## Part 1: Loading information from the FITS file and its header metadata
         hdulist_sc = pyfits.open(self.filename)
         priheader = hdulist_sc[0].header
         extheader = hdulist_sc[1].header
@@ -122,13 +192,15 @@ class JWSTNirspec_cal(Instrument):
         where_zero_noise = np.where(self.noise == 0)
         self.noise[where_zero_noise] = np.nan
         self.bad_pixels = np.ones((ny, nx))
-        self.bad_pixels[np.where(untangle_dq(dq)[0, :, :])] = np.nan
+        self.bad_pixels[np.where(untangle_dq(dq, verbose=self.verbose)[0, :, :])] = np.nan
         self.bad_pixels[np.where(np.isnan(self.data))] = np.nan
         # self.bad_pixels[np.where(self.data<=0)] = np.nan
         self.bad_pixels[where_zero_noise] = np.nan
         # self.bad_pixels[np.where(np.abs(self.data)>max_MJy)] = np.nan
         self.starsub_filename = os.path.join(utils_dir, os.path.basename(filename).replace(".fits", "_starsub.fits"))
-        if not(self.compute_starsub and load_utils and len(glob(self.starsub_filename))):
+        if not(self.compute_starsub and load_utils and os.path.exists(self.starsub_filename)):
+            if self.verbose:
+                print("Initializing row_err and bad_pixels")
             for rowid in range(self.bad_pixels.shape[0]):
                 row_err = self.noise[rowid,:]
                 row_err = row_err - generic_filter(row_err, np.nanmedian, size=50)
@@ -161,257 +233,58 @@ class JWSTNirspec_cal(Instrument):
         else:
             self.N_nodes = N_nodes
 
+        #### Part two: Obtain coordinates in the 2D detector frame
+        # Determine the relative coordinates in the focal plane relative to the target.
         self.coords_filename = os.path.join(utils_dir, os.path.basename(filename).replace(".fits", "_relcoords.fits"))
         print(len(glob(self.coords_filename)), self.coords_filename)
-        if 1 and load_utils and load_coords and len(glob(self.coords_filename)):
+        if load_utils and load_coords and os.path.exists(self.coords_filename):
+            if self.verbose:
+                print(f"Loading coordinates cached in {self.coords_filename}")
+            # Reload previously computed coordinates file
             with pyfits.open(self.coords_filename) as hdulist:
                 wavelen_array = hdulist[0].data
                 dra_as_array = hdulist[1].data
                 ddec_as_array = hdulist[2].data
                 area2d = hdulist[3].data
         else:
-            Simbad.add_votable_fields("pmra")  # Store proper motion in RA
-            Simbad.add_votable_fields("pmdec")  # Store proper motion in Dec.
-
-            result_table = Simbad.query_object(self.priheader["TARGNAME"])
-            # Get the coordinates and proper motion from the result table
-            ra = result_table["RA"][0]
-            dec = result_table["DEC"][0]
-            pm_ra = result_table["PMRA"][0]
-            pm_dec = result_table["PMDEC"][0]
-
-            # Create a SkyCoord object with the coordinates and proper motion
-            HD19467_coord = SkyCoord(ra, dec, unit=(u.hourangle, u.deg),
-                                     pm_ra_cosdec=pm_ra * u.mas / u.year,
-                                     pm_dec=pm_dec * u.mas / u.year,
-                                     frame='icrs', obstime='J2000.0')
-            desired_date = self.priheader["DATE-OBS"]  # '2023-01-25'  # Example date in ISO format
-            # Convert the desired date to an astropy Time object
-            t = Time(desired_date)
-            # Calculate the updated SkyCoord object for the desired date
-            host_coord = HD19467_coord.apply_space_motion(new_obstime=t)
-            host_ra_deg = host_coord.ra.deg
-            host_dec_deg = host_coord.dec.deg
-
-            calfile = jwst.datamodels.open(filename)
-            photom_dataset = DataSet(calfile)
-            area_fname = self.priheader["R_AREA"].replace("crds://", os.path.join(self.crds_dir, "references", "jwst","nirspec") + os.path.sep)
-            # print(area_fname)
-            # exit()
-            # Load the pixel area table for the IFU slices
-            area_model = datamodels.open(area_fname)
-            area_data = area_model.area_table
-
-            # Compute 2D wavelength and pixel area arrays for the whole image
-            wave2d, area2d, dqmap = photom_dataset.calc_nrs_ifu_sens2d(area_data)
-            area2d[np.where(area2d == 1)] = np.nan
-
-            wcses = jwst.assign_wcs.nrs_ifu_wcs(calfile)  # returns a list of 30 WCSes, one per slice. This is slow.
-
-            ra_array = np.zeros((2048, 2048)) + np.nan
-            dec_array = np.zeros((2048, 2048)) + np.nan
-            wavelen_array = np.zeros((2048, 2048)) + np.nan
-
-            slicer_x_array = np.zeros((2048, 2048)) + np.nan
-            slicer_y_array = np.zeros((2048, 2048)) + np.nan
-            slicer_w_array = np.zeros((2048, 2048)) + np.nan
-
-            for i in range(30):
-                print(f"Computing coords for slice {i}")
-
-                # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
-                xmin = max(int(np.round(wcses[i].bounding_box.intervals[0][0])), 0)
-                xmax = int(np.round(wcses[i].bounding_box.intervals[0][1]))
-                ymin = max(int(np.round(wcses[i].bounding_box.intervals[1][0])), 0)
-                ymax = int(np.round(wcses[i].bounding_box.intervals[1][1]))
-                # print(xmax, xmin,ymax, ymin,ymax - ymin,xmax - xmin)
-
-                x = np.arange(xmin, xmax)
-                x = x.reshape(1, x.shape[0]) * np.ones((ymax - ymin, 1))
-                y = np.arange(ymin, ymax)
-                y = y.reshape(y.shape[0], 1) * np.ones((1, xmax - xmin))
-
-                # Transform all those pixels to RA, Dec, wavelength
-                skycoords, speccoord = wcses[i](x, y, with_units=True)
-                # print(skycoords.ra)
-
-                ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
-                dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
-                wavelen_array[ymin:ymax, xmin:xmax] = speccoord
-
-                # Transform all those pixels to the slicer plane
-                slice_transform = wcses[i].get_transform('detector', 'slicer')
-
-                sx, sy, sw = slice_transform(x, y)
-
-                slicer_x_array[ymin:ymax, xmin:xmax] = sx
-                slicer_y_array[ymin:ymax, xmin:xmax] = sy
-                slicer_w_array[ymin:ymax, xmin:xmax] = sw
-
-            # # print(ra_array)
-            # print(host_ra_deg)
-            # print(np.nanmedian(ra_array))
-            # print(np.nanmedian(slicer_x_array))
-            # exit()
-            dra_as_array = (ra_array - host_ra_deg) * 3600 * np.cos(np.radians(dec_array))
-            ddec_as_array = (dec_array - host_dec_deg) * 3600
-
-            if save_utils:
-                hdulist = pyfits.HDUList()
-                hdulist.append(pyfits.PrimaryHDU(data=wavelen_array))
-                hdulist.append(pyfits.ImageHDU(data=dra_as_array))
-                hdulist.append(pyfits.ImageHDU(data=ddec_as_array))
-                hdulist.append(pyfits.ImageHDU(data=area2d))
-                try:
-                    hdulist.writeto(self.coords_filename, overwrite=True)
-                except TypeError:
-                    hdulist.writeto(self.coords_filename, clobber=True)
-                hdulist.close()
-
+            # Compute coordinates using WCS
+           wavelen_array, dra_as_array, ddec_as_array, area2d = self.compute_coordinates_arrays(save_utils=save_utils)
         self.dra_as_array, self.ddec_as_array, self.area2d = dra_as_array, ddec_as_array, area2d
-        # print(np.nanmedian(self.dra_as_array[1::,:]-self.dra_as_array[0:self.dra_as_array.shape[0]-1,:]))
-        # print(np.nanmedian(self.ddec_as_array[1::,:]-self.ddec_as_array[0:self.ddec_as_array.shape[0]-1,:]))
-        # return
-        # exit()
-        # print(coords_offset)
+
         if coords_offset is not None:
+            if self.verbose:
+                print(f"Applying relative coordinate offset {coords_offset}")
             # print("coucou")
             self.dra_as_array -= coords_offset[0]
             self.ddec_as_array -= coords_offset[1]
-        # exit()
-        if regwvs_sampling is None:
-            wv_sampling = self.get_regwvs_sampling()
-        else:
-            wv_sampling = regwvs_sampling
+
+        #### Part Three: Obtain coordinates for wavelength sampling
+        wv_sampling = regwvs_sampling if regwvs_sampling is not None else self.get_regwvs_sampling()
         self.wv_sampling = wv_sampling
 
+        #### Part Four:  Obtain PSF model
         # self.webbpsf_filename = os.path.join(utils_dir,self.priheader["DATE-OBS"]+"_"+self.priheader["FILTER"]+"_"+self.priheader["GRATING"]+"_webbpsf.fits")
         splitbasename = os.path.basename(filename).split("_")
         self.webbpsf_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3] + "_webbpsf.fits")
         print(len(glob(self.webbpsf_filename)), self.webbpsf_filename)
-        # wpsf_image_mask = 'IFU'
         wpsf_image_mask = None
         wpsf_pixelscale = 0.1
         wpsf_oversample = 10
-        source_offset_x = 0.0
-        source_offset_y = 0.0  # -0.7
-        if self.compute_wpsf and load_utils and len(glob(self.webbpsf_filename)):
-            # print("coucou0")
-            # with pyfits.open(self.webbpsf_filename) as hdulist:
-            hdulist = pyfits.open(self.webbpsf_filename)
-            wpsfs = hdulist[0].data
-            wpsfs_header = hdulist[0].header
-            wepsfs = hdulist[1].data
-            webbpsf_wvs = hdulist[2].data
-            webbpsf_X = hdulist[3].data
-            webbpsf_Y = hdulist[4].data
-            wpsf_pixelscale = wpsfs_header["PIXELSCL"]
-            wpsf_oversample = wpsfs_header["oversamp"]
-
-            # self.aper_to_epsf_peak_f = interp1d(webbpsf_wvs, aper_to_epsf_peak, bounds_error=False,fill_value=np.nan)
-            try:
-                aper_to_epsf_peak = hdulist[5].data
-                # print("coucou0")
-                self.aper_to_epsf_peak_f = interp1d(webbpsf_wvs, aper_to_epsf_peak, bounds_error=False,fill_value=np.nan)
-            except:
-                print("coucou except")
-                webbpsf_R = np.sqrt(webbpsf_X ** 2 + webbpsf_Y ** 2)
-                mask_aper = np.ones(webbpsf_R.shape)
-                mask_aper[np.where(webbpsf_R > 3)] = np.nan
-                tiled_mask_aper = np.tile(mask_aper[None, :, :], (wpsfs.shape[0], 1, 1))
-                aper_phot_webb_psf = np.nansum(wpsfs * tiled_mask_aper,axis=(1, 2))
-                peak_webb_epsf = np.nanmax(wepsfs, axis=(1, 2))
-
-                self.aper_to_epsf_peak_f = interp1d(webbpsf_wvs, peak_webb_epsf / aper_phot_webb_psf, bounds_error=False, fill_value=np.nan)
-
-                wpsfs_header = {"PIXELSCL": wpsf_pixelscale, "im_mask": wpsfs_header["im_mask"],
-                                "oversamp": wpsf_oversample, "DATE-BEG": wpsfs_header["DATE-BEG"],
-                                "offset_x": wpsfs_header["offset_x"], "offset_y": wpsfs_header["offset_y"]}
-                _hdulist = pyfits.HDUList()
-                _hdulist.append(pyfits.PrimaryHDU(data=wpsfs, header=pyfits.Header(cards=wpsfs_header)))
-                _hdulist.append(pyfits.ImageHDU(data=wepsfs))
-                _hdulist.append(pyfits.ImageHDU(data=webbpsf_wvs))
-                _hdulist.append(pyfits.ImageHDU(data=webbpsf_X))
-                _hdulist.append(pyfits.ImageHDU(data=webbpsf_Y))
-                _hdulist.append(pyfits.ImageHDU(data=peak_webb_epsf / aper_phot_webb_psf))
-                try:
-                    _hdulist.writeto(self.webbpsf_filename, overwrite=True)
-                except TypeError:
-                    _hdulist.writeto(self.webbpsf_filename, clobber=True)
-                _hdulist.close()
-                # exit()
-            hdulist.close()
+        # source_offset_x = 0.0
+        # source_offset_y = 0.0  # -0.7
+        if self.compute_wpsf and load_utils and os.path.exists(self.webbpsf_filename):
+           ## Reload a PSF model that was previously computed and saved to disk
+           (wpsfs, wpsfs_header, wepsfs, webbpsf_wvs,
+            webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale) = self.reload_webbpsf_model(self.webbpsf_filename)
         elif self.compute_wpsf:
-            nrs = webbpsf.NIRSpec()
-            nrs.load_wss_opd_by_date(priheader["DATE-BEG"])  # Load telescope state as of our observation date
-            nrs.image_mask = wpsf_image_mask  # optional: model opaque field stop outside of the IFU aperture
-            nrs.pixelscale = wpsf_pixelscale  # Optional: set this manually to match the drizzled cube sampling, rather than the default
-            nrs.options["source_offset_x"] = source_offset_x
-            nrs.options["source_offset_x"] = source_offset_y
-            if 1:
-                # wv_sampling = wv_sampling[0:10]
-                outarr_not_created = True
-                for wv_id, wv in enumerate(wv_sampling):
-                    print(wv_id, wv, np.size(wv_sampling))
-                    paras = nrs, wv, wpsf_oversample
-                    out = _get_wpsf_task(paras)
-                    # plt.imshow(out[0])
-                    # plt.show()
-                    if outarr_not_created:
-                        wpsfs = np.zeros((np.size(wv_sampling), out[0].shape[0], out[0].shape[1]))
-                        wepsfs = np.zeros((np.size(wv_sampling), out[0].shape[0], out[0].shape[1]))
-                        outarr_not_created = False
-                    wpsfs[wv_id, :, :] = out[0]
-                    wepsfs[wv_id, :, :] = out[1]
-            # else:
-            #     output_lists = mppool.map(_get_wpsf_task, zip(itertools.repeat(nrs),
-            #                                                   wv_sampling,
-            #                                                  itertools.repeat(wpsf_oversample)))
-            #
-            #     outarr_not_created = True
-            #     for wv_id, (wv,out) in enumerate(zip(wv_sampling,output_lists)):
-            #         if outarr_not_created:
-            #             wpsfs = np.zeros((np.size(wv_sampling),out[0].shape[0],out[0].shape[1]))
-            #             wepsfs = np.zeros((np.size(wv_sampling),out[0].shape[0],out[0].shape[1]))
-            #             outarr_not_created=False
-            #         wpsfs[wv_id,:,:] = out[0]
-            #         wepsfs[wv_id,:,:] = out[1]
+            (wpsfs, wpsfs_header, wepsfs, webbpsf_wvs,
+             webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale) = self.compute_webbpsf_model(pixelscale=wpsf_pixelscale,
+                                                                                                  oversample=wpsf_oversample,
+                                                                                                  image_mask=wpsf_image_mask,
+                                                                                                  parallelize=False,
+                                                                                                  mppool=mppool,
+                                                                                                  save_utils=save_utils)
 
-            # print(psf_array_shape,pixelscale)
-            halffov_x = wpsf_pixelscale / wpsf_oversample * wpsfs.shape[2] / 2.0
-            halffov_y = wpsf_pixelscale / wpsf_oversample * wpsfs.shape[1] / 2.0
-            x = np.linspace(-halffov_x, halffov_x, wpsfs.shape[2], endpoint=True)
-            y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[1], endpoint=True)
-            webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
-
-            webbpsf_R = np.sqrt(webbpsf_X ** 2 + webbpsf_Y ** 2)
-            mask_aper = np.ones(webbpsf_R.shape)
-            mask_aper[np.where(webbpsf_R > 3)] = np.nan
-            tiled_mask_aper = np.tile(mask_aper[None, :, :], (wpsfs.shape[0], 1, 1))
-            aper_phot_webb_psf = np.nansum(wpsfs * tiled_mask_aper,axis=(1, 2))
-            peak_webb_epsf = np.nanmax(wepsfs, axis=(1, 2))
-            self.aper_to_epsf_peak_f = interp1d(wv_sampling, peak_webb_epsf / aper_phot_webb_psf, bounds_error=False, fill_value=np.nan)
-
-            # plt.imshow(wpsfs[0])
-            # plt.show()
-            if save_utils:
-                wpsfs_header = {"PIXELSCL": wpsf_pixelscale, "im_mask": wpsf_image_mask,
-                                "oversamp": wpsf_oversample, "DATE-BEG": priheader["DATE-BEG"],
-                                "offset_x": source_offset_x, "offset_y": source_offset_y}
-                hdulist = pyfits.HDUList()
-                hdulist.append(pyfits.PrimaryHDU(data=wpsfs, header=pyfits.Header(cards=wpsfs_header)))
-                hdulist.append(pyfits.ImageHDU(data=wepsfs))
-                hdulist.append(pyfits.ImageHDU(data=wv_sampling))
-                hdulist.append(pyfits.ImageHDU(data=webbpsf_X))
-                hdulist.append(pyfits.ImageHDU(data=webbpsf_Y))
-                hdulist.append(pyfits.ImageHDU(data=peak_webb_epsf / aper_phot_webb_psf))
-                try:
-                    hdulist.writeto(self.webbpsf_filename, overwrite=True)
-                except TypeError:
-                    hdulist.writeto(self.webbpsf_filename, clobber=True)
-                hdulist.close()
-
-                webbpsf_wvs = wv_sampling
         # # exit()
         # # print(np.nanmin(webbpsf_X),np.nanmin(webbpsf_Y))
         # # exit()
@@ -478,178 +351,77 @@ class JWSTNirspec_cal(Instrument):
 
         self.barmask_filename = os.path.join(utils_dir, os.path.basename(filename).replace(".fits", "_barmask.fits"))
         print(len(glob(self.barmask_filename)), self.barmask_filename)
-        if 1 and mask_charge_bleeding and load_utils and len(glob(self.barmask_filename)):
-            with pyfits.open(self.barmask_filename) as hdulist:
-                self.bar_mask = hdulist[0].data
-                self.wpsf_angle_offset = hdulist[0].header["INIT_ANG"]
-                self.wpsf_ra_offset = hdulist[0].header["INIT_RA"]
-                self.wpsf_dec_offset = hdulist[0].header["INIT_DEC"]
+
+
+        if mask_charge_bleeding:
+
+            if load_utils and os.path.exists(self.barmask_filename):
+                if self.verbose:
+                    print(f"Loading charge bleeding mask from {self.barmask_filename}")
+                hdulist = pyfits.open(self.barmask_filename)
+            else:
+                hdulist = self.compute_charge_bleeding_mask(wv_sampling, save_utils=save_utils)
+
+            self.bar_mask = hdulist[0].data
+            self.wpsf_angle_offset = hdulist[0].header["INIT_ANG"]
+            self.wpsf_ra_offset = hdulist[0].header["INIT_RA"]
+            self.wpsf_dec_offset = hdulist[0].header["INIT_DEC"]
+
+            hdulist.close()
             # plt.figure(1)
             # plt.subplot(1,2,1)
             # plt.imshow(self.data,interpolation="nearest",origin="lower")
             # plt.subplot(1,2,2)
             # plt.imshow(bar_mask,interpolation="nearest",origin="lower")
             # plt.show()
-
-        elif mask_charge_bleeding:
-            # rough centroid fit
-            wv_id = np.size(wv_sampling) // 2
-            fit_cen, fit_angle = True, False
-            # init_paras = np.array([self.wpsf_ra_offset, self.wpsf_dec_offset, self.wpsf_angle_offset])
-            init_paras = np.array([self.wpsf_ra_offset, self.wpsf_dec_offset])
-            # paras = wepsfs[wv_id,:,:], webbpsf_X, webbpsf_Y,self.east2V2_deg,\
-            # interp_ra[:,wv_id], interp_dec[:,wv_id], interp_flux[:,wv_id], interp_err[:,wv_id],interp_badpix[:,wv_id],\
-            # IWA,OWA,fit_cen,fit_angle,init_paras
-            wheredata2fit = np.where(
-                (self.wavelengths > (wv_sampling[0] + 0.2)) * (self.wavelengths < (wv_sampling[-1] - 0.2)))
-            paras = linear_interp, wepsfs[wv_id, :, :], webbpsf_X, webbpsf_Y, self.east2V2_deg,True, \
-                self.dra_as_array[wheredata2fit] / self.wavelengths[wheredata2fit] * wv_sampling[wv_id], \
-                self.ddec_as_array[wheredata2fit] / self.wavelengths[wheredata2fit] * wv_sampling[wv_id], \
-                self.data[wheredata2fit], self.noise[wheredata2fit], self.bad_pixels[wheredata2fit], \
-                self.wpsffit_IWA, self.wpsffit_OWA, fit_cen, fit_angle, init_paras
-            out, _ = _fit_wpsf_task(paras)
-            # print(out)
-            init_paras = np.array([out[0,2], out[0,3]])
-            paras = linear_interp, wepsfs[wv_id, :, :], webbpsf_X, webbpsf_Y, self.east2V2_deg,True, \
-                self.dra_as_array[wheredata2fit] / self.wavelengths[wheredata2fit] * wv_sampling[wv_id], \
-                self.ddec_as_array[wheredata2fit] / self.wavelengths[wheredata2fit] * wv_sampling[wv_id], \
-                self.data[wheredata2fit], self.noise[wheredata2fit], self.bad_pixels[wheredata2fit], \
-                self.wpsffit_IWA, self.wpsffit_OWA, fit_cen, fit_angle, init_paras
-            out, _ = _fit_wpsf_task(paras)
-            # print(out)
-            # exit()
-            # out = [0.00014386691687160602, -0.13301339368089535 ,-0.08327523187469463 ,0.001383654850629076]
-            self.wpsf_ra_offset, self.wpsf_dec_offset, self.wpsf_angle_offset = out[0,2::]
-            init_paras = [self.wpsf_ra_offset, self.wpsf_dec_offset]
-
-            indices_within_threshold = find_bleeding_bar(self.dra_as_array - self.wpsf_ra_offset,
-                                                         self.ddec_as_array - self.wpsf_dec_offset,
-                                                         threshold2mask=0.15)
-            self.bar_mask = np.ones(self.bad_pixels.shape)
-            self.bar_mask[indices_within_threshold] = np.nan
-            if save_utils:
-                hdulist = pyfits.HDUList()
-                wpsfsfit_header = {"INIT_ANG": self.wpsf_angle_offset,
-                                   "INIT_RA": self.wpsf_ra_offset, "INIT_DEC": self.wpsf_dec_offset}
-                hdulist = pyfits.HDUList()
-                hdulist.append(pyfits.PrimaryHDU(data=self.bar_mask, header=pyfits.Header(cards=wpsfsfit_header)))
-                try:
-                    hdulist.writeto(self.barmask_filename, overwrite=True)
-                except TypeError:
-                    hdulist.writeto(self.barmask_filename, clobber=True)
-                hdulist.close()
         else:
             self.bar_mask = np.ones(self.bad_pixels.shape)
-        # exit()
 
 
+        #### Stellar spectrum
         self.starspec_contnorm_filename = os.path.join(utils_dir, os.path.basename(filename).replace(".fits",
                                                                                                      "_starspec_contnorm.fits"))
         print(len(glob(self.starspec_contnorm_filename)), self.starspec_contnorm_filename)
-        if 0 and self.compute_starspec_contnorm and load_utils and len(glob(self.starspec_contnorm_filename)):
-            with pyfits.open(self.starspec_contnorm_filename) as hdulist:
-                new_wavelengths = hdulist[0].data
-                combined_fluxes = hdulist[1].data
-                combined_errors = hdulist[2].data
-                spline_paras0 = hdulist[4].data
+
+        if compute_starspec_contnorm:
+            if 0 and load_utils and os.path.exists(self.starspec_contnorm_filename):
+                if self.verbose:
+                    print(f"Reloading stellar spectrum (continuum normalized) from {self.starspec_contnorm_filename}")
+                hdulist = fits.open(self.starspec_contnorm_filename)
+            else:
+                hdulist = self.compute_starspectrum_contnorm(im, im_wvs, err, mppool=mppool,
+                                                             spec_R_sampling=spec_R_sampling,
+                                                             threshold_badpix=threshold_badpix,)
+
+            new_wavelengths = hdulist[0].data
+            combined_fluxes = hdulist[1].data
+            combined_errors = hdulist[2].data
+            spline_paras0 = hdulist[4].data
+
+            hdulist.close()
 
             # plt.plot(new_wavelengths,combined_fluxes)
             # plt.show()
-        elif self.compute_starspec_contnorm:
 
-            reg_mean_map0 = np.zeros((self.data.shape[0], self.N_nodes))
-            reg_std_map0 = np.zeros((self.data.shape[0], self.N_nodes))
-            for rowid, row in enumerate(self.data):
-                row_wvs = self.wavelengths[rowid, :]
-                row_bp = self.bad_pixels[rowid, :]
-                if np.nansum(np.isfinite(row * row_bp)) == 0:
-                    continue
-                reg_mean_map0[rowid, :] = np.nanmedian(row * row_bp)
-                reg_std_map0[rowid, :] = reg_mean_map0[rowid, :]
-
-            # print(im.shape, im_wvs.shape,err.shape, self.bad_pixels.shape)
-            spline_cont0, _, new_badpixs, new_res,spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=self.bad_pixels*self.bar_mask,
-                                                                   nodes=self.N_nodes, mypool=mppool,threshold=threshold_badpix,
-                                                                   use_set_nans=False,
-                                                                     regularization=True,reg_mean_map=reg_mean_map0,reg_std_map=reg_std_map0)
-            spline_cont0, _, new_badpixs, new_res,spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=new_badpixs,
-                                                                   nodes=self.N_nodes, mypool=mppool,threshold=threshold_badpix,
-                                                                   use_set_nans=False,
-                                                                     regularization=True,reg_mean_map=spline_paras0,reg_std_map=spline_paras0)
-
-            spline_cont0[np.where(spline_cont0 / err < 5)] = np.nan
-            spline_cont0 = copy(spline_cont0)
-            spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
-            spline_cont0[np.where(np.isnan(self.bad_pixels*self.bar_mask))] = np.nan
-            normalized_im = im / spline_cont0
-            normalized_err = err / spline_cont0
-
-            # plt.imshow(normalized_im,origin="lower")
-            # plt.clim([0.999,1.001])
-            # plt.show()
-
-            # comb_spec = np.nansum(normalized_im/normalized_err**2,axis=(1,2))/np.nansum(1/normalized_err**2,axis=(1,2))
-            # comb_err = 1/np.sqrt(np.nansum(1/normalized_err**2,axis=(1,2)))
-            new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
-                                                                                 normalized_im.flatten(),
-                                                                                 normalized_err.flatten(),
-                                                                                 np.nanmedian(im_wvs) / (
-                                                                                     spec_R_sampling))
-            # plt.plot(combined_fluxes,label="1")
-            # plt.show()
-            # plt.plot(new_wavelengths, combined_fluxes,label="1")
-            #
-            #
-            # spline_cont,_,new_badpixs,new_res = normalize_rows(im, im_wvs,noise=err, badpixs=self.bad_pixels,nodes=self.N_nodes,mypool=mppool,use_set_nans=False)
-            # spline_cont[np.where(spline_cont/err<5)] = np.nan
-            # spline_cont[np.where(spline_cont<np.median(spline_cont))] = np.nan
-            # normalized_im = im/spline_cont
-            # normalized_err = err/spline_cont
-            #
-            # # comb_spec = np.nansum(normalized_im/normalized_err**2,axis=(1,2))/np.nansum(1/normalized_err**2,axis=(1,2))
-            # # comb_err = 1/np.sqrt(np.nansum(1/normalized_err**2,axis=(1,2)))
-            # new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(), normalized_im.flatten(), normalized_err.flatten(), np.nanmedian(im_wvs)/(4*self.R))
-
-            # plt.figure(1)
-            # plt.scatter(im_wvs.flatten(), normalized_im.flatten(), s=0.5)
-            # plt.plot(new_wavelengths, combined_fluxes,color="red",label="2")
-            # plt.ylim([0,2])
-            # plt.legend()
-            # plt.figure(2)
-            # plt.subplot(1,3,1)
-            # plt.imshow(self.data,origin="lower")
-            # plt.clim([0,1e-10])
-            # plt.subplot(1,3,2)
-            # plt.imshow(new_badpixs,origin="lower")
-            # plt.subplot(1,3,3)
-            # plt.imshow(spline_cont0,origin="lower")
-            # plt.clim([0,1e-10])
-            # plt.show()
-
-            if save_utils:
-                hdulist = pyfits.HDUList()
-                hdulist.append(pyfits.PrimaryHDU(data=new_wavelengths))
-                hdulist.append(pyfits.ImageHDU(data=combined_fluxes))
-                hdulist.append(pyfits.ImageHDU(data=combined_errors))
-                hdulist.append(pyfits.ImageHDU(data=spline_cont0))
-                hdulist.append(pyfits.ImageHDU(data=spline_paras0))
-                try:
-                    hdulist.writeto(self.starspec_contnorm_filename, overwrite=True)
-                except TypeError:
-                    hdulist.writeto(self.starspec_contnorm_filename, clobber=True)
-                hdulist.close()
-        if self.compute_starspec_contnorm:
             self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-        # plt.plot(new_wavelengths,combined_fluxes)
-        # plt.plot(new_wavelengths,self.star_func(new_wavelengths),linestyle="--")
-        # plt.show()
+            # plt.plot(new_wavelengths,combined_fluxes)
+            # plt.plot(new_wavelengths,self.star_func(new_wavelengths),linestyle="--")
+            # plt.show()
 
+        #### Stellar spectrum subtraction
         print(len(glob(self.starsub_filename)), self.starsub_filename)
-        if 1 and self.compute_starsub and load_utils and len(glob(self.starsub_filename)):
-            with pyfits.open(self.starsub_filename) as hdulist:
-                subtracted_im = hdulist[0].data
-                star_model = hdulist[2].data
-                fmderived_bad_pixels = hdulist[3].data
+        if self.compute_starsub:
+            if 1 and load_utils and os.path.exists(self.starsub_filename):
+                if self.verbose:
+                    print(f"Reloading star subtraction from {self.starsub_filename}")
+                hdulist = pyfits.open(self.starsub_filename)
+            else:
+                hdulist = self.compute_starsubtraction(im, im_wvs, err, threshold_badpix, spline_paras0, hdulist_sc,
+                                                       mppool=mppool, utils_dir=utils_dir)
+
+            subtracted_im = hdulist[0].data
+            star_model = hdulist[2].data
+            fmderived_bad_pixels = hdulist[3].data
 
                 # plt.figure(1)
                 # plt.subplot(2,2,1)
@@ -689,50 +461,7 @@ class JWSTNirspec_cal(Instrument):
                 # plt.legend()
                 # plt.show()
 
-                self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
-        elif self.compute_starsub:
-            # print(np.sum(np.isnan(self.bad_pixels)))
-            star_model, _, new_badpixs, subtracted_im,spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=self.bad_pixels,
-                                                                       nodes=self.N_nodes,
-                                                                       star_model=self.star_func(im_wvs),
-                                                                       threshold=threshold_badpix, use_set_nans=False,
-                                                                       mypool=mppool,
-                                                                     regularization=True,reg_mean_map=spline_paras0,reg_std_map=spline_paras0)
-            # print(np.sum(np.isnan(new_badpixs)))
-            # exit()
-            self.bad_pixels = self.bad_pixels * new_badpixs
-            star_model, _, new_badpixs, subtracted_im,_ = normalize_rows(im, im_wvs, noise=err, badpixs=self.bad_pixels,
-                                                                       nodes=self.N_nodes,
-                                                                       star_model=self.star_func(im_wvs),
-                                                                       threshold=threshold_badpix, use_set_nans=False,
-                                                                       mypool=mppool,
-                                                                     regularization=True,reg_mean_map=spline_paras0,reg_std_map=spline_paras0)
-            self.bad_pixels = self.bad_pixels * new_badpixs
-
-            # print(np.sum(np.isnan(new_badpixs)))
-            subtracted_im[np.where(np.isnan(subtracted_im))] = 0
-
-            hdulist_sc["SCI"].data = subtracted_im
-            if save_utils:
-                hdulist = pyfits.HDUList()
-                hdulist.append(pyfits.PrimaryHDU(data=subtracted_im))
-                hdulist.append(pyfits.ImageHDU(data=im))
-                hdulist.append(pyfits.ImageHDU(data=star_model))
-                hdulist.append(pyfits.ImageHDU(data=self.bad_pixels))
-                try:
-                    hdulist.writeto(self.starsub_filename, overwrite=True)
-                except TypeError:
-                    hdulist.writeto(self.starsub_filename, clobber=True)
-                hdulist.close()
-
-                if not os.path.exists(os.path.join(utils_dir, "starsub")):
-                    os.makedirs(os.path.join(utils_dir, "starsub"))
-                try:
-                    hdulist_sc.writeto(os.path.join(utils_dir, "starsub", os.path.basename(filename)), overwrite=True)
-                except TypeError:
-                    hdulist_sc.writeto(os.path.join(utils_dir, "starsub", os.path.basename(filename)), clobber=True)
-                hdulist_sc.close()
-        # exit()
+            self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
 
         if apply_chargediff_mask:
             self.bad_pixels = self.bad_pixels * self.bar_mask
@@ -840,7 +569,7 @@ class JWSTNirspec_cal(Instrument):
                 wpsfsfit_header = {"INIT_ANG": self.wpsf_angle_offset,
                                    "INIT_RA": self.wpsf_ra_offset, "INIT_DEC": self.wpsf_dec_offset}
                 hdulist = pyfits.HDUList()
-                hdulist.append(pyfits.PrimaryHDU(data=bestfit_coords, header=pyfits.Header(cards=wpsfsfit_header)))
+                hdulist.append(pyfits.PrimaryHDU(data=bestfit_coords, header=pyfits.Header(cards=wpsfsfit_header), name='FIT_COORDS'))
                 try:
                     hdulist.writeto(self.webbpsffit_filename, overwrite=True)
                 except TypeError:
@@ -935,7 +664,485 @@ class JWSTNirspec_cal(Instrument):
         hdulist_sc.close()
         self.valid_data_check()
 
+    def compute_coordinates_arrays(self, save_utils=True):
+        """ Compute the coordinates {wavelen, delta_ra, delta_dec, area} for each pixel in a 2D image
+
+        Parameters
+        ----------
+        save_utils : bool
+            Save the computed coordinates into the utils directory?
+
+        Returns
+        -------
+
+        """
+        if self.verbose:
+            print(f"Computing coordinates arrays.")
+
+        # Calculate the updated SkyCoord object for the desired date
+        host_coord = utils.propagate_coordinates_at_epoch(self.priheader["TARGNAME"], self.priheader["DATE-OBS"])
+        host_ra_deg = host_coord.ra.deg
+        host_dec_deg = host_coord.dec.deg
+
+        calfile = jwst.datamodels.open(self.filename)
+        photom_dataset = DataSet(calfile)
+
+        ## Determine pixel areas for each pixel, retrieved from a CRDS reference file
+        area_fname = self.priheader["R_AREA"].replace("crds://", os.path.join(self.crds_dir, "references", "jwst",
+                                                                              "nirspec") + os.path.sep)
+        # Load the pixel area table for the IFU slices
+        area_model = datamodels.open(area_fname)
+        area_data = area_model.area_table
+
+        # Compute 2D wavelength and pixel area arrays for the whole image
+        wave2d, area2d, dqmap = photom_dataset.calc_nrs_ifu_sens2d(area_data)
+        area2d[np.where(area2d == 1)] = np.nan
+
+        ## Use WCS to compute RA, Dec for each pixel
+        # TODO generalize this to work in ifualign space as well
+        wcses = jwst.assign_wcs.nrs_ifu_wcs(calfile)  # returns a list of 30 WCSes, one per slice. This is slow.
+
+        ra_array = np.zeros((2048, 2048)) + np.nan
+        dec_array = np.zeros((2048, 2048)) + np.nan
+        wavelen_array = np.zeros((2048, 2048)) + np.nan
+
+        slicer_x_array = np.zeros((2048, 2048)) + np.nan
+        slicer_y_array = np.zeros((2048, 2048)) + np.nan
+        slicer_w_array = np.zeros((2048, 2048)) + np.nan
+
+        for i in range(30):
+            print(f"Computing coords for slice {i}")
+
+            # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
+            xmin = max(int(np.round(wcses[i].bounding_box.intervals[0][0])), 0)
+            xmax = int(np.round(wcses[i].bounding_box.intervals[0][1]))
+            ymin = max(int(np.round(wcses[i].bounding_box.intervals[1][0])), 0)
+            ymax = int(np.round(wcses[i].bounding_box.intervals[1][1]))
+            # print(xmax, xmin,ymax, ymin,ymax - ymin,xmax - xmin)
+
+            x = np.arange(xmin, xmax)
+            x = x.reshape(1, x.shape[0]) * np.ones((ymax - ymin, 1))
+            y = np.arange(ymin, ymax)
+            y = y.reshape(y.shape[0], 1) * np.ones((1, xmax - xmin))
+
+            # Transform all those pixels to RA, Dec, wavelength
+            skycoords, speccoord = wcses[i](x, y, with_units=True)
+            # print(skycoords.ra)
+
+            ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
+            dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
+            wavelen_array[ymin:ymax, xmin:xmax] = speccoord
+
+            # Transform all those pixels to the slicer plane
+            slice_transform = wcses[i].get_transform('detector', 'slicer')
+
+            sx, sy, sw = slice_transform(x, y)
+
+            slicer_x_array[ymin:ymax, xmin:xmax] = sx
+            slicer_y_array[ymin:ymax, xmin:xmax] = sy
+            slicer_w_array[ymin:ymax, xmin:xmax] = sw
+
+        # # print(ra_array)
+        # print(host_ra_deg)
+        # print(np.nanmedian(ra_array))
+        # print(np.nanmedian(slicer_x_array))
+        # exit()
+        dra_as_array = (ra_array - host_ra_deg) * 3600 * np.cos(np.radians(dec_array))
+        ddec_as_array = (dec_array - host_dec_deg) * 3600
+
+        if save_utils:
+            hdulist = pyfits.HDUList()
+            hdulist.append(pyfits.PrimaryHDU(data=wavelen_array))
+            hdulist.append(pyfits.ImageHDU(data=dra_as_array, name='DELTA_RA'))
+            hdulist.append(pyfits.ImageHDU(data=ddec_as_array, name='DELTA_DEC'))
+            hdulist.append(pyfits.ImageHDU(data=area2d, name='AREA2D'))
+            try:
+                hdulist.writeto(self.coords_filename, overwrite=True)
+            except TypeError:
+                hdulist.writeto(self.coords_filename, clobber=True)
+            hdulist.close()
+            if self.verbose:
+                print(f"  Saved the computed coordinates arrays to {self.coords_filename}")
+        return wavelen_array, dra_as_array, ddec_as_array, area2d
+
+    def reload_webbpsf_model(self, filename):
+        """ Reload a previously-computed WebbPSF model PSF from a FITS file
+
+        Parameters
+        ----------
+        filename : str
+            Filename of saved PSF
+
+        Returns
+        -------
+
+        """
+
+        if self.verbose:
+            print(f"Reloading previously-computed PSF from {self.webbpsf_filename}")
+
+        hdulist = pyfits.open(self.webbpsf_filename)
+        wpsfs = hdulist[0].data
+        wpsfs_header = hdulist[0].header
+        wepsfs = hdulist[1].data
+        webbpsf_wvs = hdulist[2].data
+        webbpsf_X = hdulist[3].data
+        webbpsf_Y = hdulist[4].data
+        wpsf_pixelscale = wpsfs_header["PIXELSCL"]
+        wpsf_oversample = wpsfs_header["oversamp"]
+
+        # self.aper_to_epsf_peak_f = interp1d(webbpsf_wvs, aper_to_epsf_peak, bounds_error=False,fill_value=np.nan)
+        try:
+            aper_to_epsf_peak = hdulist[5].data
+            # print("coucou0")
+            self.aper_to_epsf_peak_f = interp1d(webbpsf_wvs, aper_to_epsf_peak, bounds_error=False, fill_value=np.nan)
+        except:  # TODO what kind of exception would be expected here? What's the logic?
+            print("coucou except")
+            webbpsf_R = np.sqrt(webbpsf_X ** 2 + webbpsf_Y ** 2)
+            mask_aper = np.ones(webbpsf_R.shape)
+            mask_aper[np.where(webbpsf_R > 3)] = np.nan
+            tiled_mask_aper = np.tile(mask_aper[None, :, :], (wpsfs.shape[0], 1, 1))
+            aper_phot_webb_psf = np.nansum(wpsfs * tiled_mask_aper, axis=(1, 2))
+            peak_webb_epsf = np.nanmax(wepsfs, axis=(1, 2))
+
+            self.aper_to_epsf_peak_f = interp1d(webbpsf_wvs, peak_webb_epsf / aper_phot_webb_psf, bounds_error=False,
+                                                fill_value=np.nan)
+
+            wpsfs_header = {"PIXELSCL": wpsf_pixelscale, "im_mask": wpsfs_header["im_mask"],
+                            "oversamp": wpsf_oversample, "DATE-BEG": wpsfs_header["DATE-BEG"],
+                            "offset_x": wpsfs_header["offset_x"], "offset_y": wpsfs_header["offset_y"]}
+            _hdulist = pyfits.HDUList()
+            _hdulist.append(pyfits.PrimaryHDU(data=wpsfs, header=pyfits.Header(cards=wpsfs_header)))
+            _hdulist.append(pyfits.ImageHDU(data=wepsfs, name='EPSFS'))
+            _hdulist.append(pyfits.ImageHDU(data=webbpsf_wvs, name='WAVELEN'))
+            _hdulist.append(pyfits.ImageHDU(data=webbpsf_X, name='X'))
+            _hdulist.append(pyfits.ImageHDU(data=webbpsf_Y, name='Y'))
+            _hdulist.append(pyfits.ImageHDU(data=peak_webb_epsf / aper_phot_webb_psf, name='RATIO'))  # TODO what exactly is this? needs a better name
+            try:
+                _hdulist.writeto(self.webbpsf_filename, overwrite=True)
+            except TypeError:
+                _hdulist.writeto(self.webbpsf_filename, clobber=True)
+            _hdulist.close()
+            # exit()
+        hdulist.close()
+        # Need to return a bunch of stuff here:
+
+        return wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
+
+    def compute_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, parallelize=False, mppool=None,
+                              save_utils=True):
+        """ Compute WebbPSF simulated PSFs for the NIRSpec IFU
+
+        Parameters
+        ----------
+        image_mask : str or None
+            image mask to use in webbpsf calculations. Default is None since we generally do not wish the edges of the
+            IFU aperture in the simulated PSF
+        pixelscale : float
+            Pixelscale to use for simulated PSF
+        oversample : int
+            Oversampling factor
+        parallelize : bool
+            Use multiprocessing to parallelize operations?
+        mppool : multiprocessing.pool
+            This must be supplied if parallelize is set to True
+
+        Returns
+        -------
+
+        """
+
+        if self.verbose:
+            print("Computing PSFs. This has to iterate over many wavelengths, so is slow.")
+
+        nwavelen = np.size(self.wv_sampling)
+        nrs = webbpsf.NIRSpec()
+        nrs.load_wss_opd_by_date(self.priheader["DATE-BEG"])  # Load telescope state as of our observation date
+        nrs.image_mask = image_mask  # optional: model opaque field stop outside of the IFU aperture
+        nrs.pixelscale = pixelscale  # Optional: set this manually to match the drizzled cube sampling, rather than the default
+        # nrs.options["source_offset_x"] = source_offset_x
+        # nrs.options["source_offset_x"] = source_offset_y
+        if not parallelize:
+            # wv_sampling = wv_sampling[0:10]
+            outarr_not_created = True
+            for wv_id, wv in enumerate(self.wv_sampling):
+                print(wv_id, wv, nwavelen)
+                paras = nrs, wv, oversample
+                out = _get_wpsf_task(paras)
+                # plt.imshow(out[0])
+                # plt.show()
+                if outarr_not_created:
+                    wpsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
+                    wepsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
+                    outarr_not_created = False
+                wpsfs[wv_id, :, :] = out[0]
+                wepsfs[wv_id, :, :] = out[1]
+        else: # Parallelized version
+            output_lists = mppool.map(_get_wpsf_task, zip(itertools.repeat(nrs),
+                                                          self.wv_sampling,
+                                                          itertools.repeat(oversample)))
+
+            outarr_not_created = True
+            for wv_id, (wv,out) in enumerate(zip(self.wv_sampling,output_lists)):
+                if outarr_not_created:
+                    wpsfs = np.zeros((nwavelen,out[0].shape[0],out[0].shape[1]))
+                    wepsfs = np.zeros((nwavelen,out[0].shape[0],out[0].shape[1]))
+                    outarr_not_created=False
+                wpsfs[wv_id,:,:] = out[0]
+                wepsfs[wv_id,:,:] = out[1]
+
+        # print(psf_array_shape,pixelscale)
+        halffov_x = pixelscale / oversample * wpsfs.shape[2] / 2.0
+        halffov_y = pixelscale / oversample * wpsfs.shape[1] / 2.0
+        x = np.linspace(-halffov_x, halffov_x, wpsfs.shape[2], endpoint=True)
+        y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[1], endpoint=True)
+        webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
+
+        webbpsf_R = np.sqrt(webbpsf_X ** 2 + webbpsf_Y ** 2)
+        mask_aper = np.ones(webbpsf_R.shape)
+        mask_aper[np.where(webbpsf_R > 3)] = np.nan
+        tiled_mask_aper = np.tile(mask_aper[None, :, :], (wpsfs.shape[0], 1, 1))
+        aper_phot_webb_psf = np.nansum(wpsfs * tiled_mask_aper, axis=(1, 2))
+        peak_webb_epsf = np.nanmax(wepsfs, axis=(1, 2))
+        self.aper_to_epsf_peak_f = interp1d(self.wv_sampling, peak_webb_epsf / aper_phot_webb_psf, bounds_error=False,
+                                            fill_value=np.nan)
+
+        # plt.imshow(wpsfs[0])
+        # plt.show()
+        if save_utils:
+            wpsfs_header = {"PIXELSCL": pixelscale, "im_mask": image_mask,
+                            "oversamp": oversample, "DATE-BEG": self.priheader["DATE-BEG"],
+                            # "offset_x": source_offset_x, "offset_y": source_offset_y
+                            }
+            hdulist = pyfits.HDUList()
+            hdulist.append(pyfits.PrimaryHDU(data=wpsfs, header=pyfits.Header(cards=wpsfs_header)))
+            hdulist.append(pyfits.ImageHDU(data=wepsfs, name='EPSFS'))
+            hdulist.append(pyfits.ImageHDU(data=self.wv_sampling, name='WAVELEN'))
+            hdulist.append(pyfits.ImageHDU(data=webbpsf_X, name='X'))
+            hdulist.append(pyfits.ImageHDU(data=webbpsf_Y, name='Y'))
+            hdulist.append(pyfits.ImageHDU(data=peak_webb_epsf / aper_phot_webb_psf, name='RATIO'))  # TODO what exactly is this for? Needs a better name
+            try:
+                hdulist.writeto(self.webbpsf_filename, overwrite=True)
+            except TypeError:
+                hdulist.writeto(self.webbpsf_filename, clobber=True)
+            hdulist.close()
+            if self.verbose:
+                print(f"  Saved the computed PSFs to {self.webbpsf_filename}")
+
+        return wpsfs, wpsfs_header, wepsfs, self.wv_sampling, webbpsf_X, webbpsf_Y, oversample, pixelscale
+
+    def compute_charge_bleeding_mask(self, wv_sampling, save_utils=True):
+        if self.verbose:
+            print(f"Computing charge bleeding mask. Will save to {self.barmask_filename}")
+
+        # rough centroid fit
+        wv_id = np.size(wv_sampling) // 2
+        fit_cen, fit_angle = True, False
+        # init_paras = np.array([self.wpsf_ra_offset, self.wpsf_dec_offset, self.wpsf_angle_offset])
+        init_paras = np.array([self.wpsf_ra_offset, self.wpsf_dec_offset])
+        # paras = wepsfs[wv_id,:,:], webbpsf_X, webbpsf_Y,self.east2V2_deg,\
+        # interp_ra[:,wv_id], interp_dec[:,wv_id], interp_flux[:,wv_id], interp_err[:,wv_id],interp_badpix[:,wv_id],\
+        # IWA,OWA,fit_cen,fit_angle,init_paras
+        wheredata2fit = np.where(
+            (self.wavelengths > (wv_sampling[0] + 0.2)) * (self.wavelengths < (wv_sampling[-1] - 0.2)))
+        paras = linear_interp, wepsfs[wv_id, :, :], webbpsf_X, webbpsf_Y, self.east2V2_deg, True, \
+            self.dra_as_array[wheredata2fit] / self.wavelengths[wheredata2fit] * wv_sampling[wv_id], \
+            self.ddec_as_array[wheredata2fit] / self.wavelengths[wheredata2fit] * wv_sampling[wv_id], \
+            self.data[wheredata2fit], self.noise[wheredata2fit], self.bad_pixels[wheredata2fit], \
+            self.wpsffit_IWA, self.wpsffit_OWA, fit_cen, fit_angle, init_paras
+        out, _ = _fit_wpsf_task(paras)
+        # print(out)
+        init_paras = np.array([out[0, 2], out[0, 3]])
+        paras = linear_interp, wepsfs[wv_id, :, :], webbpsf_X, webbpsf_Y, self.east2V2_deg, True, \
+            self.dra_as_array[wheredata2fit] / self.wavelengths[wheredata2fit] * wv_sampling[wv_id], \
+            self.ddec_as_array[wheredata2fit] / self.wavelengths[wheredata2fit] * wv_sampling[wv_id], \
+            self.data[wheredata2fit], self.noise[wheredata2fit], self.bad_pixels[wheredata2fit], \
+            self.wpsffit_IWA, self.wpsffit_OWA, fit_cen, fit_angle, init_paras
+        out, _ = _fit_wpsf_task(paras)
+        # print(out)
+        # exit()
+        # out = [0.00014386691687160602, -0.13301339368089535 ,-0.08327523187469463 ,0.001383654850629076]
+        self.wpsf_ra_offset, self.wpsf_dec_offset, self.wpsf_angle_offset = out[0, 2::]
+        init_paras = [self.wpsf_ra_offset, self.wpsf_dec_offset]
+
+        indices_within_threshold = find_bleeding_bar(self.dra_as_array - self.wpsf_ra_offset,
+                                                     self.ddec_as_array - self.wpsf_dec_offset,
+                                                     threshold2mask=0.15)
+        self.bar_mask = np.ones(self.bad_pixels.shape)
+        self.bar_mask[indices_within_threshold] = np.nan
+        if save_utils:
+            wpsfsfit_header = {"INIT_ANG": self.wpsf_angle_offset,
+                               "INIT_RA": self.wpsf_ra_offset, "INIT_DEC": self.wpsf_dec_offset}
+            hdulist = pyfits.HDUList()
+            hdulist.append(pyfits.PrimaryHDU(data=self.bar_mask, header=pyfits.Header(cards=wpsfsfit_header)))
+            try:
+                hdulist.writeto(self.barmask_filename, overwrite=True)
+            except TypeError:
+                hdulist.writeto(self.barmask_filename, clobber=True)
+            hdulist.close()
+        return hdulist
+
+    def compute_starspectrum_contnorm(self, im, im_wvs, err, save_utils=True, mppool=None, spec_R_sampling=None, threshold_badpix=None):
+
+        if self.verbose:
+            print(f"Computing stellar spectrum (continuum normalized)")
+
+        reg_mean_map0 = np.zeros((self.data.shape[0], self.N_nodes))
+        reg_std_map0 = np.zeros((self.data.shape[0], self.N_nodes))
+        for rowid, row in enumerate(self.data):
+            row_wvs = self.wavelengths[rowid, :]
+            row_bp = self.bad_pixels[rowid, :]
+            if np.nansum(np.isfinite(row * row_bp)) == 0:
+                continue
+            reg_mean_map0[rowid, :] = np.nanmedian(row * row_bp)
+            reg_std_map0[rowid, :] = reg_mean_map0[rowid, :]
+
+        # print(im.shape, im_wvs.shape,err.shape, self.bad_pixels.shape)
+        spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
+                                                                              badpixs=self.bad_pixels * self.bar_mask,
+                                                                              nodes=self.N_nodes, mypool=mppool,
+                                                                              threshold=threshold_badpix,
+                                                                              use_set_nans=False,
+                                                                              regularization=True,
+                                                                              reg_mean_map=reg_mean_map0,
+                                                                              reg_std_map=reg_std_map0)
+        spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=new_badpixs,
+                                                                              nodes=self.N_nodes, mypool=mppool,
+                                                                              threshold=threshold_badpix,
+                                                                              use_set_nans=False,
+                                                                              regularization=True,
+                                                                              reg_mean_map=spline_paras0,
+                                                                              reg_std_map=spline_paras0)
+
+        spline_cont0[np.where(spline_cont0 / err < 5)] = np.nan
+        spline_cont0 = copy(spline_cont0)
+        spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
+        spline_cont0[np.where(np.isnan(self.bad_pixels * self.bar_mask))] = np.nan
+        normalized_im = im / spline_cont0
+        normalized_err = err / spline_cont0
+
+        # plt.imshow(normalized_im,origin="lower")
+        # plt.clim([0.999,1.001])
+        # plt.show()
+
+        # comb_spec = np.nansum(normalized_im/normalized_err**2,axis=(1,2))/np.nansum(1/normalized_err**2,axis=(1,2))
+        # comb_err = 1/np.sqrt(np.nansum(1/normalized_err**2,axis=(1,2)))
+        new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
+                                                                             normalized_im.flatten(),
+                                                                             normalized_err.flatten(),
+                                                                             np.nanmedian(im_wvs) / (
+                                                                                 spec_R_sampling))
+        # plt.plot(combined_fluxes,label="1")
+        # plt.show()
+        # plt.plot(new_wavelengths, combined_fluxes,label="1")
+        #
+        #
+        # spline_cont,_,new_badpixs,new_res = normalize_rows(im, im_wvs,noise=err, badpixs=self.bad_pixels,nodes=self.N_nodes,mypool=mppool,use_set_nans=False)
+        # spline_cont[np.where(spline_cont/err<5)] = np.nan
+        # spline_cont[np.where(spline_cont<np.median(spline_cont))] = np.nan
+        # normalized_im = im/spline_cont
+        # normalized_err = err/spline_cont
+        #
+        # # comb_spec = np.nansum(normalized_im/normalized_err**2,axis=(1,2))/np.nansum(1/normalized_err**2,axis=(1,2))
+        # # comb_err = 1/np.sqrt(np.nansum(1/normalized_err**2,axis=(1,2)))
+        # new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(), normalized_im.flatten(), normalized_err.flatten(), np.nanmedian(im_wvs)/(4*self.R))
+
+        # plt.figure(1)
+        # plt.scatter(im_wvs.flatten(), normalized_im.flatten(), s=0.5)
+        # plt.plot(new_wavelengths, combined_fluxes,color="red",label="2")
+        # plt.ylim([0,2])
+        # plt.legend()
+        # plt.figure(2)
+        # plt.subplot(1,3,1)
+        # plt.imshow(self.data,origin="lower")
+        # plt.clim([0,1e-10])
+        # plt.subplot(1,3,2)
+        # plt.imshow(new_badpixs,origin="lower")
+        # plt.subplot(1,3,3)
+        # plt.imshow(spline_cont0,origin="lower")
+        # plt.clim([0,1e-10])
+        # plt.show()
+
+        if save_utils:
+            hdulist = pyfits.HDUList()
+            hdulist.append(pyfits.PrimaryHDU(data=new_wavelengths))
+            hdulist.append(pyfits.ImageHDU(data=combined_fluxes, name='COM_FLUXES'))
+            hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
+            hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
+            hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
+            try:
+                hdulist.writeto(self.starspec_contnorm_filename, overwrite=True)
+            except TypeError:
+                hdulist.writeto(self.starspec_contnorm_filename, clobber=True)
+            #hdulist.close()
+        return hdulist
+
+    def compute_starsubtraction(self, im, im_wvs, err, threshold_badpix, spline_paras0, hdulist_sc, save_utils=True,
+                                mppool=None, utils_dir="./"):
+
+        if self.verbose:
+            print(f"Computing star subtraction.")
+
+        # print(np.sum(np.isnan(self.bad_pixels)))
+        star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
+                                                                                  badpixs=self.bad_pixels,
+                                                                                  nodes=self.N_nodes,
+                                                                                  star_model=self.star_func(im_wvs),
+                                                                                  threshold=threshold_badpix,
+                                                                                  use_set_nans=False,
+                                                                                  mypool=mppool,
+                                                                                  regularization=True,
+                                                                                  reg_mean_map=spline_paras0,
+                                                                                  reg_std_map=spline_paras0)
+        # print(np.sum(np.isnan(new_badpixs)))
+        # exit()
+        self.bad_pixels = self.bad_pixels * new_badpixs
+        star_model, _, new_badpixs, subtracted_im, _ = normalize_rows(im, im_wvs, noise=err, badpixs=self.bad_pixels,
+                                                                      nodes=self.N_nodes,
+                                                                      star_model=self.star_func(im_wvs),
+                                                                      threshold=threshold_badpix, use_set_nans=False,
+                                                                      mypool=mppool,
+                                                                      regularization=True, reg_mean_map=spline_paras0,
+                                                                      reg_std_map=spline_paras0)
+        self.bad_pixels = self.bad_pixels * new_badpixs
+
+        # print(np.sum(np.isnan(new_badpixs)))
+        subtracted_im[np.where(np.isnan(subtracted_im))] = 0
+
+        hdulist_sc["SCI"].data = subtracted_im
+        if save_utils:
+            hdulist = pyfits.HDUList()
+            hdulist.append(pyfits.PrimaryHDU(data=subtracted_im))
+            hdulist.append(pyfits.ImageHDU(data=im, name='IM'))
+            hdulist.append(pyfits.ImageHDU(data=star_model, name='STARMODEL'))
+            hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='BADPIX'))
+            try:
+                hdulist.writeto(self.starsub_filename, overwrite=True)
+            except TypeError:
+                hdulist.writeto(self.starsub_filename, clobber=True)
+
+            if not os.path.exists(os.path.join(utils_dir, "starsub")):
+                os.makedirs(os.path.join(utils_dir, "starsub"))
+            try:
+                hdulist_sc.writeto(os.path.join(utils_dir, "starsub", os.path.basename(self.filename)), overwrite=True)
+            except TypeError:
+                hdulist_sc.writeto(os.path.join(utils_dir, "starsub", os.path.basename(self.filename)), clobber=True)
+            hdulist_sc.close()
+        return hdulist
+
     def getifucoords(self, ras=None, decs=None):
+        """ Get IFU coordinates
+
+        Parameters
+        ----------
+        ras
+        decs
+
+        Returns
+        -------
+        ifuX, ifuY : arrays
+
+        """
         # plt.scatter(self.dra_as_array[:,500],self.ddec_as_array[:,500],c="red",s=100*self.data[:,500]/np.nanmax(self.data[:,500]))
         if ras is not None and decs is not None:
             ifuX, ifuY = rotate_coordinates(ras, decs, self.east2V2_deg, flipx=False)
@@ -947,8 +1154,8 @@ class JWSTNirspec_cal(Instrument):
         return ifuX, ifuY
 
     def broaden(self, wvs, spectrum, loc=None, mppool=None):
-        """
-        Broaden a spectrum to the resolution of this data object using the resolution attribute (self.R).
+        """ Broaden a spectrum to the resolution of this data object using the resolution attribute (self.R).
+
         LSF is assumed to be a 1D gaussian.
         The broadening is technically fiber dependent so you need to specify which fiber calibration to use.
 
@@ -966,12 +1173,36 @@ class JWSTNirspec_cal(Instrument):
         return broaden(wvs, spectrum, self.R, mppool=mppool)
 
     def get_regwvs_sampling(self):
+        """ Get a regular wavelength sampling
+
+        Determines the min and max values, and median step size, for the provided wavelengths array
+        Computes a regular grid using that median sampling
+
+        Returns
+        -------
+        wv_sampling : array
+            Even regular wavelength values
+
+        """
         wv_min, wv_max = np.nanmin(self.wavelengths), np.nanmax(self.wavelengths)
         sampling_dw = np.nanmedian(self.wavelengths[:, 1::] - self.wavelengths[:, 0:self.wavelengths.shape[1] - 1])
         wv_sampling = np.arange(wv_min, wv_max, sampling_dw)
         return wv_sampling
 
     def interpdata_regwvs(self, wv_sampling=None, modelfit=True, out_filename=None, load_interpdata_regwvs=True):
+        """Interpolate onto a regular wavelength sampling.
+
+        Parameters
+        ----------
+        wv_sampling
+        modelfit
+        out_filename
+        load_interpdata_regwvs
+
+        Returns
+        -------
+
+        """
 
         print(len(glob(out_filename)), out_filename)
         if 1 and load_interpdata_regwvs and len(glob(out_filename)):
@@ -1044,12 +1275,12 @@ class JWSTNirspec_cal(Instrument):
             if out_filename is not None:
                 hdulist = pyfits.HDUList()
                 hdulist.append(pyfits.PrimaryHDU(data=interp_flux))
-                hdulist.append(pyfits.ImageHDU(data=interp_err))
-                hdulist.append(pyfits.ImageHDU(data=interp_ra))
-                hdulist.append(pyfits.ImageHDU(data=interp_dec))
-                hdulist.append(pyfits.ImageHDU(data=interp_wvs))
-                hdulist.append(pyfits.ImageHDU(data=interp_badpix))
-                hdulist.append(pyfits.ImageHDU(data=interp_area2d))
+                hdulist.append(pyfits.ImageHDU(data=interp_err, name='INTERP_ERR'))
+                hdulist.append(pyfits.ImageHDU(data=interp_ra, name='INTERP_RA'))
+                hdulist.append(pyfits.ImageHDU(data=interp_dec, name='INTERP_DEC'))
+                hdulist.append(pyfits.ImageHDU(data=interp_wvs, name='INTERP_WAVE'))
+                hdulist.append(pyfits.ImageHDU(data=interp_badpix, name='INTERP_BADPIX'))
+                hdulist.append(pyfits.ImageHDU(data=interp_area2d, name='INTERP_AREA2D'))
                 try:
                     hdulist.writeto(out_filename, overwrite=True)
                 except TypeError:
@@ -1059,7 +1290,17 @@ class JWSTNirspec_cal(Instrument):
         return interp_ra, interp_dec, interp_wvs, interp_flux, interp_err, interp_badpix, interp_area2d
 
 
-def untangle_dq(arr):
+def untangle_dq(arr, verbose=True):
+    """Reshape and unpack Data Quality array from ints using a bitmask to a datacube of individual bits
+
+    Parameters
+    ----------
+    arr
+
+    Returns
+    -------
+
+    """
     # # Assume arr is your input numpy array of shape (ny, nx)
     # ny, nx = arr.shape
     #
@@ -1075,7 +1316,9 @@ def untangle_dq(arr):
     #         # Loop over each bit in the binary string and set the corresponding element of the cube
     #         for k in range(32):
     #             cube[k,i,j] = bool(int(binary_str[k]))
-    print(arr.dtype)
+    if verbose:
+        print("Unpacking data quality bitmasks")
+        print("DQ array is of type", arr.dtype)
     # Assume arr is your input numpy array of shape (ny, nx)
     ny, nx = arr.shape
 
@@ -1094,6 +1337,18 @@ def untangle_dq(arr):
 
 
 def set_nans(arr, n):
+    """
+
+
+    Parameters
+    ----------
+    arr
+    n
+
+    Returns
+    -------
+
+    """
     # remove the edges of the spectrum
     # for i in range(arr.shape[0]):
     #     row = arr[i, :]
@@ -1256,7 +1511,31 @@ def _task_normrows(paras):
 
 def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nodes=40, mypool=None, nan_mask_boxsize=3,
                    threshold=10, star_sub_mode=False, use_set_nans=True,x_knots=None,regularization=False,reg_mean_map=None,reg_std_map=None):
+    """Normalize Rows
 
+
+    Parameters
+    ----------
+    image
+    im_wvs
+    noise
+    badpixs
+    star_model
+    nodes
+    mypool
+    nan_mask_boxsize
+    threshold
+    star_sub_mode
+    use_set_nans
+    x_knots
+    regularization
+    reg_mean_map
+    reg_std_map
+
+    Returns
+    -------
+
+    """
     if noise is None:
         noise = np.ones(image.shape)
     if badpixs is None:
@@ -1369,6 +1648,24 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
 
 
 def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array, interpolator, psf_wv0, fix_cen=None):
+    """Fit a webbpsf model to an image
+
+    Parameters
+    ----------
+    sc_im
+    sc_im_wvs
+    noise
+    bad_pixels
+    dra_as_array
+    ddec_as_array
+    interpolator
+    psf_wv0
+    fix_cen
+
+    Returns
+    -------
+
+    """
     wv_min, wv_max = np.nanmin(sc_im_wvs), np.nanmax(sc_im_wvs)
     wv_sampling = np.exp(np.arange(np.log(wv_min), np.log(wv_max), np.log(1 + 0.5 / 2700.)))
 
@@ -1516,9 +1813,6 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
         psfsub_sc_im[where_sc_mask] = psfsub_Zsc
 
     return bestfit_paras, psfsub_model_im, psfsub_sc_im
-
-
-import numpy as np
 
 
 def where_point_source(dataobj, radec_as, rad_as):
@@ -2061,9 +2355,34 @@ def _interp_psf(paras):
 
 
 def fitpsf(dataobj_list, psfs, psfX, psfY, out_filename=None, load=True, IWA=0, OWA=np.inf, mppool=None,
-           init_centroid=None, run_init=False,fit_cen=True, fit_angle = False,
+           init_centroid=None, run_init=False, fit_cen=True, fit_angle = False,
            ann_width=None, padding=0.0, sector_area=None, RDI_folder_suffix=None,
-           linear_interp=True,rotate_psf=0.0,flipx=False,psf_spaxel_area=None):
+           linear_interp=True, rotate_psf=0.0, flipx=False, psf_spaxel_area=None):
+    """
+
+    :param dataobj_list:
+    :param psfs:
+    :param psfX:
+    :param psfY:
+    :param out_filename:
+    :param load:
+    :param IWA:
+    :param OWA:
+    :param mppool:
+    :param init_centroid:
+    :param run_init:
+    :param fit_cen:
+    :param fit_angle:
+    :param ann_width:
+    :param padding:
+    :param sector_area:
+    :param RDI_folder_suffix:
+    :param linear_interp:
+    :param rotate_psf:
+    :param flipx:
+    :param psf_spaxel_area:
+    :return:
+    """
     if RDI_folder_suffix is None:
         RDI_folder_suffix = ""
 
@@ -2300,8 +2619,8 @@ def fitpsf(dataobj_list, psfs, psfX, psfY, out_filename=None, load=True, IWA=0, 
                                "INIT_RA": init_paras[0], "INIT_DEC": init_paras[1]}
             hdulist = pyfits.HDUList()
             hdulist.append(pyfits.PrimaryHDU(data=bestfit_coords, header=pyfits.Header(cards=wpsfsfit_header)))
-            hdulist.append(pyfits.ImageHDU(data=(all_interp_psfsub/psf_spaxel_area)*all_interp_area2d))
-            hdulist.append(pyfits.ImageHDU(data=all_interp_psfmodel))
+            hdulist.append(pyfits.ImageHDU(data=(all_interp_psfsub/psf_spaxel_area)*all_interp_area2d, name='PSF_AREA_NORM'))  # TODO better name for this
+            hdulist.append(pyfits.ImageHDU(data=all_interp_psfmodel, name='PSFMODEL'))
             try:
                 hdulist.writeto(out_filename, overwrite=True)
             except TypeError:
@@ -2489,10 +2808,10 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
     if out_filename is not None:
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(data=flux_map))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_map))
-        hdulist.append(pyfits.ImageHDU(data=snr_map))
-        hdulist.append(pyfits.ImageHDU(data=ra_grid))
-        hdulist.append(pyfits.ImageHDU(data=dec_grid))
+        hdulist.append(pyfits.ImageHDU(data=fluxerr_map, name='FLUXERR'))
+        hdulist.append(pyfits.ImageHDU(data=snr_map, name='SNR'))
+        hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
+        hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
         try:
             hdulist.writeto(out_filename, overwrite=True)
         except TypeError:
@@ -2648,12 +2967,12 @@ def matchedfilter_perwv(wv_sampling,east2V2_deg,
     if out_filename is not None:
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(data=flux_cube))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_cube))
-        hdulist.append(pyfits.ImageHDU(data=flux_map))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_map))
-        hdulist.append(pyfits.ImageHDU(data=snr_map))
-        hdulist.append(pyfits.ImageHDU(data=ra_grid))
-        hdulist.append(pyfits.ImageHDU(data=dec_grid))
+        hdulist.append(pyfits.ImageHDU(data=fluxerr_cube, name='FLUXERR_CUBE'))
+        hdulist.append(pyfits.ImageHDU(data=flux_map, name='FLUX'))
+        hdulist.append(pyfits.ImageHDU(data=fluxerr_map, name='FLUXERR'))
+        hdulist.append(pyfits.ImageHDU(data=snr_map, name='SNR'))
+        hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
+        hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
         try:
             hdulist.writeto(out_filename, overwrite=True)
         except TypeError:
@@ -2706,8 +3025,8 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=N
         if out_filename is not None:
             hdulist = pyfits.HDUList()
             hdulist.append(pyfits.PrimaryHDU(data=new_wavelengths))
-            hdulist.append(pyfits.ImageHDU(data=combined_fluxes))
-            hdulist.append(pyfits.ImageHDU(data=combined_errors))
+            hdulist.append(pyfits.ImageHDU(data=combined_fluxes, name='COM_FLUXES'))
+            hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
             try:
                 hdulist.writeto(out_filename, overwrite=True)
             except TypeError:

@@ -15,6 +15,10 @@ from scipy.signal import correlate2d
 from  scipy.interpolate import interp1d
 from matplotlib import pyplot as plt
 import astropy.io.fits as pyfits
+import astropy.coordinates
+
+from astroquery.simbad import Simbad
+
 
 
 def get_err_from_posterior(x,posterior):
@@ -578,3 +582,48 @@ def rotate_coordinates(x, y, angle, flipx=False):
     rotated_x, rotated_y = rotated_coordinates
     return np.reshape(rotated_x,x_shape), np.reshape(rotated_y,x_shape)
 
+
+def propagate_coordinates_at_epoch(targetname, date, verbose=True):
+    """Get coordinates at an epoch for some target, taking into account proper motions.
+
+    Retrieves the SIMBAD coordinates, applies proper motion, returns the result as an
+    astropy coordinates object
+    """
+
+    # Configure Simbad query to retrieve some extra fields
+    if 'pmra' not in Simbad._VOTABLE_FIELDS:
+        Simbad.add_votable_fields("pmra")  # Retrieve proper motion in RA
+    if 'pmdec' not in Simbad._VOTABLE_FIELDS:
+        Simbad.add_votable_fields("pmdec")  # Retrieve proper motion in Dec.
+    if 'plx' not in Simbad._VOTABLE_FIELDS:
+        Simbad.add_votable_fields("plx")  # Retrieve parallax
+
+    if verbose:
+        print(f"Retrieving SIMBAD coordinates for {targetname}")
+
+    result_table = Simbad.query_object(targetname)
+
+    # Get the coordinates and proper motion from the result table
+    ra = result_table["RA"][0]
+    dec = result_table["DEC"][0]
+    pm_ra = result_table["PMRA"][0]
+    pm_dec = result_table["PMDEC"][0]
+    plx = result_table["PLX_VALUE"][0]
+
+    # Create a SkyCoord object with the coordinates and proper motion
+    target_coord_j2000 = astropy.coordinates.SkyCoord(ra, dec, unit=(u.hourangle, u.deg),
+                                                      pm_ra_cosdec=pm_ra * u.mas / u.year,
+                                                      pm_dec=pm_dec * u.mas / u.year,
+                                                      distance=astropy.coordinates.Distance(parallax=plx * u.mas),
+                                                      frame='icrs', obstime='J2000.0')
+    # Convert the desired date to an astropy Time object
+    t = astropy.time.Time(date)
+
+    # Calculate the updated SkyCoord object for the desired date
+    host_coord_at_date = target_coord_j2000.apply_space_motion(new_obstime=t)
+
+    if verbose:
+        print(f"Coordinates at J2000:  {target_coord_j2000.icrs.to_string('hmsdms')}")
+        print(f"Coordinates at {date}:  {host_coord_at_date.icrs.to_string('hmsdms')}")
+
+    return host_coord_at_date
