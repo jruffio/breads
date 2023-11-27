@@ -103,7 +103,8 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
         planet_f = interp1d(atm_grid_wvs,spinbroad_model, bounds_error=False, fill_value=np.nan)
 
         comp_spec = planet_f(wvs* (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value))*(u.W/u.m**2/u.um)
-        comp_spec = comp_spec*cubeobj.aper_to_epsf_peak_f(wvs)*pixarea/cubeobj.webbpsf_spaxel_area # normalized to peak flux
+        comp_spec = comp_spec*pixarea/cubeobj.webbpsf_spaxel_area # normalized to peak flux
+        # comp_spec = comp_spec*cubeobj.aper_to_epsf_peak_f(wvs)*pixarea/cubeobj.webbpsf_spaxel_area # normalized to peak flux
         comp_spec = comp_spec*(wvs*u.um)**2/const.c #from  Flambda to Fnu
         comp_spec = comp_spec.to(u.MJy).value
 
@@ -254,10 +255,10 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
             if fitback:
                 s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_background.shape[1])])
                 d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_background.shape[1])])
-            if wvs_KLs_f:
+            if wvs_KLs_f is not None:
                 s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_KLs.shape[1])])
                 d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_KLs.shape[1])])
-            if detec_KLs:
+            if detec_KLs is not None:
                 s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_KLs_detec.shape[1])])
                 d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_KLs_detec.shape[1])])
             extra_outputs["regularization"] = (d_reg,s_reg)
@@ -295,10 +296,10 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
             if fitback:
                 s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_background.shape[1])])
                 d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_background.shape[1])])
-            if wvs_KLs_f:
+            if wvs_KLs_f is not None:
                 s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_KLs.shape[1])])
                 d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_KLs.shape[1])])
-            if detec_KLs:
+            if detec_KLs is not None:
                 s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_KLs_detec.shape[1])])
                 d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_KLs_detec.shape[1])])
             extra_outputs["regularization"] = (d_reg,s_reg)
