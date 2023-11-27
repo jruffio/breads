@@ -583,7 +583,6 @@ class JWSTNirspec_cal(Instrument):
             #     wpsfs[wv_id,:,:] = out[0]
             #     wepsfs[wv_id,:,:] = out[1]
 
-        wpsfs *= oversample ** 2
         wepsfs *= oversample ** 2
 
         # print(psf_array_shape,pixelscale)
