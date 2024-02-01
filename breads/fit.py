@@ -198,7 +198,7 @@ def combined_log_prob(nonlin_paras, dataobjlist,fm_funclist, fm_paraslist, nonli
         combined_lnprob += lnprob
     return combined_lnprob
 
-def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=(-np.inf, np.inf)):
+def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=None):
     """
    Returns the negative of the log_prob() for minimization routines.
 

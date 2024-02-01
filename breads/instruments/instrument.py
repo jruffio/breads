@@ -3,7 +3,7 @@ import breads.utils as utils
 from warnings import warn
 
 class Instrument:
-    def __init__(self, ins_type, verbose=True):
+    def __init__(self, ins_type="custom", verbose=True):
         """Initialize instrument
 
         Parameters
@@ -12,7 +12,7 @@ class Instrument:
         verbose
         """
         self.ins_type = ins_type
-        assert self.check_instrument_type(), "Instrument Not Implemented Yet"
+        # assert self.check_instrument_type(), "Instrument Not Implemented Yet"
         self.wavelengths = None
         self.data = None
         self.noise = None
