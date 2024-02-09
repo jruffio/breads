@@ -8,14 +8,14 @@ from warnings import warn
 import astropy.io.fits as pyfits
 import numpy as np
 import ctypes
-from astropy.coordinates import SkyCoord, EarthLocation
+# from astropy.coordinates import SkyCoord, EarthLocation
 import astropy.units as u
 from astropy.time import Time
 from copy import copy
 from breads.utils import broaden
 from breads.calibration import SkyCalibration
 import multiprocessing as mp
-import pandas as pd
+# import pandas as pd
 import astropy
 import jwst.datamodels, jwst.assign_wcs
 from astropy.coordinates import SkyCoord
@@ -2953,135 +2953,34 @@ def build_cube(wv_sampling, east2V2_deg,
     # dataobj0 = dataobj_list[0]
     # wv_sampling = dataobj0.wv_sampling
     # east2V2_deg = dataobj0.east2V2_deg
-def matchedfilter_perwv(wv_sampling,east2V2_deg,
-                all_interp_ra,all_interp_dec,all_interp_flux,all_interp_err,all_interp_badpix,N_dithers,
-                        psfs, psfX, psfY, ra_vec, dec_vec, planet_f, out_filename=None,
-                  load=True, linear_interp=True, mppool=None, aper_radius=0.5, rv=0,noise_prop2flux=False,
-                        psf_interp_list=None):
-    print("Make sure interpdata_regwvs was already done ")
-
+def cube_matchedfilter(flux_cube,fluxerr_cube,wv_sampling,ra_grid, dec_grid,planet_f, rv=0,out_filename=None,outlier_threshold=None):
     comp_spec = planet_f(wv_sampling * (1 - (rv) / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
     # comp_spec = comp_spec * dataobj0.aper_to_epsf_peak_f(wv_sampling)  # normalized to peak flux
     comp_spec = comp_spec * (wv_sampling * u.um) ** 2 / const.c  # from  Flambda to Fnu
     comp_spec = comp_spec.to(u.MJy).value
 
-    ra_grid, dec_grid = np.meshgrid(ra_vec, dec_vec)
-    r_grid = np.sqrt(ra_grid ** 2 + dec_grid ** 2)
-    PA_grid = np.arctan2(ra_grid, dec_grid) % 2 * np.pi
+    ra_vec = ra_grid[0,:]
+    dec_vec = dec_grid[:,0]
+    # r_grid = np.sqrt(ra_grid ** 2 + dec_grid ** 2)
+    # PA_grid = np.arctan2(ra_grid, dec_grid) % 2 * np.pi
 
-    flux_cube = np.zeros((np.size(wv_sampling),ra_grid.shape[0],ra_grid.shape[1])) +np.nan
-    fluxerr_cube = np.zeros((np.size(wv_sampling),ra_grid.shape[0],ra_grid.shape[1])) +np.nan
     flux_map = np.zeros(ra_grid.shape) +np.nan
     fluxerr_map = np.zeros(ra_grid.shape) +np.nan
 
-    print("create psf model")
-    # test  = np.where((wv_sampling>3.2465)*(wv_sampling<3.250))
-    # test  = np.where((wv_sampling>4.8)*(wv_sampling<4.85))
-    # debug_init = test[0][0]
-    # debug_end = test[0][-1]
-    # debug_init= 800
-    # debug_end = 900
-    debug_init = 0
-    debug_end = np.size(wv_sampling)
-    print(debug_init,debug_end)
-    if psf_interp_list is None:
-        psf_interp_list = []
-        if 0 or mppool is None:
-            for wv_id, wv in enumerate(wv_sampling):
-                if not (wv_id >= debug_init and wv_id < debug_end):
-                    psf_interp_list.append(0)
-                    continue
-                print(wv_id, wv, np.size(wv_sampling))
-                paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
-                out = _interp_psf(paras)
-                # plt.imshow(psfs[wv_id, :, :],origin="lower")
-                # plt.imshow(out(ra_grid,dec_grid),origin="lower")
-                # plt.show()
-                psf_interp_list.append(out)
-        else:
-            output_lists = mppool.map(_interp_psf, zip(itertools.repeat(linear_interp), psfs[debug_init:debug_end, :, :],
-                                                       psfX[debug_init:debug_end, :, :], psfY[debug_init:debug_end, :, :],
-                                                       np.arange(np.size(wv_sampling))[debug_init:debug_end],
-                                                       itertools.repeat(east2V2_deg)))
-            for k in range(debug_init):
-                psf_interp_list.append(0)
-            for wv_id, (wv, out) in enumerate(zip(wv_sampling, output_lists)):
-                print(wv_id, np.size(wv_sampling))
-                psf_interp_list.append(out)
-
-            # output_lists = mppool.map(_interp_psf,zip(itertools.repeat(linear_interp),psfs, psfX, psfY,np.arange(np.size(wv_sampling)),itertools.repeat(east2V2_deg)))
-            #
-            # for wv_id, (wv, out) in enumerate(zip(wv_sampling, output_lists)):
-            #     print(wv_id, np.size(wv_sampling))
-            #     psf_interp_list.append(out)
-
-        print("done creating psf model")
-
     for ra_id, ra in enumerate(ra_vec):
+        print("ra",ra)
         for dec_id, dec in enumerate(dec_vec):
-            print("ra, dec",ra, dec)
-            for wv_id, wv in enumerate(wv_sampling):
-                # print(wv)
-                if not (wv_id >= debug_init and wv_id < debug_end):
-                    continue
-                X = all_interp_ra[:, wv_id]
-                Y = all_interp_dec[:, wv_id]
-                Z = all_interp_flux[:, wv_id]
-                Zerr = all_interp_err[:, wv_id]
-                R = np.sqrt((X - ra) ** 2 + (Y - dec) ** 2)
-                Zerr_masking = Zerr/median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
-                where_finite = np.where(np.isfinite(all_interp_badpix[:, wv_id])*(Zerr_masking<5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
-                # print(np.size(where_finite[0]),30*N_dithers)
-                if np.size(where_finite[0])<30*N_dithers:
-                    continue
-                X = X[where_finite]
-                Y = Y[where_finite]
-                Z = Z[where_finite]
-                # Zp=Zp[where_finite]
-                Zerr = Zerr[where_finite]
-                M = psf_interp_list[wv_id](X - ra, Y - dec)
-                # print(wv,ra,dec)
-                # # plt.scatter(X,Y,s=psf_interp_list[wv_id](X,Y)/np.nanmedian(psf_interp_list[wv_id](X,Y)))#,s=sampled_psf[:,wv_id]/np.nanmedian(sampled_psf[:,wv_id])
-                # plt.figure(10)
-                # plt.subplot(1,2,1)
-                # plt.scatter(X,Y,s=M/np.nanmedian(M))#,s=sampled_psf[:,wv_id]/np.nanmedian(sampled_psf[:,wv_id])
-                # plt.subplot(1,2,2)
-                # plt.scatter(X,Y,s=Z/np.nanmedian(Z))
-                #
-                # plt.figure(11)
-                #
-                # # plt.scatter(np.sqrt(X**2+Y**2),M,label="M")
-                # plt.subplot(1,3,1)
-                # plt.scatter(np.sqrt(X**2+Y**2),Z,label="Z")
-                # # plt.subplot(1,3,2)
-                # # plt.scatter(np.sqrt(X**2+Y**2),Zp,label="Zp")
-                # plt.subplot(1,3,3)
-                # plt.scatter(np.sqrt(X**2+Y**2),Zerr,label="Zerr")
-                # plt.legend()
-                # plt.show()
-                # # exit()
+            # if ra <-1.0 or dec<-1.0:
+            #     continue
+            # if ra >-0.9 or dec>-0.9:
+            #     continue
 
-
-                deno = np.nansum(M ** 2 / Zerr ** 2)
-                mfflux = np.nansum(M * Z / Zerr ** 2) / deno
-                mffluxerr = 1 / np.sqrt(deno)
-
-                res = Z - mfflux * M
-                noise_factor = np.nanstd(res / Zerr)
-
-                flux_cube[wv_id, dec_id, ra_id] = mfflux
-                fluxerr_cube[wv_id, dec_id, ra_id] = mffluxerr*noise_factor
-
-            # where_finite = np.where(np.isfinite(all_interp_badpix))
-            # X = all_interp_ra[where_finite]
-            # Y = all_interp_dec
-
-            snr_vec = flux_cube[:, dec_id, ra_id] / fluxerr_cube[:, dec_id, ra_id]
-            snr_vec = snr_vec - generic_filter(snr_vec, np.nanmedian, size=50)
-            snr_vec = snr_vec / median_abs_deviation(snr_vec[np.where(np.isfinite(snr_vec))])
-            where_outliers = np.where(snr_vec > 10)
-            flux_cube[where_outliers[0], dec_id, ra_id] = np.nan
-            fluxerr_cube[where_outliers[0], dec_id, ra_id] = np.nan
+            if outlier_threshold is not None:
+                snr_vec = flux_cube[:, dec_id, ra_id] / fluxerr_cube[:, dec_id, ra_id]
+                snr_vec = (snr_vec - generic_filter(snr_vec, np.nanmedian, size=50)) / median_abs_deviation(snr_vec[np.where(np.isfinite(snr_vec))])
+                where_outliers = np.where(snr_vec > outlier_threshold)
+                flux_cube[where_outliers[0], dec_id, ra_id] = np.nan
+                fluxerr_cube[where_outliers[0], dec_id, ra_id] = np.nan
 
             deno = np.nansum(comp_spec** 2 / fluxerr_cube[:, dec_id, ra_id] ** 2)
             bbflux = np.nansum(comp_spec * flux_cube[:, dec_id, ra_id] / fluxerr_cube[:, dec_id, ra_id] ** 2) / deno
@@ -3096,9 +2995,7 @@ def matchedfilter_perwv(wv_sampling,east2V2_deg,
     snr_map = flux_map / fluxerr_map
     if out_filename is not None:
         hdulist = pyfits.HDUList()
-        hdulist.append(pyfits.PrimaryHDU(data=flux_cube))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_cube, name='FLUXERR_CUBE'))
-        hdulist.append(pyfits.ImageHDU(data=flux_map, name='FLUX'))
+        hdulist.append(pyfits.PrimaryHDU(data=flux_map))
         hdulist.append(pyfits.ImageHDU(data=fluxerr_map, name='FLUXERR'))
         hdulist.append(pyfits.ImageHDU(data=snr_map, name='SNR'))
         hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
@@ -3108,7 +3005,7 @@ def matchedfilter_perwv(wv_sampling,east2V2_deg,
         except TypeError:
             hdulist.writeto(out_filename, clobber=True)
         hdulist.close()
-    return (flux_cube,fluxerr_cube,snr_map, flux_map, fluxerr_map, ra_grid, dec_grid),psf_interp_list
+    return snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
 
 
 def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=None, spec_R_sampling=None):
@@ -3125,7 +3022,7 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=N
         for dataobj in dataobj_list:
             reload_ouputs = dataobj.reload_starspectrum_contnorm()
             if reload_ouputs is None:
-                reload_outputs = sdataobj.compute_starspectrum_contnorm(x_nodes= x_nodes, mppool= mypool)
+                reload_outputs = dataobj.compute_starspectrum_contnorm(x_nodes= x_nodes, mppool= mypool)
                 # spline_cont0[np.where(spline_cont0 / dataobj.noise < 5)] = np.nan
                 # spline_cont0 = copy(spline_cont0)
                 # spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
