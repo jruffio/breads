@@ -23,12 +23,12 @@ def process_chunk(args):
     """
     Process for grid_search()
     """
-    nonlin_paras_list, dataobj, fm_func, fm_paras, bounds = args
+    nonlin_paras_list, dataobj, fm_func, fm_paras, bounds,computeH0 = args
 
     for k, nonlin_paras in enumerate(zip(*nonlin_paras_list)):
         try:
         # if 1:
-            log_prob,log_prob_H0,rchi2,linparas,linparas_err = fitfm(nonlin_paras,dataobj,fm_func,fm_paras,bounds=bounds)
+            log_prob,log_prob_H0,rchi2,linparas,linparas_err = fitfm(nonlin_paras,dataobj,fm_func,fm_paras,bounds=bounds,computeH0=computeH0)
             N_linpara = np.size(linparas)
             if k == 0:
                 out_chunk = np.zeros((np.size(nonlin_paras_list[0]),1+1+1+2*N_linpara))+np.nan
@@ -47,7 +47,7 @@ def process_chunk(args):
         return None
 
 
-def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None):
+def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,computeH0=False):
     """
     Planet detection, CCF, or grid search routine.
     It fits for the non linear parameters of a forward model over a user-specified grid of values while marginalizing
@@ -84,7 +84,7 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None):
     para_grids = [np.ravel(pgrid) for pgrid in np.meshgrid(*para_vecs,indexing="ij")]
 
     if numthreads is None:
-        _out = process_chunk((para_grids,dataobj,fm_func,fm_paras,bounds))
+        _out = process_chunk((para_grids,dataobj,fm_func,fm_paras,bounds,computeH0))
         out_shape = [np.size(v) for v in para_vecs]+[_out.shape[-1],]
         out = np.reshape(_out,out_shape)
     else:
@@ -103,7 +103,8 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None):
                                                      itertools.repeat(dataobj),
                                                      itertools.repeat(fm_func),
                                                      itertools.repeat(fm_paras),
-                                                     itertools.repeat(bounds)))
+                                                     itertools.repeat(bounds),
+                                                     itertools.repeat(computeH0)))
 
         outarr_not_created = True
         for k,(indices, output_list) in enumerate(zip(indices_lists,output_lists)):

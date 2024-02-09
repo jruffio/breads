@@ -14,7 +14,7 @@ from breads.utils import get_spline_model
 
 # pos: (x,y) or fiber, position of the companion
 def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, star_func=None,radius_as=0.2, nodes=20,
-             badpixfraction=0.75,fix_parameters=None,Nrows_max=200,return_where_finite=False,detec_KLs=None,wvs_KLs_f=None,
+             badpixfraction=0.75,fix_parameters=None,Nrows_max=200,return_extra_outputs=False,detec_KLs=None,wvs_KLs_f=None,
              regularization=None,reg_mean_map=None,reg_std_map=None):
 
     """
@@ -49,6 +49,7 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
             vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
+    extra_outputs = {}
     # print(nonlin_paras)
     if fix_parameters is not None:
         _nonlin_paras = np.array(fix_parameters)
@@ -135,6 +136,12 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
     # dw = dwvs[where_trace_finite]
     x = ra_array[where_trace_finite]
     y = dec_array[where_trace_finite]
+    if return_extra_outputs:
+        extra_outputs["wvs"] = w
+        extra_outputs["ras"] = x
+        extra_outputs["decs"] = y
+        row_ids_im = np.tile(np.arange(ny)[:,None],(1,nx))
+        extra_outputs["rows"] = row_ids_im[where_trace_finite]
     # A = pixarea[where_trace_finite]
     comp_spec = comp_spec[where_trace_finite]
 
@@ -142,9 +149,9 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
     if type(nodes) is int:
         N_nodes = nodes
         min_wv, max_wv = np.nanmin(cubeobj.wavelengths),np.nanmax(cubeobj.wavelengths)
-        x_knots = np.linspace(min_wv, max_wv, N_nodes, endpoint=True).tolist()
+        x_nodes = np.linspace(min_wv, max_wv, N_nodes, endpoint=True).tolist()
     elif type(nodes) is list  or type(nodes) is np.ndarray :
-        x_knots = nodes
+        x_nodes = nodes
         if type(nodes[0]) is list or type(nodes[0]) is np.ndarray :
             N_nodes = np.sum([np.size(n) for n in nodes])
         else:
@@ -174,16 +181,18 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
         if regularization == "user":
             d_reg_speckles = np.zeros((Nrows_max, N_nodes))+np.nan
             s_reg_speckles = np.zeros((Nrows_max, N_nodes))+np.nan
+            wvs_reg_speckles = np.zeros((Nrows_max, N_nodes))+np.nan
+            rows_reg_speckles = np.tile((np.pad(rows_ids,(0,Nrows_max-np.size(rows_ids)),constant_values=0))[:,None],(1,N_nodes))
         if wvs_KLs_f is not None:
             M_KLs = np.zeros((Nd,Nrows_max, len(wvs_KLs_f)))
         if detec_KLs is not None:
             M_KLs_detec = np.zeros((Nd,Nrows_max, detec_KLs.shape[1]))
-        # M_spline = get_spline_model(x_knots, np.arange(nx), spline_degree=3)
+        # M_spline = get_spline_model(x_nodes, np.arange(nx), spline_degree=3)
         for _k in range(Nrows):
             where_finite_and_in_row = np.where(where_trace_finite[0]==rows_ids[_k])
             if np.size(where_finite_and_in_row[0]) == 0:
                 continue
-            M_spline = get_spline_model(x_knots, wvs[rows_ids[_k], :], spline_degree=3)
+            M_spline = get_spline_model(x_nodes, wvs[rows_ids[_k], :], spline_degree=3)
             selec_M_spline = M_spline[where_trace_finite[1][where_finite_and_in_row],:]
             where_del_col = np.where(np.nanmax(np.abs(selec_M_spline),axis=0)<min_spline_ampl)#0.01#0.00001
             if np.size(where_del_col[0]) == selec_M_spline.shape[1]:
@@ -196,6 +205,9 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
                 d_reg_speckles[_k,where_del_col[0]] = np.nan
                 s_reg_speckles[_k,:] = reg_std_map[rows_ids[_k],:]
                 s_reg_speckles[_k,where_del_col[0]] = np.nan
+                wvs_reg_speckles[_k,:] = x_nodes
+                wvs_reg_speckles[_k,where_del_col[0]] = np.nan
+
 
             if wvs_KLs_f is not None:
                 for KLid,KL_f in enumerate(wvs_KLs_f):
@@ -245,7 +257,6 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
             M = np.concatenate([M,M_KLs_detec], axis=1)
 
 
-        extra_outputs = {}
         if regularization == "default":
             N_speckles = M_speckles.shape[1]
             s_reg = np.array([np.nan])
@@ -262,6 +273,10 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
                 s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_KLs_detec.shape[1])])
                 d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_KLs_detec.shape[1])])
             extra_outputs["regularization"] = (d_reg,s_reg)
+            if return_extra_outputs:
+                raise Exception("default reg broken. need to add extra outputs")
+                extra_outputs["regularization_wvs"] = wvs_reg
+                extra_outputs["regularization_rows"] = rows_reg
         elif regularization == "user":
             # s_reg_speckles = np.ravel(reg_std_map[rows_ids,:]*rows_ids_mask[:,None]) #[np.where(np.isfinite(rows_ids_mask))]
             # s_reg_speckles = np.concatenate([s_reg_speckles,np.nan+np.zeros(Nrows_max*N_nodes-np.size(s_reg_speckles))])
@@ -286,25 +301,42 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
             #     plt.plot(w,d[])
             s_reg_speckles = np.ravel(s_reg_speckles)
             d_reg_speckles = np.ravel(d_reg_speckles)
+            wvs_reg_speckles = np.ravel(wvs_reg_speckles)
+            rows_reg_speckles = np.ravel(rows_reg_speckles)
 
             s_reg = np.array([np.nan])
             d_reg = np.array([np.nan])
+            wvs_reg = np.array([np.nan])
+            rows_reg = np.array([np.nan])
             # s_reg = np.array([1e-16])
             # d_reg = np.array([0])
             s_reg = np.concatenate([s_reg, s_reg_speckles])
             d_reg = np.concatenate([d_reg, d_reg_speckles]) #
+            wvs_reg = np.concatenate([wvs_reg, wvs_reg_speckles]) #
+            rows_reg = np.concatenate([rows_reg, rows_reg_speckles]) #
             if fitback:
-                s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_background.shape[1])])
-                d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_background.shape[1])])
+                filler = np.nan+np.zeros(M_background.shape[1])
+                s_reg = np.concatenate([s_reg,filler ])
+                d_reg = np.concatenate([d_reg, filler])
+                wvs_reg = np.concatenate([wvs_reg, filler])
+                rows_reg = np.concatenate([rows_reg, filler]) #
             if wvs_KLs_f is not None:
-                s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_KLs.shape[1])])
-                d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_KLs.shape[1])])
+                filler = np.nan+np.zeros(M_KLs.shape[1])
+                s_reg = np.concatenate([s_reg, filler])
+                d_reg = np.concatenate([d_reg, filler])
+                wvs_reg = np.concatenate([wvs_reg, filler])
+                rows_reg = np.concatenate([rows_reg, filler]) #
             if detec_KLs is not None:
-                s_reg = np.concatenate([s_reg, np.nan+np.zeros(M_KLs_detec.shape[1])])
-                d_reg = np.concatenate([d_reg, np.nan+np.zeros(M_KLs_detec.shape[1])])
+                filler = np.nan+np.zeros(M_KLs_detec.shape[1])
+                s_reg = np.concatenate([s_reg, filler])
+                d_reg = np.concatenate([d_reg, filler])
+                wvs_reg = np.concatenate([wvs_reg, filler])
+                rows_reg = np.concatenate([rows_reg, filler]) #
             extra_outputs["regularization"] = (d_reg,s_reg)
+            extra_outputs["regularization_wvs"] = wvs_reg
+            extra_outputs["regularization_rows"] = rows_reg
 
-        if return_where_finite:
+        if return_extra_outputs:
             extra_outputs["where_trace_finite"] = where_trace_finite
 
         if len(extra_outputs) >= 1:
