@@ -53,7 +53,7 @@ from scipy.ndimage import generic_filter
 
 
 class JWSTNirspec_cal(Instrument):
-    def __init__(self, filename=None, crds_dir=None, utils_dir=None, save_utils=True,
+    def __init__(self, filename=None, crds_dir=None, utils_dir=None, save_utils=True, FixedSlit=False,
                  load_utils=True,
                  preproc_task_list = None,
                  verbose=True):
@@ -71,6 +71,10 @@ class JWSTNirspec_cal(Instrument):
         verbose
         """
         super().__init__('jwstnirspec_cal', verbose=verbose)
+        
+        #high level decision flag
+        self.FixedSlit = FixedSlit
+        
         if filename is None:
             warning_text = "No data file provided. " + \
                            "Please manually add data or use JWSTNirspec.read_data_file()"
@@ -318,7 +322,9 @@ class JWSTNirspec_cal(Instrument):
         host_ra_deg = host_coord.ra.deg
         host_dec_deg = host_coord.dec.deg
 
-        calfile = jwst.datamodels.open(self.filename)
+        hdulist = pyfits.open(self.filename) #open file
+        shape = hdulist[1].data.shape #obtain generic shape of data
+        calfile = jwst.datamodels.open(hdulist) #save time opening by passing the already opened file
         photom_dataset = DataSet(calfile)
 
         ## Determine pixel areas for each pixel, retrieved from a CRDS reference file
@@ -327,24 +333,34 @@ class JWSTNirspec_cal(Instrument):
         # Load the pixel area table for the IFU slices
         area_model = datamodels.open(area_fname)
         area_data = area_model.area_table
-
+        
         # Compute 2D wavelength and pixel area arrays for the whole image
-        wave2d, area2d, dqmap = photom_dataset.calc_nrs_ifu_sens2d(area_data)
-        area2d[np.where(area2d == 1)] = np.nan
-
-        ## Use WCS to compute RA, Dec for each pixel
+        # Use WCS to compute RA, Dec for each pixel
         # TODO generalize this to work in ifualign space as well
-        wcses = jwst.assign_wcs.nrs_ifu_wcs(calfile)  # returns a list of 30 WCSes, one per slice. This is slow.
+        
+        if self.FixedSlit:
+            print('Using FixedSlit methods...')
+            pxarea_as2 = calfile._asdf._tree['slits'][0]['meta']['photometry']['pixelarea_arcsecsq'] #needs to be revisited
+            area2d = np.ones(shape)*pxarea_as2 #constant area
+            
+            wcs = calfile._asdf._tree['slits'][0]['meta']['wcs'] #single wcs
+            wcses = []
+            wcses.append(wcs) 
+            
+            ra_array = np.zeros(shape) + np.nan
+            dec_array = np.zeros(shape) + np.nan
+            wavelen_array = np.zeros(shape) + np.nan
+        else:
+            wave2d, area2d, dqmap = photom_dataset.calc_nrs_ifu_sens2d(area_data)
+            area2d[np.where(area2d == 1)] = np.nan
+            wcses = jwst.assign_wcs.nrs_ifu_wcs(calfile)  # returns a list of 30 WCSes, one per slice. This is slow.
 
-        ra_array = np.zeros((2048, 2048)) + np.nan
-        dec_array = np.zeros((2048, 2048)) + np.nan
-        wavelen_array = np.zeros((2048, 2048)) + np.nan
+            #change this hardcoding?
+            ra_array = np.zeros((2048, 2048)) + np.nan
+            dec_array = np.zeros((2048, 2048)) + np.nan
+            wavelen_array = np.zeros((2048, 2048)) + np.nan
 
-        slicer_x_array = np.zeros((2048, 2048)) + np.nan
-        slicer_y_array = np.zeros((2048, 2048)) + np.nan
-        slicer_w_array = np.zeros((2048, 2048)) + np.nan
-
-        for i in range(30):
+        for i in range(len(wcses)):
             print(f"Computing coords for slice {i}")
 
             # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
@@ -366,15 +382,6 @@ class JWSTNirspec_cal(Instrument):
             ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
             dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
             wavelen_array[ymin:ymax, xmin:xmax] = speccoord
-
-            # Transform all those pixels to the slicer plane
-            slice_transform = wcses[i].get_transform('detector', 'slicer')
-
-            sx, sy, sw = slice_transform(x, y)
-
-            slicer_x_array[ymin:ymax, xmin:xmax] = sx
-            slicer_y_array[ymin:ymax, xmin:xmax] = sy
-            slicer_w_array[ymin:ymax, xmin:xmax] = sw
 
         # # print(ra_array)
         # print(host_ra_deg)
@@ -1600,7 +1607,13 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
     new_res = np.zeros(image.shape) + np.nan
     new_spline_paras = np.zeros((image.shape[0],np.size(x_nodes)))
 
-    if mypool is None:
+    #if chunk is too small, don't parallelize
+    numthreads = mypool._processes
+    chunk_size = image.shape[0] // (3 * numthreads)
+    if chunk_size == 0:
+        parallel_flag = False
+        
+    if (mypool is None) or (parallel_flag==False):
         paras = new_image, im_wvs, new_noise, new_badpixs, x_nodes, star_model, threshold, star_sub_mode,regularization,reg_mean_map,reg_std_map
         outputs = _task_normrows(paras)
         new_image, new_noise, new_badpixs, new_res,new_spline_paras = outputs
@@ -2478,6 +2491,13 @@ def fitpsf(dataobj_list, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf,
     # exit()
     all_interp_flux = all_interp_flux/all_interp_area2d*psf_spaxel_area
     all_interp_err = all_interp_err/all_interp_area2d*psf_spaxel_area
+    
+    # temporary saves
+    all_interp_path = '/home/amadurowicz/51_Eri_b/'
+    np.save(all_interp_path+'all_interp_ra.npy',all_interp_ra)
+    np.save(all_interp_path+'all_interp_dec.npy',all_interp_dec)
+    np.save(all_interp_path+'all_interp_flux.npy',all_interp_flux)
+    #
 
     all_interp_psfmodel = np.zeros(all_interp_flux.shape) + np.nan
     all_interp_psfsub = np.zeros(all_interp_flux.shape) + np.nan
@@ -3103,19 +3123,14 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=N
         normalized_im_list = []
         normalized_err_list = []
         for dataobj in dataobj_list:
-            if 1 and load_utils and len(glob(dataobj.starspec_contnorm_filename)):
-                with pyfits.open(dataobj.starspec_contnorm_filename) as hdulist:
-                    spline_cont0 = hdulist[3].data
-            else:
-                spline_cont0, _, new_badpixs, new_res,_ = normalize_rows(dataobj.data, dataobj.wavelengths,
-                                                                       noise=dataobj.noise, badpixs=dataobj.bad_pixels,
-                                                                       nodes=dataobj.N_nodes, mypool=mppool,
-                                                                       use_set_nans=False)
-
-                spline_cont0[np.where(spline_cont0 / dataobj.noise < 5)] = np.nan
-                spline_cont0 = copy(spline_cont0)
-                spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
-                spline_cont0[np.where(np.isnan(dataobj.bad_pixels))] = np.nan
+            reload_ouputs = dataobj.reload_starspectrum_contnorm()
+            if reload_ouputs is None:
+                reload_outputs = sdataobj.compute_starspectrum_contnorm(x_nodes= x_nodes, mppool= mypool)
+                # spline_cont0[np.where(spline_cont0 / dataobj.noise < 5)] = np.nan
+                # spline_cont0 = copy(spline_cont0)
+                # spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
+                # spline_cont0[np.where(np.isnan(dataobj.bad_pixels))] = np.nan
+            new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes = reload_ouputs
             normalized_im = dataobj.data / spline_cont0
             normalized_err = dataobj.noise / spline_cont0
             wvs_list.extend(dataobj.wavelengths.flatten())
