@@ -8,7 +8,7 @@ from copy import copy
 __all__ =  ('fitfm', 'log_prob', 'combined_log_prob', 'nlog_prob')
 
 def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = None,
-          residuals=None,residuals_H0=None,noise4residuals=None):
+          residuals=None,residuals_H0=None,noise4residuals=None,scale_noise=True,marginalize_noise_scaling=False):
     """
     Fit a forard model to data returning probabilities and best fit linear parameters.
 
@@ -30,26 +30,26 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
     Returns:
         log_prob: Probability of the model marginalized over linear parameters.
         log_prob_H0: Probability of the model without the planet marginalized over linear parameters.
-        rchi2: noise scaling factor
+        s2: noise scaling factor
         linparas: Best fit linear parameters
         linparas_err: Uncertainties of best fit linear parameters
     """
     fm_out = fm_func(nonlin_paras,dataobj,**fm_paras)
 
     if len(fm_out) == 3:
-        d, M, s = fm_out
+        d_no_reg, M_no_reg, s_no_reg = fm_out
     if len(fm_out) == 4:
-        d, M, s,extra_outputs = fm_out
+        d_no_reg, M_no_reg, s_no_reg,extra_outputs = fm_out
 
-    N_linpara = M.shape[1]
-    N_data = np.size(d)
+    N_linpara = M_no_reg.shape[1]
+    N_data = np.size(d_no_reg)
     linparas = np.ones(N_linpara)+np.nan
     linparas_err = np.ones(N_linpara)+np.nan
     if N_data == 0:
         log_prob = -np.inf
         log_prob_H0 = -np.inf
-        rchi2 = np.inf
-        return log_prob, log_prob_H0, rchi2, linparas, linparas_err
+        s2 = np.inf
+        return log_prob, log_prob_H0, s2, linparas, linparas_err
 
     if N_linpara == 1:
         computeH0 = False
@@ -59,12 +59,22 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
     else:
         _bounds = (copy(bounds[0]),copy(bounds[1]))
 
-    validpara = np.where(np.nanmax(np.abs(M),axis=0)!=0)
-    _bounds = (np.array(_bounds[0])[validpara[0]],np.array(_bounds[1])[validpara[0]])
-    M = M[:,validpara[0]]
+    validpara = np.where(np.nanmax(np.abs(M_no_reg),axis=0)!=0)
 
-    d = d / s
-    M = M / s[:, None]
+    if 0 not in validpara[0]:
+        log_prob = -np.inf
+        log_prob_H0 = -np.inf
+        s2 = np.inf
+        return log_prob, log_prob_H0, s2, linparas, linparas_err
+
+    _bounds = (np.array(_bounds[0])[validpara[0]],np.array(_bounds[1])[validpara[0]])
+    M_no_reg = M_no_reg[:,validpara[0]]
+
+    d_no_reg = d_no_reg / s_no_reg
+    M_no_reg = M_no_reg / s_no_reg [:, None]
+
+    if "regularization" in extra_outputs.keys() and marginalize_noise_scaling:
+        raise Exception("The maths for the marginalization of the noise scaling factor is not compatible with the regularization. Set marginalize_noise_scaling = False")
 
     if len(fm_out) == 4:
         if "regularization" in extra_outputs.keys():
@@ -74,41 +84,67 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
             where_reg = np.where(np.isfinite(s_reg))
             s_reg = s_reg[where_reg]
             d_reg = d_reg[where_reg]
-            M_reg = np.zeros((np.size(where_reg[0]),M.shape[1]))
+            M_reg = np.zeros((np.size(where_reg[0]),M_no_reg.shape[1]))
             M_reg[np.arange(np.size(where_reg[0])),where_reg[0]] = 1/s_reg
-            M = np.concatenate([M,M_reg],axis=0)
-            d = np.concatenate([d,d_reg/s_reg])
-            s = np.concatenate([s,s_reg])
+            M = np.concatenate([M_no_reg,M_reg],axis=0)
+            d = np.concatenate([d_no_reg,d_reg/s_reg])
+            s = np.concatenate([s_no_reg,s_reg])
 
+            if scale_noise:
+                paras = lsq_linear(M, d, bounds=_bounds).x
+                m = np.dot(M, paras)
+                r = d - m
+                rchi2 = np.nansum(r[0:N_data] ** 2) / N_data
+                noise_scaling = np.sqrt(rchi2)
 
-    if 0 not in validpara[0]:
-        log_prob = -np.inf
-        log_prob_H0 = -np.inf
-        rchi2 = np.inf
-        return log_prob, log_prob_H0, rchi2, linparas, linparas_err
+                M = np.concatenate([M_no_reg/noise_scaling,M_reg],axis=0)
+                d = np.concatenate([d_no_reg/noise_scaling,d_reg/s_reg])
+                s = np.concatenate([s_no_reg*noise_scaling,s_reg])
+
+            # noise scaling is done, set to unity for later as no more scaling is necessary
+            noise_scaling = 1
+        else:
+            M = M_no_reg
+            d = d_no_reg
+            s = s_no_reg
     else:
-        logdet_Sigma = np.sum(2 * np.log(s))
-        paras = lsq_linear(M, d,bounds=_bounds).x
-        # paras = lsq_linear(M, d).x
+        M = M_no_reg
+        d = d_no_reg
+        s = s_no_reg
 
-        m = np.dot(M, paras)
-        r = d  - m
-        chi2 = np.nansum(r**2)
-        # rchi2 = chi2 / np.size(r)
-        rchi2 = np.nansum(r[0:N_data]**2) / N_data
+    logdet_Sigma = np.sum(2 * np.log(s))
+    paras = lsq_linear(M, d,bounds=_bounds).x
+    # paras = lsq_linear(M, d).x
 
-        if residuals is not None:
-            residuals[0:np.size(s)] = r
-        if noise4residuals is not None:
-            noise4residuals[0:np.size(s)] = s
-        # plt.figure()
-        # for col in M.T:
-        #     plt.plot(col / np.nanmean(col))
-        # plt.show()
+    m = np.dot(M, paras)
+    r = d  - m
+    chi2 = np.nansum(r**2)
+    # s2 = chi2 / np.size(r)
 
+    if residuals is not None:
+        residuals[0:np.size(s)] = r
+    if noise4residuals is not None:
+        noise4residuals[0:np.size(s)] = s
+    # plt.figure()
+    # for col in M.T:
+    #     plt.plot(col / np.nanmean(col))
+    # plt.show()
+
+    # Section to compute error bars of linear parameters
+    if 1:
         MTM = np.dot(M.T, M)
         try:
-            covphi = rchi2 * np.linalg.inv(MTM)
+            iMTM = np.linalg.inv(MTM)
+            if "regularization" in extra_outputs.keys():
+                MTM_noreg = np.dot(M_no_reg.T,M_no_reg)
+                covphi = np.dot(iMTM,np.dot(MTM_noreg,iMTM.T))
+            else:
+                rchi2 = np.nansum(r ** 2) / N_data
+                if scale_noise:
+                    noise_scaling = np.sqrt(rchi2)
+                else:
+                    noise_scaling = 1
+                covphi = noise_scaling * iMTM
             # covphi = np.linalg.inv(MTM)
             slogdet_icovphi0 = np.linalg.slogdet(MTM)
         except:
@@ -117,46 +153,61 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
             rchi2 = np.inf
             return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
-        # print("log_prob",logdet_Sigma,slogdet_icovphi0[1],(N_data - N_linpara + 2 - 1),chi2)
-        # print("slogdet_icovphi0",slogdet_icovphi0)
-        log_prob = -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0[1] - (N_data - M.shape[1] + 2 - 1) / 2 * np.log(chi2) + \
-                    loggamma((N_data - M.shape[1] + 2 - 1) / 2) + (M.shape[1] - N_data) / 2 * np.log(2 * np.pi)
-        diagcovphi = copy(np.diag(covphi))
-        diagcovphi[np.where(diagcovphi<0.0)] = np.nan
-        paras_err = np.sqrt(diagcovphi)
+    # print("log_prob",logdet_Sigma,slogdet_icovphi0[1],(N_data - N_linpara + 2 - 1),chi2)
+    # print("slogdet_icovphi0",slogdet_icovphi0)
 
-        if computeH0:
-            paras_H0 = lsq_linear(M[:,1::], d,bounds=(np.array(_bounds[0])[1::],np.array(_bounds[1])[1::])).x
-            # paras_H0 = lsq_linear(M[:,1::], d).x
-            m_H0 = np.dot(M[:,1::] , paras_H0)
-            r_H0 = d  - m_H0
-            chi2_H0 = np.nansum(r_H0**2)
-            slogdet_icovphi0_H0 = np.linalg.slogdet(np.dot(M[:,1::].T, M[:,1::]))
-            #todo check the maths when N_linpara is different from M.shape[1]. E.g. at the edge of the FOV
-            # log_prob_H0 = -0.5*logdet_Sigma - 0.5*slogdet_icovphi0_H0[1] - (N_data-1+N_linpara-1-1)/2*np.log(chi2_H0)+ \
-            #               loggamma((N_data-1+(N_linpara-1)-1)/2)+((N_linpara-1)-N_data)/2*np.log(2*np.pi)
+    # JB: the N_data is kinda wrong I think because is N_data the size of d or the number of pixels on the detector?
+    # But this is just a constant in the log probability, so as long as we don't use the absolute likelihood values,
+    # we are fine
+    if marginalize_noise_scaling:
+        log_prob = (M.shape[1] - N_data) / 2 * np.log(2 * np.pi) -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0[1] \
+                   - ((N_data-M.shape[1]+2-1)/2) * np.log(chi2) + loggamma((N_data - M.shape[1] + 2 - 1) / 2)
+    else:
+        # log(Eq 36) in Ruffio+2019:
+        log_prob = ((M.shape[1]-N_data)/2)*np.log(2*np.pi) -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0[1] \
+                   -((N_data-M.shape[1])/2) * np.log(noise_scaling**2) -0.5*chi2/noise_scaling**2
+    diagcovphi = copy(np.diag(covphi))
+    diagcovphi[np.where(diagcovphi<0.0)] = np.nan
+    paras_err = np.sqrt(diagcovphi)
+
+    if computeH0:
+        paras_H0 = lsq_linear(M[:,1::], d,bounds=(np.array(_bounds[0])[1::],np.array(_bounds[1])[1::])).x
+        # paras_H0 = lsq_linear(M[:,1::], d).x
+        m_H0 = np.dot(M[:,1::] , paras_H0)
+        r_H0 = d  - m_H0
+        chi2_H0 = np.nansum(r_H0**2)
+        # rchi2_H0 = np.nansum(r_H0[0:N_data]**2) / N_data
+        slogdet_icovphi0_H0 = np.linalg.slogdet(np.dot(M[:,1::].T, M[:,1::]))
+        #todo check the maths when N_linpara is different from M.shape[1]. E.g. at the edge of the FOV
+        # log_prob_H0 = -0.5*logdet_Sigma - 0.5*slogdet_icovphi0_H0[1] - (N_data-1+N_linpara-1-1)/2*np.log(chi2_H0)+ \
+        #               loggamma((N_data-1+(N_linpara-1)-1)/2)+((N_linpara-1)-N_data)/2*np.log(2*np.pi)
+        if marginalize_noise_scaling:
             log_prob_H0 = -0.5*logdet_Sigma - 0.5*slogdet_icovphi0_H0[1] - (N_data+(M.shape[1]-1)+2-1)/2*np.log(chi2_H0)+ \
-                          loggamma((N_data-(M.shape[1]-1)+2-1)/2)+((M.shape[1]-1)-N_data)/2*np.log(2*np.pi)
-            if residuals_H0 is not None:
-                residuals_H0[0:np.size(s)] = r_H0
+                      loggamma((N_data-(M.shape[1]-1)+2-1)/2)+((M.shape[1]-1)-N_data)/2*np.log(2*np.pi)
         else:
-            log_prob_H0 = np.nan
+            # log(Eq 36) in Ruffio+2019:
+            log_prob_H0 = ((M.shape[1]-N_data)/2)*np.log(2*np.pi) -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0_H0[1] \
+                       -((N_data-M.shape[1])/2) * np.log(noise_scaling**2) -0.5*chi2_H0/noise_scaling**2
+        if residuals_H0 is not None:
+            residuals_H0[0:np.size(s)] = r_H0
+    else:
+        log_prob_H0 = np.nan
 
-        linparas[validpara] = paras
-        linparas_err[validpara] = paras_err
+    linparas[validpara] = paras
+    linparas_err[validpara] = paras_err
 
-        # import matplotlib.pyplot as plt
-        # print(log_prob, log_prob_H0, rchi2)
-        # print(linparas)
-        # print(linparas_err)
-        # plt.plot(d,label="d")
-        # plt.plot(m,label="m")
-        # plt.plot(r,label="r")
-        # plt.legend()
-        # plt.show()
+    # import matplotlib.pyplot as plt
+    # print(log_prob, log_prob_H0, rchi2)
+    # print(linparas)
+    # print(linparas_err)
+    # plt.plot(d,label="d")
+    # plt.plot(m,label="m")
+    # plt.plot(r,label="r")
+    # plt.legend()
+    # plt.show()
 
 
-        return log_prob, log_prob_H0, rchi2, linparas, linparas_err
+    return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
 def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=None):
     """

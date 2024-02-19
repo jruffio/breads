@@ -419,14 +419,19 @@ class JWSTNirspec_cal(Instrument):
         self.dra_as_array, self.ddec_as_array, self.area2d = dra_as_array, ddec_as_array, area2d
         return wavelen_array, dra_as_array, ddec_as_array, area2d
 
-    def convert_MJy_per_sr_to_MJy(self, save_utils=False):
-        if self.data_unit != "MJy/sr":
-            raise Exception("Data should in MJy/sr to be converted from MJy/sr to MJy")
-        arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
-        self.data = self.data*(self.area2d*arcsec2_to_sr)
-        self.noise = self.noise*(self.area2d*arcsec2_to_sr)
-        self.data_unit = "MJy"  # MJy/sr or MJy
-        return self.data,self.noise
+    def convert_MJy_per_sr_to_MJy(self, save_utils=False, data_in_MJy_per_sr=None):
+        if data_in_MJy_per_sr is not None:
+            arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
+            return data_in_MJy_per_sr*(self.area2d*arcsec2_to_sr)
+        else:
+            if self.data_unit != "MJy/sr":
+                raise Exception("Data should in MJy/sr to be converted from MJy/sr to MJy")
+
+            arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
+            self.data = self.data*(self.area2d*arcsec2_to_sr)
+            self.noise = self.noise*(self.area2d*arcsec2_to_sr)
+            self.data_unit = "MJy"  # MJy/sr or MJy
+            return self.data,self.noise
 
     def apply_coords_offset(self, save_utils=False,coords_offset=None):
         """ Offset coordinates in the class:
@@ -2580,6 +2585,7 @@ def fitpsf(dataobj_list, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf,
                            "INIT_RA": init_paras[0], "INIT_DEC": init_paras[1]}
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(data=bestfit_coords, header=pyfits.Header(cards=wpsfsfit_header)))
+        hdulist.append(pyfits.ImageHDU(data=wv_sampling))
         # hdulist.append(pyfits.PrimaryHDU(data=(all_interp_psfsub/psf_spaxel_area)*all_interp_area2d))
         # hdulist.append(pyfits.ImageHDU(data=all_interp_psfmodel, name='PSFMODEL'))
         # hdulist.append(pyfits.ImageHDU(data=all_interp_err, name='ERR'))
