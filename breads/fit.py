@@ -8,7 +8,8 @@ from copy import copy
 __all__ =  ('fitfm', 'log_prob', 'combined_log_prob', 'nlog_prob')
 
 def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = None,
-          residuals=None,residuals_H0=None,noise4residuals=None,scale_noise=True,marginalize_noise_scaling=False):
+          residuals=None,residuals_H0=None,noise4residuals=None,scale_noise=True,marginalize_noise_scaling=False,
+          debug=False):
     """
     Fit a forard model to data returning probabilities and best fit linear parameters.
 
@@ -73,10 +74,10 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
     d_no_reg = d_no_reg / s_no_reg
     M_no_reg = M_no_reg / s_no_reg [:, None]
 
-    if "regularization" in extra_outputs.keys() and marginalize_noise_scaling:
-        raise Exception("The maths for the marginalization of the noise scaling factor is not compatible with the regularization. Set marginalize_noise_scaling = False")
-
     if len(fm_out) == 4:
+        if "regularization" in extra_outputs.keys() and marginalize_noise_scaling:
+            raise Exception("The maths for the marginalization of the noise scaling factor is not compatible with the regularization. Set marginalize_noise_scaling = False")
+
         if "regularization" in extra_outputs.keys():
             d_reg,s_reg = extra_outputs["regularization"]
             s_reg = s_reg[validpara]
@@ -131,27 +132,102 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
     # plt.show()
 
     # Section to compute error bars of linear parameters
-    if 1:
-        MTM = np.dot(M.T, M)
-        try:
-            iMTM = np.linalg.inv(MTM)
-            if "regularization" in extra_outputs.keys():
-                MTM_noreg = np.dot(M_no_reg.T,M_no_reg)
-                covphi = np.dot(iMTM,np.dot(MTM_noreg,iMTM.T))
+    MTM = np.dot(M.T, M)
+    try:
+        iMTM = np.linalg.inv(MTM)
+        if len(fm_out) == 4 and "regularization" in extra_outputs.keys():
+            if not scale_noise:
+                rchi2 = np.nansum(r[0:N_data] ** 2) / N_data
+            MTM_noreg = np.dot(M_no_reg.T,M_no_reg)
+            covphi = np.dot(iMTM,np.dot(MTM_noreg,iMTM.T))
+            # The formula below assumes that we are using the determinant of the inverse covariance
+            # That's why we are adding the minus sign
+            logdet_icovphi0 = -np.sum(np.log(np.diag(covphi)))
+
+
+            if debug:
+                pass
+                slogdet_covphi0 = np.linalg.slogdet(covphi)
+                logdet_icovphi01 = -slogdet_covphi0[1]
+
+                logdet_MTM = np.linalg.slogdet(MTM)[1]
+                logdet_MTM_noreg = np.linalg.slogdet(MTM_noreg)[1]
+                logdet_icovphi02 = -(-2*logdet_MTM+logdet_MTM_noreg)
+                print("logdet_icovphi02,logdet_icovphi0",logdet_icovphi01,logdet_icovphi02,-np.sum(np.log(np.diag(covphi))))
+                plt.plot(np.diag(covphi))
+                plt.show()
+                exit()
+                # min_spline_ampl = 0.02 no PCs
+                #66385.44310047594 66385.0385737088 min_spline_ampl = 0.02
+                #67934.07623968158 67943.01648052462 min_spline_ampl = 0.0002
+                # print(np.linalg.cond(MTM),np.linalg.cond(MTM_noreg))
+                #193404.75080185774 3.059098264262221e+18  # min_spline_ampl = 0.02
+                #193405.9507460225 1.1014045133611385e+19 # min_spline_ampl = 0.001
+                #193405.9576081098 3.8402652368209265e+19 # min_spline_ampl = 0.00001
+                # exit()
+                # print(np.linalg.slogdet(MTM))
+                # print(np.linalg.slogdet(MTM_noreg))
+                # plt.figure(1)
+                # eigenvalues,eigenvectors = np.linalg.eig(MTM)
+                # plt.plot(eigenvalues)
+                # plt.figure(2)
+                # eigenvalues,eigenvectors = np.linalg.eig(MTM_noreg)
+                # plt.plot(eigenvalues)
+                # plt.figure(3)
+                # plt.subplot(1,3,1)
+                # plt.imshow(MTM)
+                # plt.subplot(1,3,2)
+                # plt.imshow(MTM_noreg)
+                # plt.subplot(1,3,3)
+                # plt.imshow(MTM-MTM_noreg)
+                # plt.figure(4)
+                # plt.subplot(1,3,1)
+                # plt.imshow(M,aspect="auto")
+                # plt.subplot(1,3,2)
+                # plt.imshow(M_no_reg,aspect="auto")
+                # plt.subplot(1,3,3)
+                # plt.imshow(M_reg,aspect="auto")
+                #
+                # plt.figure(5)
+                # plt.plot(np.log10(np.max(M,axis=1)),label="M")
+                # plt.plot(np.log10(np.max(M_no_reg,axis=1)),label="M_no_reg")
+                # plt.plot(np.log10(np.max(M_reg,axis=1)),label="M_reg")
+                # plt.legend()
+                #
+                #
+                # plt.figure(6)
+                # plt.plot(np.log10(np.max(M,axis=0)),label="M")
+                # plt.plot(np.log10(np.max(M_no_reg,axis=0)),label="M_no_reg")
+                # plt.plot(np.log10(np.max(M_reg,axis=0)),label="M_reg")
+                # plt.legend()
+                # plt.show()
+                # exit()
+
+        else:
+            rchi2 = np.nansum(r ** 2) / N_data
+            if scale_noise:
+                noise_scaling = np.sqrt(rchi2)
             else:
-                rchi2 = np.nansum(r ** 2) / N_data
-                if scale_noise:
-                    noise_scaling = np.sqrt(rchi2)
-                else:
-                    noise_scaling = 1
-                covphi = noise_scaling * iMTM
+                noise_scaling = 1
+            covphi = noise_scaling * iMTM
             # covphi = np.linalg.inv(MTM)
             slogdet_icovphi0 = np.linalg.slogdet(MTM)
-        except:
-            log_prob = -np.inf
-            log_prob_H0 = -np.inf
-            rchi2 = np.inf
-            return log_prob, log_prob_H0, rchi2, linparas, linparas_err
+            logdet_icovphi0 = slogdet_icovphi0[1]
+            if debug:
+                plt.plot(np.diag(covphi))
+                plt.show()
+                print("logdet_icovphi02,logdet_icovphi0",logdet_icovphi0,-np.sum(np.log(np.diag(covphi))))
+                exit()
+    except Exception as e:
+        print("Exiting covariance section in fitfm() with error:")
+        print(e)
+        log_prob = -np.inf
+        log_prob_H0 = -np.inf
+        rchi2 = np.inf
+        return log_prob, log_prob_H0, rchi2, linparas, linparas_err
+    diagcovphi = copy(np.diag(covphi))
+    diagcovphi[np.where(diagcovphi<0.0)] = np.nan
+    paras_err = np.sqrt(diagcovphi)
 
     # print("log_prob",logdet_Sigma,slogdet_icovphi0[1],(N_data - N_linpara + 2 - 1),chi2)
     # print("slogdet_icovphi0",slogdet_icovphi0)
@@ -160,15 +236,13 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
     # But this is just a constant in the log probability, so as long as we don't use the absolute likelihood values,
     # we are fine
     if marginalize_noise_scaling:
-        log_prob = (M.shape[1] - N_data) / 2 * np.log(2 * np.pi) -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0[1] \
+        log_prob = (M.shape[1] - N_data) / 2 * np.log(2 * np.pi) -0.5 * logdet_Sigma - 0.5 * logdet_icovphi0 \
                    - ((N_data-M.shape[1]+2-1)/2) * np.log(chi2) + loggamma((N_data - M.shape[1] + 2 - 1) / 2)
     else:
         # log(Eq 36) in Ruffio+2019:
-        log_prob = ((M.shape[1]-N_data)/2)*np.log(2*np.pi) -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0[1] \
+        log_prob = ((M.shape[1]-N_data)/2)*np.log(2*np.pi) -0.5 * logdet_Sigma - 0.5 * logdet_icovphi0 \
                    -((N_data-M.shape[1])/2) * np.log(noise_scaling**2) -0.5*chi2/noise_scaling**2
-    diagcovphi = copy(np.diag(covphi))
-    diagcovphi[np.where(diagcovphi<0.0)] = np.nan
-    paras_err = np.sqrt(diagcovphi)
+        # log_prob = -0.5*chi2/noise_scaling**2
 
     if computeH0:
         paras_H0 = lsq_linear(M[:,1::], d,bounds=(np.array(_bounds[0])[1::],np.array(_bounds[1])[1::])).x
