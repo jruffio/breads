@@ -763,7 +763,7 @@ class JWSTNirspec_cal(Instrument):
 
         return wpsfs, wpsfs_header, wepsfs, webbpsf_X, webbpsf_Y, oversample, pixelscale
 
-    def compute_new_coords_from_webbPSFfit(self, save_utils=False,IWA=None,OWA=None,apply_offset=True):
+    def compute_new_coords_from_webbPSFfit(self, save_utils=False,IWA=None,OWA=None,apply_offset=True,init_centroid = None):
         """ Update coordinates after fitting a webbPSF at the median wavelength of the data.
         This is the wavelength at which the WebbPSF was saved in the class.
 
@@ -786,7 +786,10 @@ class JWSTNirspec_cal(Instrument):
         # rough centroid fit
         fit_cen, fit_angle = True, False
         linear_interp=True
-        init_paras = np.array([0,0])
+        if init_centroid is None:
+            init_paras = np.array([0,0])
+        else:
+            init_paras = np.array(init_centroid)
 
         mask = copy(self.bad_pixels)
         diff_wv_map =  np.abs(self.wavelengths-self.webbpsf_wv0)
