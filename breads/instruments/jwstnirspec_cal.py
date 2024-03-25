@@ -119,6 +119,11 @@ class JWSTNirspec_cal(Instrument):
         if 0:
             # 20240125 Currently a problem with noise propagation in the JWST pipeline from the flats onto the science data
             self.noise = hdulist_sc["ERR"].data
+        elif self.FixedSlit:
+            print('FixedSlit noise.')
+            rnoise_var = hdulist_sc["VAR_RNOISE"].data
+            pnoise_var = hdulist_sc["VAR_POISSON"].data
+            self.noise = np.sqrt(rnoise_var+pnoise_var)
         else:
             rnoise_var = hdulist_sc["VAR_RNOISE"].data
             pnoise_var = hdulist_sc["VAR_POISSON"].data
@@ -949,6 +954,7 @@ class JWSTNirspec_cal(Instrument):
                                                                               regularization=True,
                                                                               reg_mean_map=reg_mean_map0,
                                                                               reg_std_map=reg_std_map0)
+        np.save('new_badpixs1.npy',new_badpixs)
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=new_badpixs,
                                                                               x_nodes=x_nodes, mypool=mppool,
                                                                               threshold=threshold_badpix,
@@ -956,7 +962,8 @@ class JWSTNirspec_cal(Instrument):
                                                                               regularization=True,
                                                                               reg_mean_map=spline_paras0,
                                                                               reg_std_map=spline_paras0)
-
+        np.save('new_badpixs2.npy',new_badpixs)
+        
         spline_cont0[np.where(spline_cont0 / err < 5)] = np.nan
         spline_cont0 = copy(spline_cont0)
         spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
@@ -1612,6 +1619,8 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
     chunk_size = image.shape[0] // (3 * numthreads)
     if chunk_size == 0:
         parallel_flag = False
+    else:
+        parallel_flag = True
         
     if (mypool is None) or (parallel_flag==False):
         paras = new_image, im_wvs, new_noise, new_badpixs, x_nodes, star_model, threshold, star_sub_mode,regularization,reg_mean_map,reg_std_map

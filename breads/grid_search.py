@@ -47,7 +47,7 @@ def process_chunk(args):
         return None
 
 
-def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,computeH0=False):
+def grid_search(para_vecs,dataobj,fm_func,fm_paras,tuple_flag=False,numthreads=None,bounds=None,computeH0=False):
     """
     Planet detection, CCF, or grid search routine.
     It fits for the non linear parameters of a forward model over a user-specified grid of values while marginalizing
@@ -72,6 +72,8 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,c
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
             e.g. ([0,0,...], [np.inf,np.inf,...]). default no bounds.
             Each numpy array must have shape (N_linear_parameters,).
+            
+        tuple_flag: True if para_vecs is a list of tuples defining the sampling of the "nongrid" inputs of non-linear parameters
 
     Returns:
         log_prob: Probability of the model marginalized over linear parameters.
@@ -81,11 +83,18 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,c
         linparas_err: Uncertainties of best fit linear parameters
 
     """
-    para_grids = [np.ravel(pgrid) for pgrid in np.meshgrid(*para_vecs,indexing="ij")]
+    if tuple_flag:
+        tuple_array = np.array(para_vecs)
+        para_grids = [tuple_array[:,i] for i in range(tuple_array.shape[-1])]
+    else:
+        para_grids = [np.ravel(pgrid) for pgrid in np.meshgrid(*para_vecs,indexing="ij")]
 
     if numthreads is None:
         _out = process_chunk((para_grids,dataobj,fm_func,fm_paras,bounds,computeH0))
-        out_shape = [np.size(v) for v in para_vecs]+[_out.shape[-1],]
+        if tuple_flag:
+            out_shape = [len(para_vecs)]+[_out.shape[-1],]
+        else:
+            out_shape = [np.size(v) for v in para_vecs]+[_out.shape[-1],]
         out = np.reshape(_out,out_shape)
     else:
         mypool = mp.Pool(processes=numthreads)
@@ -111,11 +120,20 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,c
             if output_list is None:
                 continue
             if outarr_not_created:
-                out_shape = [np.size(v) for v in para_vecs]+[np.size(output_list[0]),]
+                if tuple_flag:
+                    out_shape = [len(para_vecs)]+[np.size(output_list[0]),]
+                else:
+                    out_shape = [np.size(v) for v in para_vecs]+[np.size(output_list[0]),]
                 out = np.zeros(out_shape)
                 outarr_not_created = False
             for l,outvec in zip(indices,output_list):
-                out[np.unravel_index(l,out_shape[0:len(para_vecs)])] = outvec
+                #print('l: {}'.format(l))
+                #print('outvec: {}'.format(outvec))
+                #print('outvec.shape: {}'.format(outvec.shape))
+                if tuple_flag:
+                    out[l,:] = outvec
+                else:
+                    out[np.unravel_index(l,out_shape[0:len(para_vecs)])] = outvec
 
         mypool.close()
         mypool.join()
