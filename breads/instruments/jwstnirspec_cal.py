@@ -53,7 +53,7 @@ from scipy.ndimage import generic_filter
 
 
 class JWSTNirspec_cal(Instrument):
-    def __init__(self, filename=None, crds_dir=None, utils_dir=None, save_utils=True, FixedSlit=False,
+    def __init__(self, filename=None, crds_dir=None, utils_dir=None, save_utils=True,
                  load_utils=True,
                  preproc_task_list = None,
                  verbose=True):
@@ -71,9 +71,7 @@ class JWSTNirspec_cal(Instrument):
         verbose
         """
         super().__init__('jwstnirspec_cal', verbose=verbose)
-        
-        #high level decision flag
-        self.FixedSlit = FixedSlit
+
         
         if filename is None:
             warning_text = "No data file provided. " + \
@@ -115,6 +113,8 @@ class JWSTNirspec_cal(Instrument):
         self.priheader = hdulist_sc[0].header
         self.extheader = hdulist_sc[1].header
         self.data_unit = self.extheader["BUNIT"].strip() #MJy/sr or MJy
+        #high level decision flag
+        self.opmode = self.priheader["OPMODE"].strip() #"FIXEDSLIT" or "IFU"
         self.data = hdulist_sc["SCI"].data
         if 0:
             # 20240125 Currently a problem with noise propagation in the JWST pipeline from the flats onto the science data
@@ -138,6 +138,9 @@ class JWSTNirspec_cal(Instrument):
         # Pixels marked as "do not use" are marked as bad (nan = bad, 1 = good):
         self.bad_pixels[np.where(untangle_dq(dq, verbose=self.verbose)[0, :, :])] = np.nan
         self.bad_pixels[np.where(np.isnan(self.data))] = np.nan
+
+        if self.opmode == "FIXEDSLIT" and self.priheader["DETECTOR"].strip() == "NRS2":
+            self.bad_pixels[:, 2030::] = np.nan
 
         #Removing any data with zero noise
         where_zero_noise = np.where(self.noise == 0)
@@ -165,8 +168,12 @@ class JWSTNirspec_cal(Instrument):
                 os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_barmask.fits"))
         self.default_filenames["compute_starspectrum_contnorm"] = \
                 os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_starspec_contnorm.fits"))
+        self.default_filenames["compute_starspectrum_contnorm_2dspline"] = \
+                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_starspec_2dcontnorm.fits"))
         self.default_filenames["compute_starsubtraction"] = \
                 os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_starsub.fits"))
+        self.default_filenames["compute_starsubtraction_2dspline"] = \
+                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_2dstarsub.fits"))
         self.default_filenames["compute_interpdata_regwvs"] = \
                 os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_regwvs.fits"))
 
@@ -343,7 +350,7 @@ class JWSTNirspec_cal(Instrument):
         # Use WCS to compute RA, Dec for each pixel
         # TODO generalize this to work in ifualign space as well
         
-        if self.FixedSlit:
+        if self.opmode == "FIXEDSLIT":
             print('Using FixedSlit methods...')
             pxarea_as2 = calfile._asdf._tree['slits'][0]['meta']['photometry']['pixelarea_arcsecsq'] #needs to be revisited
             area2d = np.ones(shape)*pxarea_as2 #constant area
@@ -355,7 +362,7 @@ class JWSTNirspec_cal(Instrument):
             ra_array = np.zeros(shape) + np.nan
             dec_array = np.zeros(shape) + np.nan
             wavelen_array = np.zeros(shape) + np.nan
-        else:
+        elif self.opmode == "IFU":
             wave2d, area2d, dqmap = photom_dataset.calc_nrs_ifu_sens2d(area_data)
             area2d[np.where(area2d == 1)] = np.nan
             wcses = jwst.assign_wcs.nrs_ifu_wcs(calfile)  # returns a list of 30 WCSes, one per slice. This is slow.
@@ -1019,6 +1026,119 @@ class JWSTNirspec_cal(Instrument):
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
         return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,x_nodes
 
+
+    #herenow
+    def compute_starspectrum_contnorm_2dspline(self,  save_utils=False,im=None, im_wvs=None, err=None, mppool=None,
+                                               spec_R_sampling=None, threshold_badpix=10,
+                                               wv_nodes=None,N_wvs_nodes=20,ifuy_nodes=None,delta_ifuy=0.05):
+        if self.opmode != "FIXEDSLIT":
+            raise Exception("Only implement for FIXEDSLIT yet")
+        if im is None:
+            im = self.data
+        if im_wvs is None:
+            im_wvs = self.wavelengths
+        if err is None:
+            err = self.noise
+        if spec_R_sampling is None:
+            spec_R_sampling = self.R*4
+        if wv_nodes is None:
+            wv_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), N_wvs_nodes, endpoint=True)
+
+        _, im_ifuy = self.getifucoords()
+
+        if ifuy_nodes is None:
+            ifuy_min, ifuy_max = np.nanmin(im_ifuy), np.nanmax(im_ifuy)
+            ifuy_min, ifuy_max = np.floor(ifuy_min * 10) / 10, np.ceil(ifuy_max * 10) / 10
+            ifuy_nodes = np.arange(ifuy_min, ifuy_max + 0.1, delta_ifuy)
+
+        if self.verbose:
+            print(f"Computing stellar spectrum with 2d spline (continuum normalized)")
+
+        reg_mean_map0 = np.zeros((np.size(ifuy_nodes), np.size(wv_nodes))) + np.nanmedian(self.data * self.bad_pixels)
+        reg_std_map0 = reg_mean_map0
+
+        # print(im.shape, im_wvs.shape,err.shape, self.bad_pixels.shape)
+        spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_slices_2dspline(im,
+                                                                                         im_wvs,
+                                                                                         im_ifuy,
+                                                                                         noise=err,
+                                                                                         badpixs=self.bad_pixels,
+                                                                                         wv_nodes = wv_nodes,
+                                                                                         ifuy_nodes=ifuy_nodes,
+                                                                                         threshold=threshold_badpix,
+                                                                                         reg_mean_map=reg_mean_map0,
+                                                                                         reg_std_map=reg_std_map0)
+        where_nan = np.where(np.isnan(spline_paras0))
+        spline_paras0[where_nan] = reg_mean_map0[where_nan]
+        spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_slices_2dspline(im,
+                                                                                         im_wvs,
+                                                                                         im_ifuy,
+                                                                                         noise=err,
+                                                                                         badpixs=self.bad_pixels*new_badpixs,
+                                                                                         wv_nodes = wv_nodes,
+                                                                                         ifuy_nodes=ifuy_nodes,
+                                                                                         threshold=threshold_badpix,
+                                                                                         reg_mean_map=spline_paras0,
+                                                                                         reg_std_map=spline_paras0)
+        spline_cont0[np.where(spline_cont0 / err < 5)] = np.nan
+        spline_cont0 = copy(spline_cont0)
+        spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
+        spline_cont0[np.where(np.isnan(self.bad_pixels))] = np.nan
+        normalized_im = im / spline_cont0
+        normalized_err = err / spline_cont0
+
+        new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
+                                                                             normalized_im.flatten(),
+                                                                             normalized_err.flatten(),
+                                                                             np.nanmedian(im_wvs) / (spec_R_sampling))
+
+        if save_utils:
+            if isinstance(save_utils,str):
+                out_filename = save_utils
+            else:
+                out_filename = self.default_filenames["compute_starspectrum_contnorm_2dspline"]
+
+            hdulist = pyfits.HDUList()
+            hdulist.append(pyfits.PrimaryHDU(data=new_wavelengths))
+            hdulist.append(pyfits.ImageHDU(data=combined_fluxes, name='COM_FLUXES'))
+            hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
+            hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
+            hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
+            hdulist.append(pyfits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+            hdulist.append(pyfits.ImageHDU(data=ifuy_nodes, name='ifuy_nodes'))
+            try:
+                hdulist.writeto(out_filename, overwrite=True)
+            except TypeError:
+                hdulist.writeto(out_filename, clobber=True)
+            hdulist.close()
+
+
+        self.wv_nodes = wv_nodes
+        self.ifuy_nodes = ifuy_nodes
+        self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+        return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes,ifuy_nodes
+
+    def reload_starspectrum_contnorm_2dspline(self, load_filename=None):
+        if load_filename is None:
+            load_filename = self.default_filenames["compute_starspectrum_contnorm_2dspline"]
+        if len(glob(load_filename)) ==0:
+            return None
+
+        hdulist = pyfits.open(load_filename)
+        new_wavelengths = hdulist[0].data
+        combined_fluxes = hdulist[1].data
+        combined_errors = hdulist[2].data
+        spline_cont0 = hdulist[3].data
+        spline_paras0 = hdulist[4].data
+        wv_nodes = hdulist[5].data
+        ifuy_nodes = hdulist[6].data
+        hdulist.close()
+
+        self.wv_nodes = wv_nodes
+        self.ifuy_nodes = ifuy_nodes
+        self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+        return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes,ifuy_nodes
+
     def compute_starsubtraction(self,  save_utils=False, im=None, im_wvs=None, err=None, threshold_badpix=10,
                                 mppool=None,starsub_dir=None,load_starspectrum_contnorm = None):
         if self.verbose:
@@ -1129,6 +1249,125 @@ class JWSTNirspec_cal(Instrument):
         self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
         return subtracted_im,star_model,spline_paras0,x_nodes
 
+
+    def compute_starsubtraction_2dspline(self,  save_utils=False, im=None, im_wvs=None, err=None, threshold_badpix=10,
+                                mppool=None,starsub_dir=None):
+        if self.verbose:
+            print(f"Computing star subtraction 2d spline.")
+
+        # if load_starspectrum_contnorm is None:
+        #     load_filename = self.default_filenames["compute_starsubtraction_2dspline"]
+        #     hdulist = pyfits.open(load_filename)
+        #     spline_paras0 = hdulist[4].data
+        #     hdulist.close()
+        # else:
+        #     hdulist = pyfits.open(load_starspectrum_contnorm)
+        #     spline_paras0 = hdulist[4].data
+        #     hdulist.close()
+
+        if im is None:
+            im = self.data
+        if im_wvs is None:
+            im_wvs = self.wavelengths
+        if err is None:
+            err = self.noise
+
+        if starsub_dir is None:
+            starsub_dir = self.utils_dir
+
+        _, im_ifuy = self.getifucoords()
+
+        reg_mean_map0 = np.zeros((np.size(self.ifuy_nodes), np.size(self.wv_nodes))) + np.nanmedian(self.data * self.bad_pixels)
+        reg_std_map0 = reg_mean_map0
+
+        # print(im.shape, im_wvs.shape,err.shape, self.bad_pixels.shape)
+        star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_slices_2dspline(im,
+                                                                                         im_wvs,
+                                                                                         im_ifuy,
+                                                                                         noise=err,
+                                                                                         badpixs=self.bad_pixels,
+                                                                                         star_model=self.star_func(im_wvs),
+                                                                                         wv_nodes = self.wv_nodes,
+                                                                                         ifuy_nodes=self.ifuy_nodes,
+                                                                                         threshold=threshold_badpix,
+                                                                                         use_set_nans=False,
+                                                                                         reg_mean_map=reg_mean_map0,
+                                                                                         reg_std_map=reg_std_map0)
+        where_nan = np.where(np.isnan(spline_paras0))
+        spline_paras0[where_nan] = reg_mean_map0[where_nan]
+        star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_slices_2dspline(im,
+                                                                                         im_wvs,
+                                                                                         im_ifuy,
+                                                                                         noise=err,
+                                                                                         badpixs=self.bad_pixels*new_badpixs,
+                                                                                         star_model=self.star_func(im_wvs),
+                                                                                         wv_nodes = self.wv_nodes,
+                                                                                         ifuy_nodes=self.ifuy_nodes,
+                                                                                         threshold=threshold_badpix,
+                                                                                         use_set_nans=False,
+                                                                                         reg_mean_map=spline_paras0,
+                                                                                         reg_std_map=spline_paras0)
+        self.bad_pixels = self.bad_pixels * new_badpixs
+
+
+        subtracted_im[np.where(np.isnan(subtracted_im))] = 0
+
+        if save_utils:
+            if isinstance(save_utils,str):
+                out_filename = save_utils
+            else:
+                out_filename = self.default_filenames["compute_starsubtraction_2dspline"]
+
+            hdulist = pyfits.HDUList()
+            hdulist.append(pyfits.PrimaryHDU(data=subtracted_im))
+            hdulist.append(pyfits.ImageHDU(data=im, name='IM'))
+            hdulist.append(pyfits.ImageHDU(data=star_model, name='STARMODEL'))
+            hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='BADPIX'))
+            hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
+            hdulist.append(pyfits.ImageHDU(data=self.wv_nodes, name='wv_nodes'))
+            hdulist.append(pyfits.ImageHDU(data=self.ifuy_nodes, name='ifuy_nodes'))
+            try:
+                hdulist.writeto(out_filename, overwrite=True)
+            except TypeError:
+                hdulist.writeto(out_filename, clobber=True)
+
+            if starsub_dir is not None:
+                if not os.path.exists(os.path.join(starsub_dir, "starsub2d")):
+                    os.makedirs(os.path.join(starsub_dir, "starsub2d"))
+                hdulist_sc = pyfits.open(self.filename)
+                if self.data_unit == "MJy":##MJy/sr  or MJy
+                    arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
+                    hdulist_sc["SCI"].data = subtracted_im/(self.area2d*arcsec2_to_sr)
+                elif self.data_unit == "MJy/sr":
+                    hdulist_sc["SCI"].data = subtracted_im
+                hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
+                try:
+                    hdulist_sc.writeto(os.path.join(starsub_dir, "starsub2d", os.path.basename(self.filename)), overwrite=True)
+                except TypeError:
+                    hdulist_sc.writeto(os.path.join(starsub_dir, "starsub2d", os.path.basename(self.filename)), clobber=True)
+                hdulist_sc.close()
+        return subtracted_im,star_model,spline_paras0,self.wv_nodes,self.ifuy_nodes
+
+
+    def reload_starsubtraction_2dspline(self, load_filename=None):
+        if load_filename is None:
+            load_filename = self.default_filenames["compute_starsubtraction_2dspline"]
+        if len(glob(load_filename)) ==0:
+            return None
+
+        hdulist = pyfits.open(load_filename)
+        subtracted_im = hdulist[0].data
+        star_model = hdulist[2].data
+        fmderived_bad_pixels = hdulist[3].data
+        spline_paras0 = hdulist[4].data
+        wv_nodes = hdulist[5].data
+        ifuy_nodes = hdulist[6].data
+        hdulist.close()
+
+        self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
+        self.wv_nodes = wv_nodes
+        self.ifuy_nodes = ifuy_nodes
+        return subtracted_im,star_model,spline_paras0,wv_nodes,ifuy_nodes
 
     def compute_interpdata_regwvs(self, save_utils=False,wv_sampling=None):
         """Interpolate onto a regular wavelength sampling.
@@ -1713,6 +1952,114 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
     return new_image, new_noise, new_badpixs, new_res,new_spline_paras
     #
     # return bestfit_paras, psfsub_model_im, psfsub_sc_im
+
+
+def _task_normslice_2dspline(paras):
+    im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, star_model, threshold, reg_mean_map, reg_std_map = paras
+
+    new_im = np.array(copy(im), '<f4')  # .byteswap().newbyteorder()
+    new_noise = copy(noise)
+    new_badpix = copy(badpix)
+    res = np.zeros(im.shape) + np.nan
+
+    bool_map = np.isfinite(new_badpix) * np.isfinite(im) * np.isfinite(noise) * (noise != 0) * np.isfinite(
+        star_model) * np.isfinite(im_ifuy)
+    where_data_finite = np.where(bool_map)
+    if np.size(where_data_finite[0]) != 0:
+        ravel_im_ifuy = im_ifuy[where_data_finite]
+    ravel_im_wvs = im_wvs[where_data_finite]
+    M_spline_ifuy = get_spline_model(ifuy_nodes, ravel_im_ifuy, spline_degree=3)
+    M_spline_wvs = get_spline_model(wv_nodes, ravel_im_wvs, spline_degree=3)
+    M_spline_ifuy_repeated = np.repeat(M_spline_ifuy, np.size(wv_nodes), axis=1)
+    M_spline_wvs_tiled = np.tile(M_spline_wvs, (1, np.size(ifuy_nodes)))
+    M_2dspline = M_spline_ifuy_repeated * M_spline_wvs_tiled
+
+    d = im[where_data_finite]
+    d_err = noise[where_data_finite]
+
+    M = M_2dspline * star_model[where_data_finite][:, None]
+
+    validpara = np.where(np.nansum(M > np.nanmax(M) * 0.00001, axis=0) != 0)
+    M = M[:, validpara[0]]
+
+    if 1:
+        # print(M_2dspline.shape,M.shape)
+        # print(reg_mean_map.shape,reg_std_map.shape)
+        d_reg, s_reg = np.ravel(reg_mean_map), np.ravel(reg_std_map)
+        s_reg = s_reg[validpara]
+        d_reg = d_reg[validpara]
+        where_reg = np.where(np.isfinite(s_reg))
+        s_reg = s_reg[where_reg]
+        d_reg = d_reg[where_reg]
+        M_reg = np.zeros((np.size(where_reg[0]), M.shape[1]))
+        M_reg[np.arange(np.size(where_reg[0])), where_reg[0]] = 1
+        M4fit = np.concatenate([M, M_reg], axis=0)
+        d4fit = np.concatenate([d, d_reg])
+        s4fit = np.concatenate([d_err, s_reg])
+
+    p = lsq_linear(M4fit / s4fit[:, None], d4fit / s4fit).x
+    m = np.dot(M, p)
+    res[where_data_finite] = d - m
+    new_im[where_data_finite] = m
+    new_noise[where_data_finite] = d_err
+    norm_res = np.zeros(im.shape) + np.nan
+    norm_res[where_data_finite] = (d - m) / d_err
+
+    meddev = median_abs_deviation(norm_res[where_data_finite])
+    where_bad = np.where((np.abs(norm_res) / meddev > threshold) | np.isnan(norm_res))
+    new_badpix[where_bad] = np.nan
+
+    paras_out = np.zeros((np.size(ifuy_nodes), np.size(wv_nodes))) + np.nan
+    paras_out = np.ravel(paras_out)
+    paras_out[validpara] = p
+    paras_out = np.reshape(paras_out,(np.size(ifuy_nodes), np.size(wv_nodes)))
+
+    return new_im, new_noise, new_badpix, res, paras_out
+
+
+def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None, star_model=None,  mypool=None,
+                              threshold=10, use_set_nans=True,
+                              N_wvs_nodes=20, wv_nodes=None, delta_ifuy=0.05, ifuy_nodes=None,
+                              reg_mean_map=None, reg_std_map=None):
+
+    if noise is None:
+        noise = np.ones(image.shape)
+    if badpixs is None:
+        badpixs = np.ones(image.shape)
+    if star_model is None:
+        star_model = np.ones(image.shape)
+
+    if wv_nodes is None:
+        wv_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), N_wvs_nodes, endpoint=True)
+
+    if ifuy_nodes is None:
+        ifuy_min, ifuy_max = np.nanmin(im_ifuy), np.nanmax(im_ifuy)
+        ifuy_min, ifuy_max = np.floor(ifuy_min * 10) / 10, np.ceil(ifuy_max * 10) / 10
+        ifuy_nodes = np.arange(ifuy_min, ifuy_max + 0.1, delta_ifuy)
+
+    new_image = copy(image)
+    if use_set_nans:
+        new_image = set_nans(image, 40)
+    new_noise = copy(noise)
+    new_badpixs = copy(badpixs)
+    new_res = np.zeros(image.shape) + np.nan
+    new_spline_paras = np.zeros((np.size(ifuy_nodes), np.size(wv_nodes)))
+
+    # # if chunk is too small, don't parallelize
+    # numthreads = mypool._processes
+    # chunk_size = image.shape[0] // (3 * numthreads)
+    # if chunk_size == 0:
+    #     parallel_flag = False
+    parallel_flag = False
+
+    if (mypool is None) or (parallel_flag == False):
+        paras = new_image, im_wvs, im_ifuy, new_noise, new_badpixs, wv_nodes,ifuy_nodes, star_model, threshold, reg_mean_map, reg_std_map
+        outputs = _task_normslice_2dspline(paras)
+        new_image, new_noise, new_badpixs, new_res, new_spline_paras = outputs
+    else:
+        raise Exception("Not yet implemented")
+
+    return new_image, new_noise, new_badpixs, new_res, new_spline_paras
 
 
 def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array, interpolator, psf_wv0, fix_cen=None):
@@ -3017,7 +3364,7 @@ def cube_matchedfilter(flux_cube,fluxerr_cube,wv_sampling,ra_grid, dec_grid,plan
     return snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
 
 
-def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=None, spec_R_sampling=None):
+def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=None, spec_R_sampling=None,spline2d=False):
     print(len(glob(out_filename)), out_filename)
     if 1 and load_utils and len(glob(out_filename)):
         with pyfits.open(out_filename) as hdulist:
@@ -3029,14 +3376,16 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=N
         normalized_im_list = []
         normalized_err_list = []
         for dataobj in dataobj_list:
-            reload_ouputs = dataobj.reload_starspectrum_contnorm()
-            if reload_ouputs is None:
-                reload_outputs = dataobj.compute_starspectrum_contnorm(x_nodes= x_nodes, mppool= mypool)
-                # spline_cont0[np.where(spline_cont0 / dataobj.noise < 5)] = np.nan
-                # spline_cont0 = copy(spline_cont0)
-                # spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
-                # spline_cont0[np.where(np.isnan(dataobj.bad_pixels))] = np.nan
-            new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes = reload_ouputs
+            if spline2d:
+                reload_outputs = dataobj.reload_starspectrum_contnorm_2dspline()
+                if reload_outputs is None:
+                    reload_outputs = dataobj.compute_starspectrum_contnorm_2dspline(save_utils=True,mppool= mppool)
+                new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, wv_nodes,ifuy_nodes = reload_outputs
+            else:
+                reload_outputs = dataobj.reload_starspectrum_contnorm()
+                if reload_outputs is None:
+                    reload_outputs = dataobj.compute_starspectrum_contnorm(save_utils=True,mppool= mppool)
+                new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes = reload_outputs
             normalized_im = dataobj.data / spline_cont0
             normalized_err = dataobj.noise / spline_cont0
             wvs_list.extend(dataobj.wavelengths.flatten())
