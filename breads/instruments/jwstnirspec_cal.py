@@ -48,6 +48,7 @@ import matplotlib.tri as tri
 import numpy as np
 from scipy.ndimage import generic_filter
 
+from scipy.ndimage import median_filter
 
 
 
@@ -125,6 +126,7 @@ class JWSTNirspec_cal(Instrument):
             self.noise = np.sqrt(rnoise_var+pnoise_var)
         dq = hdulist_sc["DQ"].data
         self.wavelengths = hdulist_sc["WAVELENGTH"].data
+        self.wv_ref = np.nanmin(self.wavelengths)
         ny, nx = self.data.shape
         hdulist_sc.close()
 
@@ -134,8 +136,9 @@ class JWSTNirspec_cal(Instrument):
         self.bad_pixels[np.where(untangle_dq(dq, verbose=self.verbose)[0, :, :])] = np.nan
         self.bad_pixels[np.where(np.isnan(self.data))] = np.nan
 
-        if self.opmode == "FIXEDSLIT" and self.priheader["DETECTOR"].strip() == "NRS2":
-            self.bad_pixels[:, 2030::] = np.nan
+        # print("coucou",self.priheader["FXD_SLIT"].strip())
+        if self.opmode == "FIXEDSLIT" and "S200A1" in self.priheader["FXD_SLIT"].strip():#self.priheader["DETECTOR"].strip() == "NRS2":
+            self.bad_pixels[np.where(self.wavelengths>5.125)] = np.nan
 
         #Removing any data with zero noise
         where_zero_noise = np.where(self.noise == 0)
@@ -942,15 +945,16 @@ class JWSTNirspec_cal(Instrument):
         if self.verbose:
             print(f"Computing stellar spectrum (continuum normalized)")
 
-        reg_mean_map0 = np.zeros((self.data.shape[0], np.size(x_nodes)))
-        reg_std_map0 = np.zeros((self.data.shape[0], np.size(x_nodes)))
-        for rowid, row in enumerate(self.data):
-            row_wvs = self.wavelengths[rowid, :]
-            row_bp = self.bad_pixels[rowid, :]
-            if np.nansum(np.isfinite(row * row_bp)) == 0:
-                continue
-            reg_mean_map0[rowid, :] = np.nanmedian(row * row_bp)
-            reg_std_map0[rowid, :] = reg_mean_map0[rowid, :]
+        if 1:
+            reg_mean_map0 = np.zeros((self.data.shape[0], np.size(x_nodes)))
+            reg_std_map0 = np.zeros((self.data.shape[0], np.size(x_nodes)))
+            for rowid, row in enumerate(self.data):
+                row_wvs = self.wavelengths[rowid, :]
+                row_bp = self.bad_pixels[rowid, :]
+                if np.nansum(np.isfinite(row * row_bp)) == 0:
+                    continue
+                reg_mean_map0[rowid, :] = np.nanmedian(row * row_bp)
+                reg_std_map0[rowid, :] = reg_mean_map0[rowid, :]
 
         # print(im.shape, im_wvs.shape,err.shape, self.bad_pixels.shape)
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
@@ -1052,8 +1056,72 @@ class JWSTNirspec_cal(Instrument):
         if self.verbose:
             print(f"Computing stellar spectrum with 2d spline (continuum normalized)")
 
-        reg_mean_map0 = np.zeros((np.size(ifuy_nodes), np.size(wv_nodes))) + np.nanmedian(self.data * self.bad_pixels)
-        reg_std_map0 = reg_mean_map0
+        # reg_mean_map0 = np.zeros((np.size(ifuy_nodes), np.size(wv_nodes))) + np.nanmedian(self.data * self.bad_pixels)
+        # reg_std_map0 = reg_mean_map0
+        if 1:
+            # ifuy_nodes_grid, wv_nodes_grid = np.meshgrid(ifuy_nodes, wv_nodes, indexing="ij")
+            # where_good = np.where(np.isfinite(self.data) * np.isfinite(self.bad_pixels))
+            # X = im_ifuy[where_good]
+            # Y = self.wavelengths[where_good]
+            # Z = self.data[where_good]
+            # filtered_triangles = filter_big_triangles(X, Y, 0.2)
+            # # Create filtered triangulation
+            # filtered_tri = tri.Triangulation(X, Y, triangles=filtered_triangles)
+            # # Perform LinearTriInterpolator for filtered triangulation
+            # pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
+            #
+            # reg_mean_map0 = pointcloud_interp(ifuy_nodes_grid, wv_nodes_grid)
+
+            ifuy_nodes_grid, wv_nodes_grid = np.meshgrid(ifuy_nodes, wv_nodes, indexing="ij")
+            # print(ifuy_nodes_grid[:, 0])
+            # print(wv_nodes_grid[0, :])
+
+            # Define the window size
+            w = 10
+            window_size = (1, w)
+            # Apply median filter
+            data_all_LPF = median_filter(self.data * self.bad_pixels, size=window_size, mode='constant',cval=np.nan)
+
+            where_good = np.where(np.isfinite(data_all_LPF) * np.isfinite(im_ifuy) * np.isfinite(self.wavelengths))
+            X = im_ifuy[where_good]
+            Y = self.wavelengths[where_good]
+            Z = data_all_LPF[where_good]
+            # plt.scatter(Y,X)
+            filtered_triangles = filter_big_triangles(X, Y, 0.2)
+            # Create filtered triangulation
+            filtered_tri = tri.Triangulation(X * self.wv_ref / Y, Y, triangles=filtered_triangles)
+            # Perform LinearTriInterpolator for filtered triangulation
+            pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
+
+            # ifuy_nodes_grid = ifuy_nodes_grid
+
+            reg_mean_map0 = pointcloud_interp(ifuy_nodes_grid, wv_nodes_grid)
+
+            # fill vertical nan columns
+            for k in range(reg_mean_map0.shape[0]):
+                row = reg_mean_map0[k, :]
+                finite_indices = np.where(np.isfinite(row))[0]
+                if len(finite_indices) == 0:
+                    continue
+                min_id = np.min(finite_indices)
+                max_id = np.max(finite_indices)
+                reg_mean_map0[k, 0:min_id] = reg_mean_map0[k, min_id]
+                reg_mean_map0[k, max_id + 1::] = reg_mean_map0[k, max_id]
+
+            # fill vertical nan columns
+            for l in range(reg_mean_map0.shape[1]):
+                col = reg_mean_map0[:, l]
+                finite_indices = np.where(np.isfinite(col))[0]
+                if len(finite_indices) == 0:
+                    continue
+                min_id = np.min(finite_indices)
+                max_id = np.max(finite_indices)
+                reg_mean_map0[0:min_id, l] = reg_mean_map0[min_id, l]
+                reg_mean_map0[max_id + 1::, l] = reg_mean_map0[max_id, l]
+
+            reg_std_map0 = np.abs(reg_mean_map0)/2
+
+            # plt.imshow()
 
         # print(im.shape, im_wvs.shape,err.shape, self.bad_pixels.shape)
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_slices_2dspline(im,
@@ -1064,10 +1132,16 @@ class JWSTNirspec_cal(Instrument):
                                                                                          wv_nodes = wv_nodes,
                                                                                          ifuy_nodes=ifuy_nodes,
                                                                                          threshold=threshold_badpix,
+                                                                                         use_set_nans=False,
                                                                                          reg_mean_map=reg_mean_map0,
-                                                                                         reg_std_map=reg_std_map0)
-        where_nan = np.where(np.isnan(spline_paras0))
-        spline_paras0[where_nan] = reg_mean_map0[where_nan]
+                                                                                         reg_std_map=reg_std_map0,
+                                                                                         wv_ref=self.wv_ref)
+        # where_nan = np.where(np.isnan(spline_paras0))
+        # spline_paras0[where_nan] = reg_mean_map0[where_nan]
+        reg_mean_map1 = copy(spline_paras0)
+        where_nan = np.where(np.isnan(reg_mean_map1))
+        reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
+        reg_std_map1 = np.abs(reg_mean_map1)/2
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_slices_2dspline(im,
                                                                                          im_wvs,
                                                                                          im_ifuy,
@@ -1076,14 +1150,16 @@ class JWSTNirspec_cal(Instrument):
                                                                                          wv_nodes = wv_nodes,
                                                                                          ifuy_nodes=ifuy_nodes,
                                                                                          threshold=threshold_badpix,
-                                                                                         reg_mean_map=spline_paras0,
-                                                                                         reg_std_map=spline_paras0)
-        spline_cont0[np.where(spline_cont0 / err < 5)] = np.nan
-        spline_cont0 = copy(spline_cont0)
-        spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
-        spline_cont0[np.where(np.isnan(self.bad_pixels))] = np.nan
-        normalized_im = im / spline_cont0
-        normalized_err = err / spline_cont0
+                                                                                         use_set_nans=False,
+                                                                                         reg_mean_map=reg_mean_map1,
+                                                                                         reg_std_map=reg_std_map1,
+                                                                                         wv_ref=self.wv_ref)
+        continuum = copy(spline_cont0)
+        continuum[np.where(continuum / err < 5)] = np.nan
+        continuum[np.where(continuum < np.median(continuum))] = np.nan
+        continuum[np.where(np.isnan(self.bad_pixels))] = np.nan
+        normalized_im = im / continuum
+        normalized_err = err / continuum
 
         new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
                                                                              normalized_im.flatten(),
@@ -1275,9 +1351,74 @@ class JWSTNirspec_cal(Instrument):
 
         _, im_ifuy = self.getifucoords()
 
-        reg_mean_map0 = np.zeros((np.size(self.ifuy_nodes), np.size(self.wv_nodes))) + np.nanmedian(self.data * self.bad_pixels)
-        reg_std_map0 = reg_mean_map0
+        # reg_mean_map0 = np.zeros((np.size(self.ifuy_nodes), np.size(self.wv_nodes))) + np.nanmedian(self.data * self.bad_pixels)
+        # reg_std_map0 = reg_mean_map0
 
+        if 1:
+            # ifuy_nodes_grid, wv_nodes_grid = np.meshgrid(self.ifuy_nodes,self.wv_nodes, indexing="ij")
+            # where_good = np.where(np.isfinite(self.data) * np.isfinite(self.bad_pixels))
+            # X = im_ifuy[where_good]
+            # Y = self.wavelengths[where_good]
+            # Z = self.data[where_good]
+            # filtered_triangles = filter_big_triangles(X, Y, 0.2)
+            # # Create filtered triangulation
+            # filtered_tri = tri.Triangulation(X, Y, triangles=filtered_triangles)
+            # # Perform LinearTriInterpolator for filtered triangulation
+            # pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
+            #
+            # reg_mean_map0 = pointcloud_interp(ifuy_nodes_grid, wv_nodes_grid)
+            # reg_std_map0 = np.abs(reg_mean_map0)/2
+            ifuy_nodes_grid, wv_nodes_grid = np.meshgrid(self.ifuy_nodes, self.wv_nodes, indexing="ij")
+            # print(ifuy_nodes_grid[:, 0])
+            # print(wv_nodes_grid[0, :])
+
+            # Define the window size
+            w = 10
+            window_size = (1, w)
+            # Apply median filter
+            data_all_LPF = median_filter(self.data * self.bad_pixels, size=window_size, mode='constant',cval=np.nan)
+
+            where_good = np.where(np.isfinite(data_all_LPF) * np.isfinite(im_ifuy) * np.isfinite(self.wavelengths))
+            X = im_ifuy[where_good]
+            Y = self.wavelengths[where_good]
+            Z = data_all_LPF[where_good]
+            # plt.scatter(Y,X)
+            filtered_triangles = filter_big_triangles(X, Y, 0.2)
+            # Create filtered triangulation
+            filtered_tri = tri.Triangulation(X * self.wv_ref / Y, Y, triangles=filtered_triangles)
+            # Perform LinearTriInterpolator for filtered triangulation
+            pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
+
+            # ifuy_nodes_grid = ifuy_nodes_grid
+
+            reg_mean_map0 = pointcloud_interp(ifuy_nodes_grid, wv_nodes_grid)
+
+            # fill vertical nan columns
+            for k in range(reg_mean_map0.shape[0]):
+                row = reg_mean_map0[k, :]
+                finite_indices = np.where(np.isfinite(row))[0]
+                if len(finite_indices) == 0:
+                    continue
+                min_id = np.min(finite_indices)
+                max_id = np.max(finite_indices)
+                reg_mean_map0[k, 0:min_id] = reg_mean_map0[k, min_id]
+                reg_mean_map0[k, max_id + 1::] = reg_mean_map0[k, max_id]
+
+            # fill vertical nan columns
+            for l in range(reg_mean_map0.shape[1]):
+                col = reg_mean_map0[:, l]
+                finite_indices = np.where(np.isfinite(col))[0]
+                if len(finite_indices) == 0:
+                    continue
+                min_id = np.min(finite_indices)
+                max_id = np.max(finite_indices)
+                reg_mean_map0[0:min_id, l] = reg_mean_map0[min_id, l]
+                reg_mean_map0[max_id + 1::, l] = reg_mean_map0[max_id, l]
+
+            reg_std_map0 = np.abs(reg_mean_map0)/2
+
+        if self.verbose:
+            print(f"Running 2d spline fit for the first time")
         # print(im.shape, im_wvs.shape,err.shape, self.bad_pixels.shape)
         star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_slices_2dspline(im,
                                                                                          im_wvs,
@@ -1290,9 +1431,14 @@ class JWSTNirspec_cal(Instrument):
                                                                                          threshold=threshold_badpix,
                                                                                          use_set_nans=False,
                                                                                          reg_mean_map=reg_mean_map0,
-                                                                                         reg_std_map=reg_std_map0)
-        where_nan = np.where(np.isnan(spline_paras0))
-        spline_paras0[where_nan] = reg_mean_map0[where_nan]
+                                                                                         reg_std_map=reg_std_map0,
+                                                                                         wv_ref=self.wv_ref)
+        reg_mean_map1 = copy(spline_paras0)
+        where_nan = np.where(np.isnan(reg_mean_map1))
+        reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
+        reg_std_map1 = np.abs(reg_mean_map1)/2
+        if self.verbose:
+            print(f"Running 2d spline fit for the second time after removing outliers")
         star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_slices_2dspline(im,
                                                                                          im_wvs,
                                                                                          im_ifuy,
@@ -1303,8 +1449,9 @@ class JWSTNirspec_cal(Instrument):
                                                                                          ifuy_nodes=self.ifuy_nodes,
                                                                                          threshold=threshold_badpix,
                                                                                          use_set_nans=False,
-                                                                                         reg_mean_map=spline_paras0,
-                                                                                         reg_std_map=spline_paras0)
+                                                                                         reg_mean_map=reg_mean_map1,
+                                                                                         reg_std_map=reg_std_map1,
+                                                                                         wv_ref=self.wv_ref)
         self.bad_pixels = self.bad_pixels * new_badpixs
 
 
@@ -1814,7 +1961,7 @@ def _task_normrows(paras):
 
 
 def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nodes=40, mypool=None, nan_mask_boxsize=3,
-                   threshold=10, star_sub_mode=False, use_set_nans=True,x_nodes=None,regularization=True,reg_mean_map=None,reg_std_map=None):
+                   threshold=10, star_sub_mode=False, use_set_nans=False,x_nodes=None,regularization=True,reg_mean_map=None,reg_std_map=None):
     """Normalize Rows
 
 
@@ -1958,7 +2105,7 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
 
 
 def _task_normslice_2dspline(paras):
-    im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, star_model, threshold, reg_mean_map, reg_std_map = paras
+    im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map = paras
 
     new_im = np.array(copy(im), '<f4')  # .byteswap().newbyteorder()
     new_noise = copy(noise)
@@ -1971,7 +2118,8 @@ def _task_normslice_2dspline(paras):
     if np.size(where_data_finite[0]) != 0:
         ravel_im_ifuy = im_ifuy[where_data_finite]
     ravel_im_wvs = im_wvs[where_data_finite]
-    M_spline_ifuy = get_spline_model(ifuy_nodes, ravel_im_ifuy, spline_degree=3)
+    # M_spline_ifuy = get_spline_model(ifuy_nodes, ravel_im_ifuy, spline_degree=3)
+    M_spline_ifuy = get_spline_model(ifuy_nodes, ravel_im_ifuy/ravel_im_wvs*wv_ref, spline_degree=3)
     M_spline_wvs = get_spline_model(wv_nodes, ravel_im_wvs, spline_degree=3)
     M_spline_ifuy_repeated = np.repeat(M_spline_ifuy, np.size(wv_nodes), axis=1)
     M_spline_wvs_tiled = np.tile(M_spline_wvs, (1, np.size(ifuy_nodes)))
@@ -1982,7 +2130,7 @@ def _task_normslice_2dspline(paras):
 
     M = M_2dspline * star_model[where_data_finite][:, None]
 
-    validpara = np.where(np.nansum(M > np.nanmax(M) * 0.00001, axis=0) != 0)
+    validpara = np.where(np.nansum(M > np.nanmax(M) * 0.0005, axis=0) != 0)
     M = M[:, validpara[0]]
 
     if 1:
@@ -2021,9 +2169,9 @@ def _task_normslice_2dspline(paras):
 
 
 def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None, star_model=None,  mypool=None,
-                              threshold=10, use_set_nans=True,
+                              threshold=10, use_set_nans=False,
                               N_wvs_nodes=20, wv_nodes=None, delta_ifuy=0.05, ifuy_nodes=None,
-                              reg_mean_map=None, reg_std_map=None):
+                              reg_mean_map=None, reg_std_map=None, wv_ref = None):
 
     if noise is None:
         noise = np.ones(image.shape)
@@ -2039,6 +2187,9 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None, s
         ifuy_min, ifuy_max = np.nanmin(im_ifuy), np.nanmax(im_ifuy)
         ifuy_min, ifuy_max = np.floor(ifuy_min * 10) / 10, np.ceil(ifuy_max * 10) / 10
         ifuy_nodes = np.arange(ifuy_min, ifuy_max + 0.1, delta_ifuy)
+
+    if wv_ref is None:
+        wv_ref = np.nanmin(im_wvs)
 
     new_image = copy(image)
     if use_set_nans:
@@ -2056,7 +2207,7 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None, s
     parallel_flag = False
 
     if (mypool is None) or (parallel_flag == False):
-        paras = new_image, im_wvs, im_ifuy, new_noise, new_badpixs, wv_nodes,ifuy_nodes, star_model, threshold, reg_mean_map, reg_std_map
+        paras = new_image, im_wvs, im_ifuy, new_noise, new_badpixs, wv_nodes,ifuy_nodes,wv_ref, star_model, threshold, reg_mean_map, reg_std_map
         outputs = _task_normslice_2dspline(paras)
         new_image, new_noise, new_badpixs, new_res, new_spline_paras = outputs
     else:
@@ -3390,9 +3541,9 @@ def cube_matchedfilter(flux_cube,fluxerr_cube,wv_sampling,ra_grid, dec_grid,plan
     return snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
 
 
-def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=None, spec_R_sampling=None,spline2d=False):
-    print(len(glob(out_filename)), out_filename)
+def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=None, spec_R_sampling=None,spline2d=False):
     if 1 and load_utils and len(glob(out_filename)):
+        print(len(glob(out_filename)), out_filename)
         with pyfits.open(out_filename) as hdulist:
             new_wavelengths = hdulist[0].data
             combined_fluxes = hdulist[1].data
@@ -3412,8 +3563,14 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=True, mppool=N
                 if reload_outputs is None:
                     reload_outputs = dataobj.compute_starspectrum_contnorm(save_utils=True,mppool= mppool)
                 new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes = reload_outputs
+
+            spline_cont0[np.where(spline_cont0 / dataobj.noise < 5)] = np.nan
+            spline_cont0 = copy(spline_cont0)
+            spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
+            spline_cont0[np.where(np.isnan(dataobj.bad_pixels))] = np.nan
             normalized_im = dataobj.data / spline_cont0
             normalized_err = dataobj.noise / spline_cont0
+
             wvs_list.extend(dataobj.wavelengths.flatten())
             normalized_im_list.extend(normalized_im.flatten())
             normalized_err_list.extend(normalized_err.flatten())

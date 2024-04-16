@@ -16,7 +16,7 @@ from breads.utils import get_spline_model
 def hc_atmgrid_2dsplinefm_jwst_nirspec_cal_FixedSlit(nonlin_paras, dataobj, ifuy_array=None,atm_grid=None, atm_grid_wvs=None,star_func=None,
                                                      wv_nodes=None,N_wvs_nodes=20,ifuy_nodes=None,delta_ifuy=0.05,
                                                      badpixfraction=0.75,fix_parameters=None,return_extra_outputs=False,
-                                                     reg_mean_map=None,reg_std_map=None):
+                                                     reg_mean_map=None,reg_std_map=None,wv_ref=None):
 
     """
     For high-contrast companions (planet + speckles).
@@ -51,7 +51,7 @@ def hc_atmgrid_2dsplinefm_jwst_nirspec_cal_FixedSlit(nonlin_paras, dataobj, ifuy
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
     extra_outputs = {}
-    # print(nonlin_paras)
+    print(nonlin_paras)
     if fix_parameters is not None:
         _nonlin_paras = np.array(fix_parameters)
         _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
@@ -127,7 +127,8 @@ def hc_atmgrid_2dsplinefm_jwst_nirspec_cal_FixedSlit(nonlin_paras, dataobj, ifuy
         return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
     else:
 
-        M_spline_ifuy = get_spline_model(ifuy_nodes, ifuy, spline_degree=3)
+        # M_spline_ifuy = get_spline_model(ifuy_nodes, ifuy, spline_degree=3)
+        M_spline_ifuy = get_spline_model(ifuy_nodes, ifuy / w * wv_ref, spline_degree=3)
         M_spline_wvs = get_spline_model(wv_nodes, w, spline_degree=3)
         M_spline_ifuy_repeated = np.repeat(M_spline_ifuy, np.size(wv_nodes), axis=1)
         M_spline_wvs_tiled = np.tile(M_spline_wvs, (1, np.size(ifuy_nodes)))

@@ -60,7 +60,7 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
     if regularization is None:
         min_spline_ampl = 0.02
     else:
-        min_spline_ampl = 0.00001
+        min_spline_ampl = 0.0005
 
 
     Natmparas = len(atm_grid.values.shape)-1
