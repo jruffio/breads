@@ -591,7 +591,7 @@ class JWSTNirspec_cal(Instrument):
             outarr_not_created = True
             for wv_id, wv in enumerate(wv_sampling):
                 print(wv_id, wv, nwavelen)
-                paras = nrs, wv, oversample
+                paras = nrs, wv, oversample, self.opmode
                 out = _get_wpsf_task(paras)
                 # plt.imshow(out[0])
                 # plt.show()
@@ -732,7 +732,7 @@ class JWSTNirspec_cal(Instrument):
         # nrs.options["source_offset_x"] = source_offset_x
         # nrs.options["source_offset_x"] = source_offset_y
 
-        paras = nrs, self.webbpsf_wv0, oversample
+        paras = nrs, self.webbpsf_wv0, oversample, self.opmode
         out = _get_wpsf_task(paras)
         wpsfs = out[0]
         wepsfs = out[1]
@@ -1573,8 +1573,15 @@ class JWSTNirspec_cal(Instrument):
 
 def _get_wpsf_task(paras):
     """ Run WebbPSF for a single wavelength. Utility function for compute_webbpsf_model."""
-    nrs, center_wv, wpsf_oversample = paras
-    kernel = np.ones((wpsf_oversample, wpsf_oversample))
+    nrs, center_wv, wpsf_oversample, opmode = paras
+    if opmode=='FIXEDSLIT':
+        print('FixedSlit webbpsf kernel...')
+        kernel = np.ones((wpsf_oversample, wpsf_oversample*2))
+    elif opmode=='IFS':
+        kernel = np.ones((wpsf_oversample, wpsf_oversample))
+    else:
+        raise Exception('OPMODE unknown')
+        
     ext = 'OVERSAMP'
     slicepsf_wv0 = nrs.calc_psf(monochromatic=center_wv * 1e-6,  # Wavelength, in **METERS**
                                 fov_arcsec=6,  # angular size to simulate PSF over
@@ -3007,13 +3014,36 @@ def fitpsf(dataobj_list, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf,
             where_bad = np.where(np.isnan(dataobj.bad_pixels))
             tmp_sub = np.zeros(dataobj.data.shape)+np.nan
             tmp_model = np.zeros(dataobj.data.shape)+np.nan
-            if dataobj.data_unit == "MJy":##MJy/sr  or MJy
-                arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
-                tmp_sub[where_mask] = hdulist_sc["SCI"].data[where_mask] - new_model[where_mask]/(dataobj.area2d[where_mask]*arcsec2_to_sr)
-                tmp_model[where_mask] = new_model[where_mask]/(dataobj.area2d[where_mask]*arcsec2_to_sr)
-            elif dataobj.data_unit == "MJy/sr":
-                tmp_sub[where_mask] = hdulist_sc["SCI"].data[where_mask] - new_model[where_mask]
-                tmp_model[where_mask] = new_model[where_mask]
+            
+            #if dataobj.data_unit == "MJy": ##MJy/sr  or MJy
+            #    arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
+            #    tmp_sub[where_mask] = hdulist_sc["SCI"].data[where_mask] - new_model[where_mask]/(dataobj.area2d[where_mask]*arcsec2_to_sr)
+            #    tmp_model[where_mask] = new_model[where_mask]/(dataobj.area2d[where_mask]*arcsec2_to_sr)
+            #elif dataobj.data_unit == "MJy/sr":
+            #    tmp_sub[where_mask] = hdulist_sc["SCI"].data[where_mask] - new_model[where_mask]
+            #    tmp_model[where_mask] = new_model[where_mask]
+            #replaced by below
+            #####
+            arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
+            a2d = dataobj.area2d[where_mask]
+            tmp_sub[where_mask] = hdulist_sc["SCI"].data[where_mask] - new_model[where_mask]
+            tmp_model[where_mask] = new_model[where_mask]
+
+            du = dataobj.data_unit
+            bu = dataobj.extheader["BUNIT"].strip()
+
+            if du == 'MJy'    and bu == 'MJy':
+                pass
+            if du == 'MJy/sr' and bu == 'MJy/sr':
+                pass
+            if du == 'MJy/sr' and bu == 'MJy':
+                tmp_sub[where_mask]   *= (a2d*arcsec2_to_sr)
+                tmp_model[where_mask] *= (a2d*arcsec2_to_sr)
+            if du == 'MJy'    and bu == 'MJy/sr':
+                tmp_sub[where_mask]   /= (a2d*arcsec2_to_sr)
+                tmp_model[where_mask] /= (a2d*arcsec2_to_sr)
+            ######
+            
             hdulist_sc["SCI"].data = tmp_sub
             hdulist_sc["DQ"].data[where_bad] = 1
             # Write the new HDU list to a new FITS file
