@@ -137,8 +137,9 @@ class JWSTNirspec_cal(Instrument):
         self.bad_pixels[np.where(np.isnan(self.data))] = np.nan
 
         # print("coucou",self.priheader["FXD_SLIT"].strip())
-        if self.opmode == "FIXEDSLIT" and "S200A1" in self.priheader["FXD_SLIT"].strip():#self.priheader["DETECTOR"].strip() == "NRS2":
+        if self.opmode == "FIXEDSLIT":# and "S200A1" in self.priheader["FXD_SLIT"].strip():#self.priheader["DETECTOR"].strip() == "NRS2":
             self.bad_pixels[np.where(self.wavelengths>5.125)] = np.nan
+            # self.bad_pixels[np.where(self.wavelengths>5.12)] = np.nan
 
         #Removing any data with zero noise
         where_zero_noise = np.where(self.noise == 0)
@@ -307,7 +308,7 @@ class JWSTNirspec_cal(Instrument):
         return new_badpix
 
 
-    def compute_coordinates_arrays(self, save_utils=False):
+    def compute_coordinates_arrays(self, save_utils=False,center_with_targname=True,from_other_filename =None):
         """ Determine the relative coordinates in the focal plane relative to the target.
         Compute the coordinates {wavelen, delta_ra, delta_dec, area} for each pixel in a 2D image
 
@@ -327,22 +328,15 @@ class JWSTNirspec_cal(Instrument):
         if self.verbose:
             print(f"Computing coordinates arrays.")
 
-        # Calculate the updated SkyCoord object for the desired date
-        host_coord = utils.propagate_coordinates_at_epoch(self.priheader["TARGNAME"], self.priheader["DATE-OBS"])
-        host_ra_deg = host_coord.ra.deg
-        host_dec_deg = host_coord.dec.deg
 
-        hdulist = pyfits.open(self.filename) #open file
+        if from_other_filename is None:
+            hdulist = pyfits.open(self.filename) #open file
+        else:
+            hdulist = pyfits.open(from_other_filename) #open file
+
         shape = hdulist[1].data.shape #obtain generic shape of data
         calfile = jwst.datamodels.open(hdulist) #save time opening by passing the already opened file
         photom_dataset = DataSet(calfile)
-
-        ## Determine pixel areas for each pixel, retrieved from a CRDS reference file
-        area_fname = self.priheader["R_AREA"].replace("crds://", os.path.join(self.crds_dir, "references", "jwst",
-                                                                              "nirspec") + os.path.sep)
-        # Load the pixel area table for the IFU slices
-        area_model = datamodels.open(area_fname)
-        area_data = area_model.area_table
 
         # Compute 2D wavelength and pixel area arrays for the whole image
         # Use WCS to compute RA, Dec for each pixel
@@ -350,6 +344,7 @@ class JWSTNirspec_cal(Instrument):
 
         if self.opmode == "FIXEDSLIT":
             print('Using FixedSlit methods...')
+
             pxarea_as2 = calfile._asdf._tree['slits'][0]['meta']['photometry']['pixelarea_arcsecsq'] #needs to be revisited
             area2d = np.ones(shape)*pxarea_as2 #constant area
 
@@ -361,6 +356,13 @@ class JWSTNirspec_cal(Instrument):
             dec_array = np.zeros(shape) + np.nan
             wavelen_array = np.zeros(shape) + np.nan
         elif self.opmode == "IFU":
+            ## Determine pixel areas for each pixel, retrieved from a CRDS reference file
+            area_fname = hdulist[0].header["R_AREA"].replace("crds://", os.path.join(self.crds_dir, "references", "jwst",
+                                                                                  "nirspec") + os.path.sep)
+            # Load the pixel area table for the IFU slices
+            area_model = datamodels.open(area_fname)
+            area_data = area_model.area_table
+
             wave2d, area2d, dqmap = photom_dataset.calc_nrs_ifu_sens2d(area_data)
             area2d[np.where(area2d == 1)] = np.nan
             wcses = jwst.assign_wcs.nrs_ifu_wcs(calfile)  # returns a list of 30 WCSes, one per slice. This is slow.
@@ -398,6 +400,16 @@ class JWSTNirspec_cal(Instrument):
         # print(np.nanmedian(ra_array))
         # print(np.nanmedian(slicer_x_array))
         # exit()
+
+        if center_with_targname:
+            # Calculate the updated SkyCoord object for the desired date
+            host_coord = utils.propagate_coordinates_at_epoch(hdulist[0].header["TARGNAME"], hdulist[0].header["DATE-OBS"])
+            host_ra_deg = host_coord.ra.deg
+            host_dec_deg = host_coord.dec.deg
+        else:
+            host_ra_deg = np.nanmean(ra_array)
+            host_dec_deg = np.nanmean(dec_array)
+
         dra_as_array = (ra_array - host_ra_deg) * 3600 * np.cos(np.radians(dec_array))
         ddec_as_array = (dec_array - host_dec_deg) * 3600
 
@@ -2123,7 +2135,8 @@ def _task_normslice_2dspline(paras):
 
     M = M_2dspline * star_model[where_data_finite][:, None]
 
-    validpara = np.where(np.nansum(M > np.nanmax(M) * 0.0005, axis=0) != 0)
+    # validpara = np.where(np.nansum(M > np.nanmax(M) * 0.0005, axis=0) != 0)
+    validpara = np.where(np.nansum(M > np.nanmax(M) * 0.005, axis=0) != 0)
     M = M[:, validpara[0]]
 
     if 1:

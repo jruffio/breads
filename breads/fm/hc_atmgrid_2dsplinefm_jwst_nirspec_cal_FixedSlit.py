@@ -139,6 +139,9 @@ def hc_atmgrid_2dsplinefm_jwst_nirspec_cal_FixedSlit(nonlin_paras, dataobj, ifuy
         comp_model = dataobj.webbpsf_interp((x - comp_dra_as) * dataobj.webbpsf_wv0 / w,
                                             (y - comp_ddec_as) * dataobj.webbpsf_wv0 / w) * comp_spec
 
+        valid_speckles_paras = np.where(np.nansum(M_speckles > np.nanmax(M_speckles) * 0.005, axis=0) != 0)
+        M_speckles = M_speckles[:, valid_speckles_paras[0]]
+
         # combine planet model with speckle model
         M = np.concatenate([comp_model[:, None], M_speckles], axis=1)
 
@@ -154,10 +157,10 @@ def hc_atmgrid_2dsplinefm_jwst_nirspec_cal_FixedSlit(nonlin_paras, dataobj, ifuy
             wvs_reg = np.array([np.nan])
             ifuy_reg = np.array([np.nan])
 
-            s_reg = np.concatenate([s_reg, s_reg_speckles])
-            d_reg = np.concatenate([d_reg, d_reg_speckles])
-            wvs_reg = np.concatenate([wvs_reg, wvs_reg_speckles])
-            ifuy_reg = np.concatenate([ifuy_reg, ifuy_reg_speckles])
+            s_reg = np.concatenate([s_reg, s_reg_speckles[valid_speckles_paras[0]]])
+            d_reg = np.concatenate([d_reg, d_reg_speckles[valid_speckles_paras[0]]])
+            wvs_reg = np.concatenate([wvs_reg, wvs_reg_speckles[valid_speckles_paras[0]]])
+            ifuy_reg = np.concatenate([ifuy_reg, ifuy_reg_speckles[valid_speckles_paras[0]]])
 
             extra_outputs["regularization"] = (d_reg,s_reg)
             extra_outputs["regularization_wvs"] = wvs_reg
