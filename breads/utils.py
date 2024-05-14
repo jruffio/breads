@@ -560,11 +560,11 @@ def scale_psg(psg_tuple, airmass, pwv):
 
 
 def rotate_coordinates(x, y, angle, flipx=False):
-    x_shape = x.shape
+    x_shape = np.array(x).shape
     if flipx:
-        _x,_y = -x.ravel(),y.ravel()
+        _x,_y = -np.array(x).ravel(),np.array(y).ravel()
     else:
-        _x,_y = x.ravel(),y.ravel()
+        _x,_y = np.array(x).ravel(),np.array(y).ravel()
     # Convert angle to radians
     angle_rad = np.radians(angle)
 

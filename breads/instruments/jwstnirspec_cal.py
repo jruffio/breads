@@ -49,7 +49,7 @@ import numpy as np
 from scipy.ndimage import generic_filter
 
 from scipy.ndimage import median_filter
-
+from scipy.interpolate import splev, splrep
 
 
 
@@ -349,6 +349,7 @@ class JWSTNirspec_cal(Instrument):
             area2d = np.ones(shape)*pxarea_as2 #constant area
 
             wcs = calfile._asdf._tree['slits'][0]['meta']['wcs'] #single wcs
+            # wcs = jwst.assign_wcs.nrs_wcs_set_input(calfile)
             wcses = []
             wcses.append(wcs)
 
@@ -432,6 +433,7 @@ class JWSTNirspec_cal(Instrument):
             if self.verbose:
                 print(f"  Saved the computed coordinates arrays to {out_filename}")
         self.dra_as_array, self.ddec_as_array, self.area2d = dra_as_array, ddec_as_array, area2d
+        self.coords = "sky"
         return wavelen_array, dra_as_array, ddec_as_array, area2d
 
 
@@ -446,7 +448,19 @@ class JWSTNirspec_cal(Instrument):
             ddec_as_array = hdulist[2].data
             area2d = hdulist[3].data
         self.dra_as_array, self.ddec_as_array, self.area2d = dra_as_array, ddec_as_array, area2d
+        self.coords = "sky"
         return wavelen_array, dra_as_array, ddec_as_array, area2d
+
+    def set_coords2ifu(self, load_filename=None):
+        ifuX, ifuY = self.getifucoords()
+        self.dra_as_array, self.ddec_as_array = ifuX, ifuY
+        self.coords = "ifu"
+        return ifuX, ifuY
+    def set_coords2sky(self, load_filename=None):
+        dra_as_array, ddec_as_array = self.getskycoords()
+        self.dra_as_array, self.ddec_as_array = dra_as_array, ddec_as_array
+        self.coords = "sky"
+        return dra_as_array, ddec_as_array
 
     def convert_MJy_per_sr_to_MJy(self, save_utils=False, data_in_MJy_per_sr=None):
         if data_in_MJy_per_sr is not None:
@@ -1098,8 +1112,10 @@ class JWSTNirspec_cal(Instrument):
             X = im_ifuy[where_good]
             Y = self.wavelengths[where_good]
             Z = data_all_LPF[where_good]
-            # plt.scatter(Y,X)
-            filtered_triangles = filter_big_triangles(X, Y, 0.2)
+            # plt.scatter(X * self.wv_ref / Y, Y,s=1)
+            # print(self.wv_ref )
+            # plt.show()
+            filtered_triangles = filter_big_triangles(X * self.wv_ref / Y, Y, 0.2)
             # Create filtered triangulation
             filtered_tri = tri.Triangulation(X * self.wv_ref / Y, Y, triangles=filtered_triangles)
             # Perform LinearTriInterpolator for filtered triangulation
@@ -1225,6 +1241,7 @@ class JWSTNirspec_cal(Instrument):
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
         return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes,ifuy_nodes
 
+
     def compute_starsubtraction(self,  save_utils=False, im=None, im_wvs=None, err=None, threshold_badpix=10,
                                 mppool=None,starsub_dir=None,load_starspectrum_contnorm = None):
         if self.verbose:
@@ -1304,11 +1321,17 @@ class JWSTNirspec_cal(Instrument):
                 if not os.path.exists(os.path.join(starsub_dir, "starsub")):
                     os.makedirs(os.path.join(starsub_dir, "starsub"))
                 hdulist_sc = pyfits.open(self.filename)
-                if self.data_unit == "MJy":##MJy/sr  or MJy
-                    arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
-                    hdulist_sc["SCI"].data = subtracted_im/(self.area2d*arcsec2_to_sr)
-                elif self.data_unit == "MJy/sr":
+                du = self.data_unit
+                bu = self.extheader["BUNIT"].strip()
+                arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
+                if du == 'MJy'    and bu == 'MJy':
                     hdulist_sc["SCI"].data = subtracted_im
+                if du == 'MJy/sr' and bu == 'MJy/sr':
+                    hdulist_sc["SCI"].data = subtracted_im
+                if du == 'MJy/sr' and bu == 'MJy':
+                    hdulist_sc["SCI"].data = subtracted_im*(self.area2d*arcsec2_to_sr)
+                if du == 'MJy' and bu == 'MJy/sr':
+                    hdulist_sc["SCI"].data = subtracted_im/(self.area2d*arcsec2_to_sr)
                 hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
                 try:
                     hdulist_sc.writeto(os.path.join(starsub_dir, "starsub", os.path.basename(self.filename)), overwrite=True)
@@ -1395,7 +1418,7 @@ class JWSTNirspec_cal(Instrument):
             Y = self.wavelengths[where_good]
             Z = data_all_LPF[where_good]
             # plt.scatter(Y,X)
-            filtered_triangles = filter_big_triangles(X, Y, 0.2)
+            filtered_triangles = filter_big_triangles(X * self.wv_ref / Y, Y, 0.2)
             # Create filtered triangulation
             filtered_tri = tri.Triangulation(X * self.wv_ref / Y, Y, triangles=filtered_triangles)
             # Perform LinearTriInterpolator for filtered triangulation
@@ -1492,11 +1515,17 @@ class JWSTNirspec_cal(Instrument):
                 if not os.path.exists(os.path.join(starsub_dir, "starsub2d")):
                     os.makedirs(os.path.join(starsub_dir, "starsub2d"))
                 hdulist_sc = pyfits.open(self.filename)
-                if self.data_unit == "MJy":##MJy/sr  or MJy
-                    arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
-                    hdulist_sc["SCI"].data = subtracted_im/(self.area2d*arcsec2_to_sr)
-                elif self.data_unit == "MJy/sr":
+                du = self.data_unit
+                bu = self.extheader["BUNIT"].strip()
+                arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
+                if du == 'MJy'    and bu == 'MJy':
                     hdulist_sc["SCI"].data = subtracted_im
+                if du == 'MJy/sr' and bu == 'MJy/sr':
+                    hdulist_sc["SCI"].data = subtracted_im
+                if du == 'MJy/sr' and bu == 'MJy':
+                    hdulist_sc["SCI"].data = subtracted_im*(self.area2d*arcsec2_to_sr)
+                if du == 'MJy' and bu == 'MJy/sr':
+                    hdulist_sc["SCI"].data = subtracted_im/(self.area2d*arcsec2_to_sr)
                 hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
                 try:
                     hdulist_sc.writeto(os.path.join(starsub_dir, "starsub2d", os.path.basename(self.filename)), overwrite=True)
@@ -1685,14 +1714,39 @@ class JWSTNirspec_cal(Instrument):
 
         """
         # plt.scatter(self.dra_as_array[:,500],self.ddec_as_array[:,500],c="red",s=100*self.data[:,500]/np.nanmax(self.data[:,500]))
+
         if ras is not None and decs is not None:
             ifuX, ifuY = rotate_coordinates(ras, decs, self.east2V2_deg, flipx=False)
         else:
-            ifuX, ifuY = rotate_coordinates(self.dra_as_array, self.ddec_as_array, self.east2V2_deg, flipx=False)
+            if self.coords == "ifu":
+                ifuX, ifuY =  self.dra_as_array, self.ddec_as_array
+            elif self.coords == "sky":
+                ifuX, ifuY = rotate_coordinates(self.dra_as_array, self.ddec_as_array, self.east2V2_deg, flipx=False)
         # plt.scatter(ifuX[:,500],ifuY[:,500],c="blue",s=100*self.data[:,500]/np.nanmax(self.data[:,500]))
         # plt.show()
         # exit()
         return ifuX, ifuY
+    def getskycoords(self, ifux=None, ifuy=None):
+        """ Get sky coordinates
+
+        Parameters
+        ----------
+        ras
+        decs
+
+        Returns
+        -------
+        dra_as_array, ddec_as_array : arrays
+
+        """
+        if ifux is not None and ifuy is not None:
+            dra_as_array, ddec_as_array = rotate_coordinates(ifux, ifuy, -self.east2V2_deg, flipx=False)
+        else:
+            if self.coords == "sky":
+                dra_as_array, ddec_as_array =  self.dra_as_array, self.ddec_as_array
+            elif self.coords == "ifu":
+                dra_as_array, ddec_as_array = rotate_coordinates(self.dra_as_array, self.ddec_as_array, -self.east2V2_deg, flipx=False)
+        return dra_as_array, ddec_as_array
 
     def broaden(self, wvs, spectrum, loc=None, mppool=None):
         """ Broaden a spectrum to the resolution of this data object using the resolution attribute (self.R).
@@ -2597,6 +2651,34 @@ def combine_spectrum(wavelengths, fluxes, errors, bin_size):
 
     return new_wavelengths, combined_fluxes, combined_errors
 
+def combine_spectrum_1dspline(wavelengths, fluxes, errors, bin_size,oversampling=10):
+    new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(wavelengths, fluxes, errors, bin_size)
+    star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+    err_func = interp1d(new_wavelengths, combined_errors, kind="linear", bounds_error=False, fill_value=1)
+
+    tmp = (fluxes - star_func(wavelengths)) / errors
+    tmp_std = np.nanstd(tmp)
+    where_outliers = np.where(np.abs(tmp) > (5 * tmp_std))
+    fluxes[where_outliers] = np.nan
+    
+    # Remove NaN values from the input arrays
+    nan_mask = np.logical_or(np.isnan(wavelengths), np.isnan(fluxes))
+    where_mask = np.where(~nan_mask)
+    wavelengths = wavelengths[where_mask]
+    fluxes = fluxes[where_mask]
+    errors = errors[where_mask]
+
+    # Sort the arrays by wavelength
+    sort_indices = np.argsort(wavelengths)
+    wavelengths = wavelengths[sort_indices]
+    fluxes = fluxes[sort_indices]
+    errors = errors[sort_indices]
+
+    spl = splrep(wavelengths, fluxes, k=3, t=new_wavelengths[1:(np.size(new_wavelengths)-1)], task=-1, s=None, w=1 / errors)
+
+    hd_wvs = np.arange(new_wavelengths[0],new_wavelengths[-1], bin_size / oversampling)
+    return hd_wvs, splev(hd_wvs, spl),err_func(hd_wvs),spl
+    # return spl
 
 # def find_bleeding_bar(ra_arr, dec_arr, threshold2mask=0.15):
 #
@@ -3554,7 +3636,10 @@ def cube_matchedfilter(flux_cube,fluxerr_cube,wv_sampling,ra_grid, dec_grid,plan
     return snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
 
 
-def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=None, spec_R_sampling=None,spline2d=False):
+def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=None, spec_R_sampling=None,spline2d=False,
+                      masking_radius = None, masking_ifu_location=None,interpolation=None):
+    if interpolation is None:
+        interpolation = "linear"
     if 1 and load_utils and len(glob(out_filename)):
         print(len(glob(out_filename)), out_filename)
         with pyfits.open(out_filename) as hdulist:
@@ -3569,18 +3654,22 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=
             if spline2d:
                 reload_outputs = dataobj.reload_starspectrum_contnorm_2dspline()
                 if reload_outputs is None:
-                    reload_outputs = dataobj.compute_starspectrum_contnorm_2dspline(save_utils=True,mppool= mppool)
+                    reload_outputs = dataobj.compute_starspectrum_contnorm_2dspline(save_utils=False,mppool= mppool)
                 new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, wv_nodes,ifuy_nodes = reload_outputs
             else:
                 reload_outputs = dataobj.reload_starspectrum_contnorm()
                 if reload_outputs is None:
-                    reload_outputs = dataobj.compute_starspectrum_contnorm(save_utils=True,mppool= mppool)
+                    reload_outputs = dataobj.compute_starspectrum_contnorm(save_utils=False,mppool= mppool)
                 new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes = reload_outputs
 
             spline_cont0[np.where(spline_cont0 / dataobj.noise < 5)] = np.nan
             spline_cont0 = copy(spline_cont0)
             spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
             spline_cont0[np.where(np.isnan(dataobj.bad_pixels))] = np.nan
+            if masking_ifu_location is not None:
+                im_ifux, im_ifuy = dataobj.getifucoords()
+                dist_map = np.sqrt((im_ifux-masking_ifu_location[0])**2+(im_ifuy-masking_ifu_location[1])**2)
+                spline_cont0[np.where(dist_map<masking_radius)] = np.nan
             normalized_im = dataobj.data / spline_cont0
             normalized_err = dataobj.noise / spline_cont0
 
@@ -3589,14 +3678,17 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=
             normalized_err_list.extend(normalized_err.flatten())
         if spec_R_sampling is None:
             spec_R_sampling = 4 * dataobj.R
-        new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(np.array(wvs_list),
-                                                                             np.array(normalized_im_list),
-                                                                             np.array(normalized_err_list),
-                                                                             np.nanmedian(wvs_list) / (spec_R_sampling))
-        #
-        # plt.scatter(dataobj.wavelengths.flatten(), normalized_im.flatten())
-        # plt.ylim([0, 2])
-        # plt.show()
+        if interpolation == "linear":
+            new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(np.array(wvs_list),
+                                                                                 np.array(normalized_im_list),
+                                                                                 np.array(normalized_err_list),
+                                                                                 np.nanmedian(wvs_list) / (spec_R_sampling))
+        elif interpolation == "spline":
+            new_wavelengths, combined_fluxes, combined_errors, spl = combine_spectrum_1dspline(np.array(wvs_list),
+                                                                                 np.array(normalized_im_list),
+                                                                                 np.array(normalized_err_list),
+                                                                                 np.nanmedian(wvs_list) / (spec_R_sampling),
+                                                                                              oversampling=10)
 
         if out_filename is not None:
             hdulist = pyfits.HDUList()
@@ -3609,3 +3701,8 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=
                 hdulist.writeto(out_filename, clobber=True)
             hdulist.close()
     return new_wavelengths, combined_fluxes, combined_errors
+        #
+        # plt.scatter(dataobj.wavelengths.flatten(), normalized_im.flatten())
+        # plt.ylim([0, 2])
+        # plt.show()
+
