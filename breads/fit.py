@@ -283,7 +283,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
 
     return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
-def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=None):
+def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=None,scale_noise=True):
     """
     Wrapper to fit_fm() but only returns the log probability marginalized over the linear parameters.
 
@@ -309,7 +309,7 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,b
     else:
         prior = 0
     try:
-        lnprob = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False,bounds=bounds)[0]+prior
+        lnprob = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False,bounds=bounds,scale_noise=scale_noise)[0]+prior
     except:
         lnprob =  -np.inf
     return lnprob
@@ -333,7 +333,7 @@ def combined_log_prob(nonlin_paras, dataobjlist,fm_funclist, fm_paraslist, nonli
         combined_lnprob += lnprob
     return combined_lnprob
 
-def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=None):
+def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=None,scale_noise=True):
     """
    Returns the negative of the log_prob() for minimization routines.
 
@@ -354,6 +354,6 @@ def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,
     Returns:
         log_prob: Probability of the model marginalized over linear parameters.
     """
-    nlogprob_val =  - log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func,bounds)
+    nlogprob_val =  - log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func,bounds,scale_noise)
     # print( nlogprob_val, nonlin_paras)
     return nlogprob_val

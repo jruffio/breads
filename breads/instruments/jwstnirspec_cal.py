@@ -41,6 +41,7 @@ import scipy.linalg as la
 from scipy.optimize import minimize
 from astropy import constants as const
 from scipy.stats import median_abs_deviation
+from gwcs import wcstools
 
 from breads.utils import rotate_coordinates
 
@@ -57,7 +58,7 @@ class JWSTNirspec_cal(Instrument):
     def __init__(self, filename=None, crds_dir=None, utils_dir=None, save_utils=True,
                  load_utils=True,
                  preproc_task_list = None,
-                 verbose=True):
+                 verbose=True,wv_ref=None):
         """JWST NIRSpec 2D calibrated data.
 
 
@@ -81,10 +82,10 @@ class JWSTNirspec_cal(Instrument):
         else:
             self.read_data_file(filename, crds_dir=crds_dir, utils_dir=utils_dir, save_utils=save_utils,
                                 load_utils=load_utils,
-                                preproc_task_list=preproc_task_list)
+                                preproc_task_list=preproc_task_list,wv_ref=wv_ref)
 
     def read_data_file(self, filename, crds_dir=None, utils_dir=None, save_utils=True,load_utils=True,
-                       preproc_task_list=None):
+                       preproc_task_list=None,wv_ref=None):
         """Read JWST NIRSpec IFU 2D Cal file.  Also checks validity at the end
 
         Parameters
@@ -126,7 +127,10 @@ class JWSTNirspec_cal(Instrument):
             self.noise = np.sqrt(rnoise_var+pnoise_var)
         dq = hdulist_sc["DQ"].data
         self.wavelengths = hdulist_sc["WAVELENGTH"].data
-        self.wv_ref = np.nanmin(self.wavelengths)
+        if wv_ref is not None:
+            self.wv_ref = wv_ref
+        else:
+            self.wv_ref = np.nanmin(self.wavelengths)
         ny, nx = self.data.shape
         hdulist_sc.close()
 
@@ -234,7 +238,7 @@ class JWSTNirspec_cal(Instrument):
         self.valid_data_check()
         return
 
-    def compute_med_filt_badpix(self, save_utils=False, window_size=50,mad_threshold=50):
+    def compute_med_filt_badpix(self, save_utils=False, window_size=50,mad_threshold=50,crop_Npix_from_trace_edges=0):
         """ Quick bad pixel identification.
         The data is first high-pass filtered row by row with a median filter with a window size of 50 (window_size)
         pixels. The median absolute deviation (MAP) is then calculated row by row, and any pixel deviating by more than
@@ -266,6 +270,12 @@ class JWSTNirspec_cal(Instrument):
             row_err_masking = row_err/median_abs_deviation(row_err[np.where(np.isfinite(self.bad_pixels[rowid,:]))])
             new_badpix[rowid,np.where((row_err_masking>mad_threshold))[0]] = np.nan
         self.bad_pixels *= new_badpix
+
+        if crop_Npix_from_trace_edges != 0:
+            if hasattr(self, "trace_id_map"):
+                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges,trace_id_map=self.trace_id_map)
+            else:
+                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges)
 
         if save_utils:
             if isinstance(save_utils,str):
@@ -307,8 +317,7 @@ class JWSTNirspec_cal(Instrument):
         self.bad_pixels *= new_badpix
         return new_badpix
 
-
-    def compute_coordinates_arrays(self, save_utils=False,center_with_targname=True,from_other_filename =None):
+    def compute_coordinates_arrays(self, save_utils=False,center_with_targname=True,from_other_filename =None,targname=None):
         """ Determine the relative coordinates in the focal plane relative to the target.
         Compute the coordinates {wavelen, delta_ra, delta_dec, area} for each pixel in a 2D image
 
@@ -334,28 +343,28 @@ class JWSTNirspec_cal(Instrument):
         else:
             hdulist = pyfits.open(from_other_filename) #open file
 
-        shape = hdulist[1].data.shape #obtain generic shape of data
         calfile = jwst.datamodels.open(hdulist) #save time opening by passing the already opened file
         photom_dataset = DataSet(calfile)
 
         # Compute 2D wavelength and pixel area arrays for the whole image
         # Use WCS to compute RA, Dec for each pixel
-        # TODO generalize this to work in ifualign space as well
+
+        self.trace_id_map = np.zeros(self.data.shape)+np.nan
 
         if self.opmode == "FIXEDSLIT":
             print('Using FixedSlit methods...')
 
-            pxarea_as2 = calfile._asdf._tree['slits'][0]['meta']['photometry']['pixelarea_arcsecsq'] #needs to be revisited
-            area2d = np.ones(shape)*pxarea_as2 #constant area
+            pxarea_as2 = calfile.slits[0].meta.photometry.pixelarea_arcsecsq
+            area2d = np.ones(self.data.shape)*pxarea_as2 #constant area
 
-            wcs = calfile._asdf._tree['slits'][0]['meta']['wcs'] #single wcs
-            # wcs = jwst.assign_wcs.nrs_wcs_set_input(calfile)
-            wcses = []
-            wcses.append(wcs)
+            if len(calfile.slits) != 1:
+                raise Exception("Multiple slits in data model not implemented.")
+            slitwcs = calfile.slits[0].meta.wcs
+            x, y = wcstools.grid_from_bounding_box(slitwcs.bounding_box, step=(1, 1), center=True)
+            ra_array, dec_array, wavelen_array = slitwcs(x, y)
 
-            ra_array = np.zeros(shape) + np.nan
-            dec_array = np.zeros(shape) + np.nan
-            wavelen_array = np.zeros(shape) + np.nan
+            self.trace_id_map[np.where(np.isfinite(ra_array))] = 0
+
         elif self.opmode == "IFU":
             ## Determine pixel areas for each pixel, retrieved from a CRDS reference file
             area_fname = hdulist[0].header["R_AREA"].replace("crds://", os.path.join(self.crds_dir, "references", "jwst",
@@ -369,32 +378,34 @@ class JWSTNirspec_cal(Instrument):
             wcses = jwst.assign_wcs.nrs_ifu_wcs(calfile)  # returns a list of 30 WCSes, one per slice. This is slow.
 
             #change this hardcoding?
-            ra_array = np.zeros((2048, 2048)) + np.nan
-            dec_array = np.zeros((2048, 2048)) + np.nan
-            wavelen_array = np.zeros((2048, 2048)) + np.nan
+            ra_array = np.zeros(self.data.shape) + np.nan
+            dec_array = np.zeros(self.data.shape) + np.nan
+            wavelen_array = np.zeros(self.data.shape) + np.nan
 
-        for i in range(len(wcses)):
-            print(f"Computing coords for slice {i}")
+            for i in range(len(wcses)):
+                print(f"Computing coords for slice {i}")
 
-            # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
-            xmin = max(int(np.round(wcses[i].bounding_box.intervals[0][0])), 0)
-            xmax = int(np.round(wcses[i].bounding_box.intervals[0][1]))
-            ymin = max(int(np.round(wcses[i].bounding_box.intervals[1][0])), 0)
-            ymax = int(np.round(wcses[i].bounding_box.intervals[1][1]))
-            # print(xmax, xmin,ymax, ymin,ymax - ymin,xmax - xmin)
+                # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
+                xmin = max(int(np.round(wcses[i].bounding_box.intervals[0][0])), 0)
+                xmax = int(np.round(wcses[i].bounding_box.intervals[0][1]))
+                ymin = max(int(np.round(wcses[i].bounding_box.intervals[1][0])), 0)
+                ymax = int(np.round(wcses[i].bounding_box.intervals[1][1]))
+                # print(xmax, xmin,ymax, ymin,ymax - ymin,xmax - xmin)
 
-            x = np.arange(xmin, xmax)
-            x = x.reshape(1, x.shape[0]) * np.ones((ymax - ymin, 1))
-            y = np.arange(ymin, ymax)
-            y = y.reshape(y.shape[0], 1) * np.ones((1, xmax - xmin))
+                x = np.arange(xmin, xmax)
+                x = x.reshape(1, x.shape[0]) * np.ones((ymax - ymin, 1))
+                y = np.arange(ymin, ymax)
+                y = y.reshape(y.shape[0], 1) * np.ones((1, xmax - xmin))
 
-            # Transform all those pixels to RA, Dec, wavelength
-            skycoords, speccoord = wcses[i](x, y, with_units=True)
-            # print(skycoords.ra)
+                # Transform all those pixels to RA, Dec, wavelength
+                skycoords, speccoord = wcses[i](x, y, with_units=True)
+                # print(skycoords.ra)
 
-            ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
-            dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
-            wavelen_array[ymin:ymax, xmin:xmax] = speccoord
+                ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
+                dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
+                wavelen_array[ymin:ymax, xmin:xmax] = speccoord
+
+                self.trace_id_map[ymin:ymax, xmin:xmax][np.where(np.isfinite(ra_array[ymin:ymax, xmin:xmax]))] = i
 
         # # print(ra_array)
         # print(host_ra_deg)
@@ -404,15 +415,17 @@ class JWSTNirspec_cal(Instrument):
 
         if center_with_targname:
             # Calculate the updated SkyCoord object for the desired date
-            host_coord = utils.propagate_coordinates_at_epoch(hdulist[0].header["TARGNAME"], hdulist[0].header["DATE-OBS"])
+            if targname is None:
+                targname = hdulist[0].header["TARGNAME"]
+            host_coord = utils.propagate_coordinates_at_epoch(targname, hdulist[0].header["DATE-OBS"])
             host_ra_deg = host_coord.ra.deg
             host_dec_deg = host_coord.dec.deg
-        else:
-            host_ra_deg = np.nanmean(ra_array)
-            host_dec_deg = np.nanmean(dec_array)
 
-        dra_as_array = (ra_array - host_ra_deg) * 3600 * np.cos(np.radians(dec_array))
-        ddec_as_array = (dec_array - host_dec_deg) * 3600
+            dra_as_array = (ra_array - host_ra_deg) * 3600 * np.cos(np.radians(dec_array))
+            ddec_as_array = (dec_array - host_dec_deg) * 3600
+        else:
+            dra_as_array = ra_array
+            ddec_as_array = dec_array
 
         if save_utils:
             if isinstance(save_utils,str):
@@ -425,6 +438,7 @@ class JWSTNirspec_cal(Instrument):
             hdulist.append(pyfits.ImageHDU(data=dra_as_array, name='DELTA_RA'))
             hdulist.append(pyfits.ImageHDU(data=ddec_as_array, name='DELTA_DEC'))
             hdulist.append(pyfits.ImageHDU(data=area2d, name='AREA2D'))
+            hdulist.append(pyfits.ImageHDU(data=self.trace_id_map, name='TRACE_ID_MAP'))
             try:
                 hdulist.writeto(out_filename, overwrite=True)
             except TypeError:
@@ -436,7 +450,6 @@ class JWSTNirspec_cal(Instrument):
         self.coords = "sky"
         return wavelen_array, dra_as_array, ddec_as_array, area2d
 
-
     def reload_coordinates_arrays(self, load_filename=None):
         if load_filename is None:
             load_filename = self.default_filenames["compute_coordinates_arrays"]
@@ -444,9 +457,10 @@ class JWSTNirspec_cal(Instrument):
             return None
         with pyfits.open(load_filename) as hdulist:
             wavelen_array = hdulist[0].data
-            dra_as_array = hdulist[1].data
-            ddec_as_array = hdulist[2].data
-            area2d = hdulist[3].data
+            dra_as_array = hdulist['DELTA_RA'].data
+            ddec_as_array = hdulist['DELTA_DEC'].data
+            area2d = hdulist['AREA2D'].data
+            self.trace_id_map = hdulist['TRACE_ID_MAP'].data
         self.dra_as_array, self.ddec_as_array, self.area2d = dra_as_array, ddec_as_array, area2d
         self.coords = "sky"
         return wavelen_array, dra_as_array, ddec_as_array, area2d
@@ -956,7 +970,8 @@ class JWSTNirspec_cal(Instrument):
         return bar_mask
 
     #herenow
-    def compute_starspectrum_contnorm(self,  save_utils=False,im=None, im_wvs=None, err=None, mppool=None, spec_R_sampling=None, threshold_badpix=10,x_nodes=None,N_nodes=40):
+    def compute_starspectrum_contnorm(self,  save_utils=False,im=None, im_wvs=None, err=None, mppool=None,
+                                      spec_R_sampling=None, threshold_badpix=10,x_nodes=None,N_nodes=40,iterative=True):
         if im is None:
             im = self.data
         if im_wvs is None:
@@ -991,20 +1006,28 @@ class JWSTNirspec_cal(Instrument):
                                                                               regularization=True,
                                                                               reg_mean_map=reg_mean_map0,
                                                                               reg_std_map=reg_std_map0)
-        spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=new_badpixs,
-                                                                              x_nodes=x_nodes, mypool=mppool,
-                                                                              threshold=threshold_badpix,
-                                                                              use_set_nans=False,
-                                                                              regularization=True,
-                                                                              reg_mean_map=spline_paras0,
-                                                                              reg_std_map=spline_paras0)
+        if iterative:
+            spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=new_badpixs,
+                                                                                  x_nodes=x_nodes, mypool=mppool,
+                                                                                  threshold=threshold_badpix,
+                                                                                  use_set_nans=False,
+                                                                                  regularization=True,
+                                                                                  reg_mean_map=spline_paras0,
+                                                                                  reg_std_map=spline_paras0)
 
-        spline_cont0[np.where(spline_cont0 / err < 5)] = np.nan
-        spline_cont0 = copy(spline_cont0)
-        spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
-        spline_cont0[np.where(np.isnan(self.bad_pixels))] = np.nan
-        normalized_im = im / spline_cont0
-        normalized_err = err / spline_cont0
+        # spline_cont0[np.where(spline_cont0 / err < 5)] = np.nan
+        # spline_cont0 = copy(spline_cont0)
+        # spline_cont0[np.where(spline_cont0 < np.median(spline_cont0))] = np.nan
+        # spline_cont0[np.where(np.isnan(self.bad_pixels))] = np.nan
+        # normalized_im = im / spline_cont0
+        # normalized_err = err / spline_cont0
+
+        continuum = copy(spline_cont0)
+        continuum[np.where(continuum / err < 5)] = np.nan
+        continuum[np.where(continuum < np.median(continuum))] = np.nan
+        continuum[np.where(np.isnan(self.bad_pixels))] = np.nan
+        normalized_im = im / continuum
+        normalized_err = err / continuum
 
         new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
                                                                              normalized_im.flatten(),
@@ -1058,9 +1081,10 @@ class JWSTNirspec_cal(Instrument):
     #herenow
     def compute_starspectrum_contnorm_2dspline(self,  save_utils=False,im=None, im_wvs=None, err=None, mppool=None,
                                                spec_R_sampling=None, threshold_badpix=10,
-                                               wv_nodes=None,N_wvs_nodes=20,ifuy_nodes=None,delta_ifuy=0.05):
-        if self.opmode != "FIXEDSLIT":
-            raise Exception("Only implement for FIXEDSLIT yet")
+                                               wv_nodes=None,N_wvs_nodes=20,ifuy_nodes=None,delta_ifuy=0.05,
+                                               apply_new_bad_pixels = False, iterative = True,independent_trace = True):
+        # if self.opmode != "FIXEDSLIT":
+        #     raise Exception("Only implement for FIXEDSLIT yet")
         if im is None:
             im = self.data
         if im_wvs is None:
@@ -1084,72 +1108,72 @@ class JWSTNirspec_cal(Instrument):
 
         # reg_mean_map0 = np.zeros((np.size(ifuy_nodes), np.size(wv_nodes))) + np.nanmedian(self.data * self.bad_pixels)
         # reg_std_map0 = reg_mean_map0
+        if independent_trace:
+            _trace_id_map = self.trace_id_map
+        else:
+            _trace_id_map = np.zeros(self.trace_id_map.shape)
+
         if 1:
-            # ifuy_nodes_grid, wv_nodes_grid = np.meshgrid(ifuy_nodes, wv_nodes, indexing="ij")
-            # where_good = np.where(np.isfinite(self.data) * np.isfinite(self.bad_pixels))
-            # X = im_ifuy[where_good]
-            # Y = self.wavelengths[where_good]
-            # Z = self.data[where_good]
-            # filtered_triangles = filter_big_triangles(X, Y, 0.2)
-            # # Create filtered triangulation
-            # filtered_tri = tri.Triangulation(X, Y, triangles=filtered_triangles)
-            # # Perform LinearTriInterpolator for filtered triangulation
-            # pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
-            #
-            # reg_mean_map0 = pointcloud_interp(ifuy_nodes_grid, wv_nodes_grid)
+            unique_trace_ids = np.unique(_trace_id_map[np.where(np.isfinite(_trace_id_map))])
+
 
             ifuy_nodes_grid, wv_nodes_grid = np.meshgrid(ifuy_nodes, wv_nodes, indexing="ij")
-            # print(ifuy_nodes_grid[:, 0])
-            # print(wv_nodes_grid[0, :])
 
             # Define the window size
             w = 10
             window_size = (1, w)
             # Apply median filter
-            data_all_LPF = median_filter(self.data * self.bad_pixels, size=window_size, mode='constant',cval=np.nan)
+            data_all_LPF = median_filter(self.data * self.bad_pixels, size=window_size, mode='constant', cval=np.nan)
 
-            where_good = np.where(np.isfinite(data_all_LPF) * np.isfinite(im_ifuy) * np.isfinite(self.wavelengths))
-            X = im_ifuy[where_good]
-            Y = self.wavelengths[where_good]
-            Z = data_all_LPF[where_good]
-            # plt.scatter(X * self.wv_ref / Y, Y,s=1)
-            # print(self.wv_ref )
-            # plt.show()
-            filtered_triangles = filter_big_triangles(X * self.wv_ref / Y, Y, 0.2)
-            # Create filtered triangulation
-            filtered_tri = tri.Triangulation(X * self.wv_ref / Y, Y, triangles=filtered_triangles)
-            # Perform LinearTriInterpolator for filtered triangulation
-            pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
+            reg_mean_map0 = np.zeros((np.size(unique_trace_ids),np.size(ifuy_nodes),np.size(wv_nodes))) + np.nan
+            for traceid in range(np.size(unique_trace_ids)):
 
-            # ifuy_nodes_grid = ifuy_nodes_grid
+                where_good = np.where((_trace_id_map == traceid) *np.isfinite(data_all_LPF) * np.isfinite(im_ifuy) * np.isfinite(self.wavelengths))
+                X = im_ifuy[where_good]
+                Y = self.wavelengths[where_good]
+                Z = data_all_LPF[where_good]
+                # plt.figure(traceid+1)
+                # plt.scatter(X * self.wv_ref / Y, Y,s=1)
+                # print(self.wv_ref )
+                # plt.show()
+                filtered_triangles = filter_big_triangles(X * self.wv_ref / Y, Y, 0.2)
+                # Create filtered triangulation
+                filtered_tri = tri.Triangulation(X * self.wv_ref / Y, Y, triangles=filtered_triangles)
+                # Perform LinearTriInterpolator for filtered triangulation
+                pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
 
-            reg_mean_map0 = pointcloud_interp(ifuy_nodes_grid, wv_nodes_grid)
+                # ifuy_nodes_grid = ifuy_nodes_grid
 
-            # fill vertical nan columns
-            for k in range(reg_mean_map0.shape[0]):
-                row = reg_mean_map0[k, :]
-                finite_indices = np.where(np.isfinite(row))[0]
-                if len(finite_indices) == 0:
-                    continue
-                min_id = np.min(finite_indices)
-                max_id = np.max(finite_indices)
-                reg_mean_map0[k, 0:min_id] = reg_mean_map0[k, min_id]
-                reg_mean_map0[k, max_id + 1::] = reg_mean_map0[k, max_id]
+                reg_mean_map0[traceid,:,:] = pointcloud_interp(ifuy_nodes_grid, wv_nodes_grid)
 
-            # fill vertical nan columns
-            for l in range(reg_mean_map0.shape[1]):
-                col = reg_mean_map0[:, l]
-                finite_indices = np.where(np.isfinite(col))[0]
-                if len(finite_indices) == 0:
-                    continue
-                min_id = np.min(finite_indices)
-                max_id = np.max(finite_indices)
-                reg_mean_map0[0:min_id, l] = reg_mean_map0[min_id, l]
-                reg_mean_map0[max_id + 1::, l] = reg_mean_map0[max_id, l]
+            # replace nans in horizontal rows by extending the last value
+            for traceid in range(reg_mean_map0.shape[0]):
+                for k in range(reg_mean_map0.shape[1]):
+                    row = reg_mean_map0[traceid,k, :]
+                    finite_indices = np.where(np.isfinite(row))[0]
+                    if len(finite_indices) == 0:
+                        continue
+                    min_id = np.min(finite_indices)
+                    max_id = np.max(finite_indices)
+                    reg_mean_map0[traceid,k, 0:min_id] = reg_mean_map0[traceid,k, min_id]
+                    reg_mean_map0[traceid,k, max_id + 1::] = reg_mean_map0[traceid,k, max_id]
+
+            # replace nans in  vertical columns by extending the last value
+            for traceid in range(reg_mean_map0.shape[0]):
+                for l in range(reg_mean_map0.shape[2]):
+                    col = reg_mean_map0[traceid,:, l]
+                    finite_indices = np.where(np.isfinite(col))[0]
+                    if len(finite_indices) == 0:
+                        continue
+                    min_id = np.min(finite_indices)
+                    max_id = np.max(finite_indices)
+                    reg_mean_map0[traceid,0:min_id, l] = reg_mean_map0[traceid,min_id, l]
+                    reg_mean_map0[traceid,max_id + 1::, l] = reg_mean_map0[traceid,max_id, l]
 
             reg_std_map0 = np.abs(reg_mean_map0)/2
 
             # plt.imshow()
+
 
         # print(im.shape, im_wvs.shape,err.shape, self.bad_pixels.shape)
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_slices_2dspline(im,
@@ -1157,31 +1181,36 @@ class JWSTNirspec_cal(Instrument):
                                                                                          im_ifuy,
                                                                                          noise=err,
                                                                                          badpixs=self.bad_pixels,
+                                                                                         trace_id_map = _trace_id_map,
                                                                                          wv_nodes = wv_nodes,
                                                                                          ifuy_nodes=ifuy_nodes,
                                                                                          threshold=threshold_badpix,
                                                                                          use_set_nans=False,
                                                                                          reg_mean_map=reg_mean_map0,
                                                                                          reg_std_map=reg_std_map0,
-                                                                                         wv_ref=self.wv_ref)
-        # where_nan = np.where(np.isnan(spline_paras0))
-        # spline_paras0[where_nan] = reg_mean_map0[where_nan]
-        reg_mean_map1 = copy(spline_paras0)
-        where_nan = np.where(np.isnan(reg_mean_map1))
-        reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
-        reg_std_map1 = np.abs(reg_mean_map1)/2
-        spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_slices_2dspline(im,
-                                                                                         im_wvs,
-                                                                                         im_ifuy,
-                                                                                         noise=err,
-                                                                                         badpixs=self.bad_pixels*new_badpixs,
-                                                                                         wv_nodes = wv_nodes,
-                                                                                         ifuy_nodes=ifuy_nodes,
-                                                                                         threshold=threshold_badpix,
-                                                                                         use_set_nans=False,
-                                                                                         reg_mean_map=reg_mean_map1,
-                                                                                         reg_std_map=reg_std_map1,
-                                                                                         wv_ref=self.wv_ref)
+                                                                                         wv_ref=self.wv_ref,
+                                                                                         mypool=mppool)
+        if iterative:
+            # where_nan = np.where(np.isnan(spline_paras0))
+            # spline_paras0[where_nan] = reg_mean_map0[where_nan]
+            reg_mean_map1 = copy(spline_paras0)
+            where_nan = np.where(np.isnan(reg_mean_map1))
+            reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
+            reg_std_map1 = np.abs(reg_mean_map1)/2
+            spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_slices_2dspline(im,
+                                                                                             im_wvs,
+                                                                                             im_ifuy,
+                                                                                             noise=err,
+                                                                                             badpixs=self.bad_pixels*new_badpixs,
+                                                                                             trace_id_map = _trace_id_map,
+                                                                                             wv_nodes = wv_nodes,
+                                                                                             ifuy_nodes=ifuy_nodes,
+                                                                                             threshold=threshold_badpix,
+                                                                                             use_set_nans=False,
+                                                                                             reg_mean_map=reg_mean_map1,
+                                                                                             reg_std_map=reg_std_map1,
+                                                                                             wv_ref=self.wv_ref,
+                                                                                             mypool=mppool)
         continuum = copy(spline_cont0)
         continuum[np.where(continuum / err < 5)] = np.nan
         continuum[np.where(continuum < np.median(continuum))] = np.nan
@@ -1193,6 +1222,9 @@ class JWSTNirspec_cal(Instrument):
                                                                              normalized_im.flatten(),
                                                                              normalized_err.flatten(),
                                                                              np.nanmedian(im_wvs) / (spec_R_sampling))
+
+        if apply_new_bad_pixels:
+            self.bad_pixels *= new_badpixs
 
         if save_utils:
             if isinstance(save_utils,str):
@@ -1206,6 +1238,7 @@ class JWSTNirspec_cal(Instrument):
             hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
             hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
             hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
+            hdulist.append(pyfits.ImageHDU(data=new_badpixs, name='NEW_BADPIX'))
             hdulist.append(pyfits.ImageHDU(data=wv_nodes, name='wv_nodes'))
             hdulist.append(pyfits.ImageHDU(data=ifuy_nodes, name='ifuy_nodes'))
             try:
@@ -1214,13 +1247,12 @@ class JWSTNirspec_cal(Instrument):
                 hdulist.writeto(out_filename, clobber=True)
             hdulist.close()
 
-
         self.wv_nodes = wv_nodes
         self.ifuy_nodes = ifuy_nodes
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
         return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes,ifuy_nodes
 
-    def reload_starspectrum_contnorm_2dspline(self, load_filename=None):
+    def reload_starspectrum_contnorm_2dspline(self, load_filename=None,apply_new_bad_pixels = False):
         if load_filename is None:
             load_filename = self.default_filenames["compute_starspectrum_contnorm_2dspline"]
         if len(glob(load_filename)) ==0:
@@ -1228,13 +1260,17 @@ class JWSTNirspec_cal(Instrument):
 
         hdulist = pyfits.open(load_filename)
         new_wavelengths = hdulist[0].data
-        combined_fluxes = hdulist[1].data
-        combined_errors = hdulist[2].data
-        spline_cont0 = hdulist[3].data
-        spline_paras0 = hdulist[4].data
-        wv_nodes = hdulist[5].data
-        ifuy_nodes = hdulist[6].data
+        combined_fluxes = hdulist['COM_FLUXES'].data
+        combined_errors = hdulist['COM_ERRORS'].data
+        spline_cont0 = hdulist['SPLINE_CONT0'].data
+        spline_paras0 = hdulist['SPLINE_PARAS0'].data
+        new_badpixs = hdulist['NEW_BADPIX'].data
+        wv_nodes = hdulist['wv_nodes'].data
+        ifuy_nodes = hdulist['ifuy_nodes'].data
         hdulist.close()
+
+        if apply_new_bad_pixels:
+            self.bad_pixels *= new_badpixs
 
         self.wv_nodes = wv_nodes
         self.ifuy_nodes = ifuy_nodes
@@ -1467,7 +1503,8 @@ class JWSTNirspec_cal(Instrument):
                                                                                          use_set_nans=False,
                                                                                          reg_mean_map=reg_mean_map0,
                                                                                          reg_std_map=reg_std_map0,
-                                                                                         wv_ref=self.wv_ref)
+                                                                                         wv_ref=self.wv_ref,
+                                                                                         mypool=mppool)
         reg_mean_map1 = copy(spline_paras0)
         where_nan = np.where(np.isnan(reg_mean_map1))
         reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
@@ -1486,7 +1523,8 @@ class JWSTNirspec_cal(Instrument):
                                                                                          use_set_nans=False,
                                                                                          reg_mean_map=reg_mean_map1,
                                                                                          reg_std_map=reg_std_map1,
-                                                                                         wv_ref=self.wv_ref)
+                                                                                         wv_ref=self.wv_ref,
+                                                                                         mypool=mppool)
         self.bad_pixels = self.bad_pixels * new_badpixs
 
 
@@ -1790,7 +1828,7 @@ def _get_wpsf_task(paras):
     if opmode=='FIXEDSLIT':
         print('FixedSlit webbpsf kernel...')
         kernel = np.ones((wpsf_oversample, wpsf_oversample*2))
-    elif opmode=='IFS':
+    elif opmode=='IFU':
         kernel = np.ones((wpsf_oversample, wpsf_oversample))
     else:
         raise Exception('OPMODE unknown')
@@ -1885,11 +1923,39 @@ def set_nans(arr, n):
 
     # Set the first n and last n non-nan values to nan
     for i in range(arr_copy.shape[0]):
-        arr_copy[i, :first_real_idx[i] + n] = np.nan
-        arr_copy[i, last_real_idx[i] - n + 1:] = np.nan
+        if n>0:
+            arr_copy[i, :np.min([first_real_idx[i] + n,arr_copy.shape[1]])] = np.nan
+            arr_copy[i, np.max([0,last_real_idx[i] - n + 1]):] = np.nan
+        elif n<0:
+            # print("bou",np.max([0,first_real_idx[i] + n]),first_real_idx[i],last_real_idx[i],np.min([last_real_idx[i] - n + 1,arr_copy.shape[1]]))
+            # print("coucou",arr_copy[i, first_real_idx[i]],arr_copy[i, last_real_idx[i]])
+            # print(arr_copy[i,:])
+            arr_copy[i, np.max([0,first_real_idx[i] + n]):first_real_idx[i] ] = arr_copy[i, first_real_idx[i]]
+            arr_copy[i, last_real_idx[i]:np.min([last_real_idx[i] - n + 1,arr_copy.shape[1]])] = arr_copy[i, last_real_idx[i]]
+            # print(arr_copy[i,:])
 
     return arr_copy
 
+
+def crop_trace_edges(im, N_pix,trace_id_map=None):
+
+
+    if trace_id_map is None:
+        trace_id_map = np.zeros(im.shape)
+    im_out = np.zeros(im.shape) + np.nan
+    unique_trace_ids = np.unique(trace_id_map[np.where(np.isfinite(trace_id_map))])
+    for trace_id in unique_trace_ids:
+        where_trace = np.where(trace_id_map==trace_id)
+        row_id_min,row_id_max = np.min(where_trace[0]),np.max(where_trace[0])
+        tmp_im = copy(im[row_id_min:row_id_max,:])
+        tmp_im[np.where(trace_id_map[row_id_min:row_id_max,:]!=trace_id)] = np.nan
+        # where_trace_in_tmp_im = np.where(trace_id_map[row_id_min:row_id_max,:]==trace_id)
+        # im_out[row_id_min:row_id_max,:][where_trace_in_tmp_im] = set_nans(tmp_im.T, N_pix).T[where_trace_in_tmp_im]
+        new_slice = set_nans(tmp_im.T, N_pix).T
+        where_finite_in_slice = np.where(np.isfinite(new_slice))
+        im_out[row_id_min:row_id_max, :][where_finite_in_slice] = new_slice[where_finite_in_slice]
+
+    return im_out
 
 def _task_normrows(paras):
     im_rows, im_wvs_rows, noise_rows, badpix_rows, x_nodes, star_model, threshold, star_sub_mode,regularization,reg_mean_map,reg_std_map = paras
@@ -1907,10 +1973,16 @@ def _task_normrows(paras):
         #     continue
         M_spline = get_spline_model(x_nodes, im_wvs_rows[k, :], spline_degree=3)
 
-        # # plt.subplot(2,1,1)
+        where_data_finite = np.where(np.isfinite(badpix_rows[k, :]) * np.isfinite(im_rows[k, :]) * \
+                                     np.isfinite(noise_rows[k, :]) * (noise_rows[k, :] != 0) * \
+                                     np.isfinite(star_model[k, :]))
+
+        # print(np.size(where_data_finite[0]))
+        # plt.subplot(2,1,1)
         # plt.plot(im_rows[k,:],label="Data")
         # plt.plot(noise_rows[k,:],label="noise")
-        # # plt.subplot(2,1,2)
+        # plt.subplot(2,1,2)
+        # plt.plot(badpix_rows[k, :],label="badpix_rows")
         # # plt.plot(np.isfinite(med_spec),label="np.isfinite(med_spec)")
         # # plt.plot(noise_rows[k,:]==0,label="noise_rows[k,:]==0")
         # # plt.plot(np.isfinite(im_rows[k,:]),label="np.isfinite(im_rows[k,:])")
@@ -1918,9 +1990,6 @@ def _task_normrows(paras):
         # plt.legend()
         # plt.show()
 
-        where_data_finite = np.where(
-            np.isfinite(badpix_rows[k, :]) * np.isfinite(im_rows[k, :]) * np.isfinite(noise_rows[k, :]) * (
-                        noise_rows[k, :] != 0) * np.isfinite(star_model[k, :]))
         # if k == 1512:
         #     print("coucou")
         # else:
@@ -2005,7 +2074,7 @@ def _task_normrows(paras):
             plt.plot(m, label="m")
             plt.plot(d_err, label="err")
             plt.plot(d - m, label="res")
-            plt.plot(d / d * threshold * meddev, label="threshold")
+            # plt.plot(d / d * threshold * meddev, label="threshold")
             plt.legend()
 
             plt.subplot(3, 1, 2)
@@ -2072,10 +2141,13 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
     new_spline_paras = np.zeros((image.shape[0],np.size(x_nodes)))
 
     #if chunk is too small, don't parallelize
-    numthreads = mypool._processes
-    chunk_size = image.shape[0] // (3 * numthreads)
-    if chunk_size == 0:
-        parallel_flag = False
+    parallel_flag = True
+    if (mypool is not None):
+        numthreads = mypool._processes
+        chunk_size = image.shape[0] // (3 * numthreads)
+        if chunk_size == 0:
+            parallel_flag = False
+
 
     if (mypool is None) or (parallel_flag==False):
         paras = new_image, im_wvs, new_noise, new_badpixs, x_nodes, star_model, threshold, star_sub_mode,regularization,reg_mean_map,reg_std_map
@@ -2173,13 +2245,12 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
 def _task_normslice_2dspline(paras):
     im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map = paras
 
-    new_im = np.array(copy(im), '<f4')  # .byteswap().newbyteorder()
+    new_im = np.zeros(im.shape)+np.nan#np.array(copy(im), '<f4')  # .byteswap().newbyteorder()
     new_noise = copy(noise)
     new_badpix = copy(badpix)
     res = np.zeros(im.shape) + np.nan
 
-    bool_map = np.isfinite(new_badpix) * np.isfinite(im) * np.isfinite(noise) * (noise != 0) * np.isfinite(
-        star_model) * np.isfinite(im_ifuy)
+    bool_map = np.isfinite(new_badpix) * np.isfinite(im) * np.isfinite(noise) * (noise != 0) * np.isfinite(star_model) * np.isfinite(im_ifuy)
     where_data_finite = np.where(bool_map)
     if np.size(where_data_finite[0]) != 0:
         ravel_im_ifuy = im_ifuy[where_data_finite]
@@ -2220,8 +2291,9 @@ def _task_normslice_2dspline(paras):
     res[where_data_finite] = d - m
     new_im[where_data_finite] = m
     new_noise[where_data_finite] = d_err
-    norm_res = np.zeros(im.shape) + np.nan
-    norm_res[where_data_finite] = (d - m) / d_err
+    # norm_res = (res-np.nanmedian(res,axis=0)[None,:])
+    norm_res = copy(res)
+    norm_res[where_data_finite] = norm_res[where_data_finite] / d_err
 
     meddev = median_abs_deviation(norm_res[where_data_finite])
     where_bad = np.where((np.abs(norm_res) / meddev > threshold) | np.isnan(norm_res))
@@ -2235,7 +2307,8 @@ def _task_normslice_2dspline(paras):
     return new_im, new_noise, new_badpix, res, paras_out
 
 
-def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None, star_model=None,  mypool=None,
+def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,trace_id_map=None,
+                              star_model=None,  mypool=None,
                               threshold=10, use_set_nans=False,
                               N_wvs_nodes=20, wv_nodes=None, delta_ifuy=0.05, ifuy_nodes=None,
                               reg_mean_map=None, reg_std_map=None, wv_ref = None):
@@ -2246,6 +2319,9 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None, s
         badpixs = np.ones(image.shape)
     if star_model is None:
         star_model = np.ones(image.shape)
+    if trace_id_map is None:
+        trace_id_map = np.zeros(image.shape)
+
 
     if wv_nodes is None:
         wv_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), N_wvs_nodes, endpoint=True)
@@ -2258,27 +2334,92 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None, s
     if wv_ref is None:
         wv_ref = np.nanmin(im_wvs)
 
-    new_image = copy(image)
-    if use_set_nans:
-        new_image = set_nans(image, 40)
-    new_noise = copy(noise)
-    new_badpixs = copy(badpixs)
-    new_res = np.zeros(image.shape) + np.nan
-    new_spline_paras = np.zeros((np.size(ifuy_nodes), np.size(wv_nodes)))
 
     # # if chunk is too small, don't parallelize
     # numthreads = mypool._processes
     # chunk_size = image.shape[0] // (3 * numthreads)
     # if chunk_size == 0:
     #     parallel_flag = False
-    parallel_flag = False
+    parallel_flag = True
+
+    unique_trace_ids = np.unique(trace_id_map[np.where(np.isfinite(trace_id_map))])
+
+    new_image = copy(image)
+    if use_set_nans:
+        new_image = set_nans(image, 40)
+    new_noise = copy(noise)
+    new_res = np.zeros(image.shape) + np.nan
+    new_badpixs = np.zeros(image.shape) + np.nan
+    new_spline_paras = np.zeros((np.size(unique_trace_ids),np.size(ifuy_nodes), np.size(wv_nodes)))
+
+    scaled_cloud = im_ifuy * wv_ref / im_wvs
+    bool_map = (scaled_cloud<np.min(ifuy_nodes)) | (scaled_cloud>np.max(ifuy_nodes)) | \
+               (im_wvs<np.min(wv_nodes)) | (im_wvs>np.max(wv_nodes))
+    where2mask = np.where(bool_map)
+    badpixs_nodes_mask = np.ones(badpixs.shape)
+    badpixs_nodes_mask[where2mask] = np.nan
 
     if (mypool is None) or (parallel_flag == False):
-        paras = new_image, im_wvs, im_ifuy, new_noise, new_badpixs, wv_nodes,ifuy_nodes,wv_ref, star_model, threshold, reg_mean_map, reg_std_map
-        outputs = _task_normslice_2dspline(paras)
-        new_image, new_noise, new_badpixs, new_res, new_spline_paras = outputs
+        for id,trace_id in enumerate(unique_trace_ids):
+            trace_mask = trace_id_map == trace_id
+            where_in_trace = np.where(trace_mask)
+            tmp_badpixs = np.zeros(badpixs.shape)+np.nan
+            tmp_badpixs[where_in_trace] = (badpixs_nodes_mask*badpixs)[where_in_trace]
+            row_id_min,row_id_max = np.min(where_in_trace[0]),np.max(where_in_trace[0])
+
+            paras = new_image[row_id_min:row_id_max,:], im_wvs[row_id_min:row_id_max,:], im_ifuy[row_id_min:row_id_max,:], \
+                new_noise[row_id_min:row_id_max,:], tmp_badpixs[row_id_min:row_id_max,:], wv_nodes,ifuy_nodes,wv_ref, \
+                star_model[row_id_min:row_id_max,:], threshold, reg_mean_map[id], reg_std_map[id]
+
+            outputs = _task_normslice_2dspline(paras)
+            partial_new_image, partial_new_noise, partial_new_badpixs, partial_new_res, partial_new_spline_paras = outputs
+
+            new_image[row_id_min:row_id_max,:] = partial_new_image
+            new_noise[row_id_min:row_id_max,:] = partial_new_noise
+            new_badpixs[row_id_min:row_id_max,:] = partial_new_badpixs
+            new_res[row_id_min:row_id_max,:] = partial_new_res
+            new_spline_paras[id,:,:] = partial_new_spline_paras
     else:
-        raise Exception("Not yet implemented")
+        row_indices_list = []
+        image_list = []
+        wvs_list = []
+        im_ifuy_list = []
+        noise_list = []
+        badpixs_list = []
+        star_model_list = []
+        for id, trace_id in enumerate(unique_trace_ids):
+            trace_mask = trace_id_map == trace_id
+            where_in_trace = np.where(trace_mask)
+            tmp_badpixs = np.zeros(badpixs.shape)+np.nan
+            tmp_badpixs[where_in_trace] = (badpixs_nodes_mask*badpixs)[where_in_trace]
+            row_id_min,row_id_max = np.min(where_in_trace[0]),np.max(where_in_trace[0])
+            row_indices_list.append((row_id_min,row_id_max ))
+
+            image_list.append(new_image[row_id_min:row_id_max, :])
+            wvs_list.append(im_wvs[row_id_min:row_id_max, :])
+            im_ifuy_list.append(im_ifuy[row_id_min:row_id_max, :])
+            noise_list.append(new_noise[row_id_min:row_id_max, :])
+            badpixs_list.append(tmp_badpixs[row_id_min:row_id_max, :])
+            star_model_list.append(star_model[row_id_min:row_id_max, :])
+
+        # paras = new_image[row_id_min:row_id_max,:], im_wvs[row_id_min:row_id_max,:], im_ifuy[row_id_min:row_id_max,:], \
+        #     new_noise[row_id_min:row_id_max,:], tmp_badpixs[row_id_min:row_id_max,:], wv_nodes,ifuy_nodes,wv_ref, \
+        #     star_model, threshold, reg_mean_map[id], reg_std_map[id]
+
+        outputs_list = mypool.map(_task_normslice_2dspline, zip(image_list, wvs_list, im_ifuy_list, noise_list, badpixs_list,
+                                                      itertools.repeat(wv_nodes),
+                                                      itertools.repeat(ifuy_nodes),
+                                                      itertools.repeat(wv_ref),
+                                                      star_model_list,
+                                                      itertools.repeat(threshold),
+                                                      reg_mean_map,reg_std_map))
+        for (row_id_min,row_id_max), outputs in zip(row_indices_list, outputs_list):
+            partial_new_image, partial_new_noise, partial_new_badpixs, partial_new_res, partial_new_spline_paras = outputs
+            new_image[row_id_min:row_id_max, :] = partial_new_image
+            new_noise[row_id_min:row_id_max, :] = partial_new_noise
+            new_badpixs[row_id_min:row_id_max, :] = partial_new_badpixs
+            new_res[row_id_min:row_id_max, :] = partial_new_res
+            new_spline_paras[id, :, :] = partial_new_spline_paras
 
     return new_image, new_noise, new_badpixs, new_res, new_spline_paras
 
@@ -3097,12 +3238,12 @@ def fitpsf(dataobj_list, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf,
     all_interp_flux = all_interp_flux/all_interp_area2d*psf_spaxel_area
     all_interp_err = all_interp_err/all_interp_area2d*psf_spaxel_area
 
-    # temporary saves
-    all_interp_path = '/home/amadurowicz/51_Eri_b/'
-    np.save(all_interp_path+'all_interp_ra.npy',all_interp_ra)
-    np.save(all_interp_path+'all_interp_dec.npy',all_interp_dec)
-    np.save(all_interp_path+'all_interp_flux.npy',all_interp_flux)
-    #
+    # # temporary saves
+    # all_interp_path = '/home/amadurowicz/51_Eri_b/'
+    # np.save(all_interp_path+'all_interp_ra.npy',all_interp_ra)
+    # np.save(all_interp_path+'all_interp_dec.npy',all_interp_dec)
+    # np.save(all_interp_path+'all_interp_flux.npy',all_interp_flux)
+    # #
 
     all_interp_psfmodel = np.zeros(all_interp_flux.shape) + np.nan
     all_interp_psfsub = np.zeros(all_interp_flux.shape) + np.nan
@@ -3554,12 +3695,12 @@ def build_cube(wv_sampling, east2V2_deg,
                 flux_cube[wv_id, dec_id, ra_id] = mfflux
                 fluxerr_cube[wv_id, dec_id, ra_id] = mffluxerr * noise_factor
 
-            snr_vec = flux_cube[:, dec_id, ra_id] / fluxerr_cube[:, dec_id, ra_id]
-            snr_vec = snr_vec - generic_filter(snr_vec, np.nanmedian, size=50)
-            snr_vec = snr_vec / median_abs_deviation(snr_vec[np.where(np.isfinite(snr_vec))])
-            where_outliers = np.where(snr_vec > 10)
-            flux_cube[where_outliers[0], dec_id, ra_id] = np.nan
-            fluxerr_cube[where_outliers[0], dec_id, ra_id] = np.nan
+            # snr_vec = flux_cube[:, dec_id, ra_id] / fluxerr_cube[:, dec_id, ra_id]
+            # snr_vec = snr_vec - generic_filter(snr_vec, np.nanmedian, size=50)
+            # snr_vec = snr_vec / median_abs_deviation(snr_vec[np.where(np.isfinite(snr_vec))])
+            # where_outliers = np.where(snr_vec > 10)
+            # flux_cube[where_outliers[0], dec_id, ra_id] = np.nan
+            # fluxerr_cube[where_outliers[0], dec_id, ra_id] = np.nan
 
     if out_filename is not None:
         if debug_init != 0 or debug_end != np.size(wv_sampling):
