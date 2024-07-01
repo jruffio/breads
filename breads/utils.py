@@ -20,6 +20,71 @@ import astropy.coordinates
 from astroquery.simbad import Simbad
 
 
+def filter_spec_with_spline(wvs, spec,specerr=None,x_nodes=None,M_spline=None):
+    if specerr is None:
+        specerr = np.ones(spec.shape)
+
+    if M_spline is None:
+        M_spline = get_spline_model(x_nodes, wvs, spline_degree=3)
+
+    M = M_spline/specerr[:,None]
+    d = spec/specerr
+    where_finite = np.where(np.isfinite(d))
+    M = M[where_finite[0],:]
+    d = d[where_finite]
+
+    paras = lsq_linear(M,d).x
+    m = np.dot(M, paras)
+    r = d - m
+
+    LPF_spec = np.zeros(spec.shape)+np.nan
+    HPF_spec = np.zeros(spec.shape)+np.nan
+    LPF_spec[where_finite] = m*specerr[where_finite]
+    HPF_spec[where_finite] = r*specerr[where_finite]
+
+    return HPF_spec,LPF_spec
+
+def find_closest_leftnright_elements(v1, v2):
+    """
+    Find the closest elements in v1 to the left and right of each element in v2.
+    (By chatgpt)
+
+    Parameters:
+    v1 (np.ndarray): The array to search within (may contain NaNs).
+    v2 (np.ndarray): The array with values to find bounds for (may contain NaNs).
+
+    Returns:
+    v_left (np.ndarray): Closest elements in v1 to the left of each element in v2.
+    v_right (np.ndarray): Closest elements in v1 to the right of each element in v2.
+    """
+
+    # Remove NaNs from v1 and get corresponding indices
+    valid_v1_mask = ~np.isnan(v1)
+    v1_valid = v1[valid_v1_mask]
+
+    # Finding the indices in the valid v1 array
+    indices = np.searchsorted(v1_valid, v2)
+
+    # Initialize arrays to store the left and right closest elements
+    v_left = np.full_like(v2, np.nan, dtype=np.float64)
+    v_right = np.full_like(v2, np.nan, dtype=np.float64)
+
+    # Mask for valid v2 elements
+    valid_v2_mask = ~np.isnan(v2)
+
+    # Handling boundary conditions and valid indices
+    valid_left_mask = valid_v2_mask & (indices > 0)
+    valid_right_mask = valid_v2_mask & (indices < len(v1_valid))
+
+    # Assigning left and right closest elements
+    v_left[valid_left_mask] = v1_valid[indices[valid_left_mask] - 1]
+    v_right[valid_right_mask] = v1_valid[indices[valid_right_mask]]
+
+    # Handling boundary conditions for out of range values
+    v_right[valid_v2_mask & (indices == 0)] = v1_valid[0]
+    v_left[valid_v2_mask & (indices == len(v1_valid))] = v1_valid[-1]
+
+    return v_left, v_right
 
 def get_err_from_posterior(x,posterior):
     """
