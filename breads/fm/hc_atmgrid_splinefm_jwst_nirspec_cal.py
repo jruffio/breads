@@ -60,7 +60,7 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
     if regularization is None:
         min_spline_ampl = 0.02
     else:
-        min_spline_ampl = 0.0005
+        min_spline_ampl = 0.005
 
 
     Natmparas = len(atm_grid.values.shape)-1
@@ -110,7 +110,7 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
         comp_spec = comp_spec.to(u.MJy).value
 
     mask_comp  = dist2comp_as<radius_as
-    larger_mask_comp  = dist2comp_as<3*radius_as
+    larger_mask_comp  = dist2comp_as<3*radius_as#np.ones(dist2comp_as.shape)#
     mask_vec = np.nansum(mask_comp,axis=1) != 0
     rows_ids = np.where(mask_vec)[0]
     if 0:
@@ -125,7 +125,8 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
     rows_ids_mask = np.zeros(np.size(rows_ids))+np.nan
     new_mask = np.tile(mask_vec[:,None],(1,nx))
     # where_trace_finite = np.where(new_mask*np.isfinite(data)*np.isfinite(bad_pixels)*(noise!=0))
-    where_trace_finite = np.where(new_mask*larger_mask_comp*np.isfinite(data)*np.isfinite(bad_pixels)*(noise!=0)*np.isfinite(comp_spec))
+    where_trace_finite = np.where(new_mask*larger_mask_comp*np.isfinite(data)*np.isfinite(bad_pixels)*(noise!=0)*
+                                  np.isfinite(comp_spec)*np.isfinite(star_func(wvs)))
     Nrows= np.size(rows_ids)
     Nd = np.size(where_trace_finite[0])
     if Nrows >Nrows_max:
@@ -268,8 +269,10 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal(nonlin_paras, cubeobj, atm_grid=None, a
         comp_model = cubeobj.webbpsf_interp((x - comp_dra_as) * cubeobj.webbpsf_wv0 / w,
                                             (y - comp_ddec_as) * cubeobj.webbpsf_wv0 / w) * comp_spec
 
-        useless_paras = np.where(np.nansum(M_speckles > np.nanmax(M_speckles) * 0.005, axis=0) == 0)
-        M_speckles[:, useless_paras[0]] = 0
+        # plt.plot(np.nanmax(M_speckles, axis=1))
+        # plt.show()
+        # useless_paras = np.where(np.nansum(M_speckles > np.nanmax(M_speckles) * 0.1, axis=0) == 0)
+        # M_speckles[:, useless_paras[0]] = 0
 
         # combine planet model with speckle model
         M = np.concatenate([comp_model[:, None], M_speckles], axis=1)
