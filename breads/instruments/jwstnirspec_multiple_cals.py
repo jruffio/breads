@@ -5,6 +5,7 @@ from copy import copy
 class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
     def __init__(self, dataobj_list=None,verbose=True):
         """JWST NIRSpec 2D calibrated data.
+        test
 
 
         Parameters
