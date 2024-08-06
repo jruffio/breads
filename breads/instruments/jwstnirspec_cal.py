@@ -854,8 +854,9 @@ class JWSTNirspec_cal(Instrument):
             separation_arr = np.sqrt(self.dra_as_array**2+self.ddec_as_array**2)
             where_finite = np.where(np.isfinite(self.dra_as_array)*(separation_arr<OWA))
 
-        x = self.dra_as_array[where_finite]
-        y = self.ddec_as_array[where_finite]
+        _dra_as_array, _ddec_as_array = self.getskycoords()
+        x = _dra_as_array[where_finite]
+        y = _ddec_as_array[where_finite]
         w = self.wavelengths[where_finite]
 
         if mode == "quick_webbpsf":
@@ -1706,14 +1707,14 @@ class JWSTNirspec_cal(Instrument):
 
         regwvs_dataobj.coords = self.coords + " regwvs"
 
-        regwvs_dataobj.dra_as_array = np.zeros((self.data.shape[0], Nwv))
-        regwvs_dataobj.ddec_as_array = np.zeros((self.data.shape[0], Nwv))
-        regwvs_dataobj.wavelengths = np.zeros((self.data.shape[0], Nwv))
-        regwvs_dataobj.leftnright_wavelengths = np.zeros((2,self.data.shape[0], Nwv))
-        regwvs_dataobj.data = np.zeros((self.data.shape[0], Nwv))
-        regwvs_dataobj.noise = np.zeros((self.data.shape[0], Nwv))
-        regwvs_dataobj.bad_pixels = np.zeros((self.data.shape[0], Nwv))
-        regwvs_dataobj.area2d = np.zeros((self.data.shape[0], Nwv))
+        regwvs_dataobj.dra_as_array = np.zeros((self.data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.ddec_as_array = np.zeros((self.data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.wavelengths = np.zeros((self.data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.leftnright_wavelengths = np.zeros((2,self.data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.data = np.zeros((self.data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.noise = np.zeros((self.data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.bad_pixels = np.zeros((self.data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.area2d = np.zeros((self.data.shape[0], Nwv))+np.nan
 
         # self.data[np.where(np.isnan(self.bad_pixels))] = 0
 
@@ -1735,19 +1736,18 @@ class JWSTNirspec_cal(Instrument):
         # plt.ylim([0,3e-9])
         # plt.show()
         for rowid in range(self.data.shape[0]):
-            where_finite = np.where(np.isfinite(self.bad_pixels[rowid, :]))
-            if np.size(where_finite[0]) == 0:
+            wvs_finite = np.where(np.isfinite(self.wavelengths[rowid, :]))
+            if np.size(wvs_finite[0]) == 0:
                 # print("No ref points")
                 continue
-            regwvs_dataobj.dra_as_array[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.dra_as_array[rowid, where_finite[0]], left=np.nan,right=np.nan)
-            regwvs_dataobj.ddec_as_array[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.ddec_as_array[rowid, where_finite[0]], left=np.nan,right=np.nan)
+            regwvs_dataobj.dra_as_array[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, wvs_finite[0]], self.dra_as_array[rowid, wvs_finite[0]], left=np.nan,right=np.nan)
+            regwvs_dataobj.ddec_as_array[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, wvs_finite[0]], self.ddec_as_array[rowid, wvs_finite[0]], left=np.nan,right=np.nan)
+            # where_finite_reg_coords = np.where(np.isfinite(regwvs_dataobj.dra_as_array[rowid, :]))
+            # regwvs_dataobj.wavelengths[rowid, where_finite_reg_coords[0]] = wv_sampling[where_finite_reg_coords]
             regwvs_dataobj.wavelengths[rowid, :] = wv_sampling
-            regwvs_dataobj.data[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.data[rowid, where_finite[0]], left=np.nan,right=np.nan)
-            regwvs_dataobj.noise[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.noise[rowid, where_finite[0]], left=np.nan, right=np.nan)
+            regwvs_dataobj.area2d[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, wvs_finite[0]], self.area2d[rowid, wvs_finite[0]], left=np.nan,right=np.nan)
             badpix_mask = np.isfinite(self.bad_pixels[rowid, :]).astype(float)
-            wvs_finite = np.where(np.isfinite(self.wavelengths[rowid, :]))
             regwvs_dataobj.bad_pixels[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, wvs_finite[0]], badpix_mask[wvs_finite], left=0, right=0)
-            regwvs_dataobj.area2d[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.area2d[rowid, where_finite[0]], left=np.nan,right=np.nan)
 
             # following little section written by chatgpt to find the left and right wavelengths in the original data
             v_left, v_right = find_closest_leftnright_elements(self.wavelengths[rowid, wvs_finite[0]],wv_sampling)
@@ -1755,13 +1755,21 @@ class JWSTNirspec_cal(Instrument):
             regwvs_dataobj.leftnright_wavelengths[0,rowid,:]=v_left
             regwvs_dataobj.leftnright_wavelengths[1,rowid,:]=v_right
 
+            where_finite = np.where(np.isfinite(self.bad_pixels[rowid, :]))
+            if np.size(where_finite[0]) == 0:
+                # print("No ref points")
+                continue
+            regwvs_dataobj.data[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.data[rowid, where_finite[0]], left=np.nan,right=np.nan)
+            regwvs_dataobj.noise[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.noise[rowid, where_finite[0]], left=np.nan, right=np.nan)
+
+
         where_bad = np.where(regwvs_dataobj.bad_pixels != 1.0)
-        regwvs_dataobj.dra_as_array[where_bad] = np.nan
-        regwvs_dataobj.ddec_as_array[where_bad] = np.nan
+        # regwvs_dataobj.dra_as_array[where_bad] = np.nan
+        # regwvs_dataobj.ddec_as_array[where_bad] = np.nan
         regwvs_dataobj.data[where_bad] = np.nan
         regwvs_dataobj.noise[where_bad] = np.nan
         regwvs_dataobj.bad_pixels[where_bad] = np.nan
-        regwvs_dataobj.area2d[where_bad] = np.nan
+        # regwvs_dataobj.area2d[where_bad] = np.nan
 
         # rowid = 1552
         # plt.subplot(3,1,1)
@@ -1824,7 +1832,7 @@ class JWSTNirspec_cal(Instrument):
             except:
                 pass
 
-        self.wv_sampling = np.nanmedian(regwvs_dataobj.wavelengths,axis=0)
+        regwvs_dataobj.wv_sampling = np.nanmedian(regwvs_dataobj.wavelengths,axis=0)
 
         # return interp_ra, interp_dec, interp_wvs, interp_flux, interp_err, interp_badpix, interp_area2d
         return regwvs_dataobj
@@ -3059,9 +3067,9 @@ def _fit_wpsf_task(paras):
         else:
             fit_sector = (rmin_pad <= _R) & (_R < rmax_pad) & ((pamin_pad <= _PA) | (_PA < pamax_pad)) & np.isfinite(_Zbad)
         if pamin < pamax:
-            sc_sector = (rmin <= _R) & (_R < rmax) & (pamin <= _PA) & (_PA < pamax) & np.isfinite(_Zbad)
+            sc_sector = (rmin <= _R) & (_R < rmax) & (pamin <= _PA) & (_PA < pamax) #& np.isfinite(_Zbad)
         else:
-            sc_sector = (rmin <= _R) & (_R < rmax) & ((pamin <= _PA) | (_PA < pamax)) & np.isfinite(_Zbad)
+            sc_sector = (rmin <= _R) & (_R < rmax) & ((pamin <= _PA) | (_PA < pamax))# & np.isfinite(_Zbad)
 
         where_fit = np.where(fit_sector)
         if np.size(where_fit[0])<1:
@@ -3442,41 +3450,64 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             hdulist.close()
 
             hdulist_sc = pyfits.open(filename)
-            new_model = np.zeros((ny,nx))+ np.nan
-            new_badpix = np.zeros((ny,nx))+ np.nan
-            for rowid in range(ny):
-                new_model[rowid, :] = np.interp(combdataobj.wavelengths[(ny * obj_id+rowid), :],wv_sampling, all_interp_psfmodel[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
-                badpix_mask = np.isfinite(all_interp_psfmodel[(ny * obj_id+rowid), :]).astype(float)
-                new_badpix[rowid, :] = np.interp(combdataobj.wavelengths[(ny * obj_id+rowid), :], wv_sampling, badpix_mask,left=np.nan, right=np.nan)
+            # dq = hdulist_sc["DQ"].data
+            wvs_ori = hdulist_sc["WAVELENGTH"].data
+            # print(wvs_ori.shape)
+            ny_ori, nx_ori =wvs_ori.shape
 
-            cp_bad_pixels = copy(combdataobj.bad_pixels[(ny * obj_id):(ny * (obj_id+1)), :])
-            cp_bad_pixels[np.where(new_badpix != 1.0)] = np.nan
+            new_model = np.zeros((ny_ori,nx_ori))+ np.nan
+            new_badpix = np.zeros((ny_ori,nx_ori))+ np.nan
+            new_area2d = np.zeros((ny_ori,nx_ori))+ np.nan
+            for rowid in range(ny_ori):
+                # new_model[rowid, :] = np.interp(combdataobj.wavelengths[(ny * obj_id+rowid), :],wv_sampling, all_interp_psfmodel[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
+                # # badpix_mask = np.isfinite(all_interp_psfmodel[(ny * obj_id+rowid), :]).astype(float)
+                # badpix_mask = np.isfinite(all_interp_badpix[(ny * obj_id + rowid), :]).astype(float)
+                # new_badpix[rowid, :] = np.interp(combdataobj.wavelengths[(ny * obj_id+rowid), :], wv_sampling, badpix_mask,left=np.nan, right=np.nan)
+                # new_area2d[rowid, :] = np.interp(combdataobj.wavelengths[(ny * obj_id+rowid), :], wv_sampling, all_interp_area2d[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
+                new_model[rowid, :] = np.interp(wvs_ori[rowid, :] ,wv_sampling, all_interp_psfmodel[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
+                # badpix_mask = np.isfinite(all_interp_psfmodel[(ny * obj_id+rowid), :]).astype(float)
+                badpix_mask = np.isfinite(all_interp_badpix[(ny * obj_id + rowid), :]).astype(float)
+                new_badpix[rowid, :] = np.interp(wvs_ori[rowid, :] , wv_sampling, badpix_mask,left=np.nan, right=np.nan)
+                new_area2d[rowid, :] = np.interp(wvs_ori[rowid, :] , wv_sampling, all_interp_area2d[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
+            # cp_bad_pixels = copy(combdataobj.bad_pixels[(ny * obj_id):(ny * (obj_id+1)), :])
+            # cp_bad_pixels[np.where(new_badpix != 1.0)] = np.nan
 
-            where_mask = np.where(np.isfinite(cp_bad_pixels))
-            where_bad = np.where(np.isnan(cp_bad_pixels))
-            tmp_sub = np.zeros((ny,nx))+np.nan
-            tmp_model = np.zeros((ny,nx))+np.nan
+            # where_mask = np.where(np.isfinite(cp_bad_pixels))
+            # where_bad = np.where(np.isnan(cp_bad_pixels))
+            where_bad = np.where(new_badpix != 1.0)
+            # print("new_badpix",new_badpix.shape,hdulist_sc["DQ"].data.shape)
+            # tmp_sub = np.zeros((ny,nx))+np.nan
+            # tmp_model = np.zeros((ny,nx))+np.nan
 
             arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
-            a2d = combdataobj.area2d[(ny * obj_id):(ny * (obj_id+1)), :][where_mask]
-            tmp_sub[where_mask] = hdulist_sc["SCI"].data[where_mask] - new_model[where_mask]
-            tmp_model[where_mask] = new_model[where_mask]
-
             du = combdataobj.data_unit
-            bu = combdataobj.extheader["BUNIT"].strip()
-
+            bu = hdulist_sc[1].header["BUNIT"].strip()
             if du == 'MJy'    and bu == 'MJy':
                 pass
             if du == 'MJy/sr' and bu == 'MJy/sr':
                 pass
+            # if du == 'MJy/sr' and bu == 'MJy':
+            #     tmp_sub[where_mask]   *= (a2d*arcsec2_to_sr)
+            #     tmp_model[where_mask] *= (a2d*arcsec2_to_sr)
+            # if du == 'MJy'    and bu == 'MJy/sr':
+            #     tmp_sub[where_mask]   /= (a2d*arcsec2_to_sr)
+            #     tmp_model[where_mask] /= (a2d*arcsec2_to_sr)
             if du == 'MJy/sr' and bu == 'MJy':
-                tmp_sub[where_mask]   *= (a2d*arcsec2_to_sr)
-                tmp_model[where_mask] *= (a2d*arcsec2_to_sr)
+                new_model *= (new_area2d*arcsec2_to_sr)
             if du == 'MJy'    and bu == 'MJy/sr':
-                tmp_sub[where_mask]   /= (a2d*arcsec2_to_sr)
-                tmp_model[where_mask] /= (a2d*arcsec2_to_sr)
+                new_model /= (new_area2d*arcsec2_to_sr)
             ######
 
+            # a2d = combdataobj.area2d[(ny * obj_id):(ny * (obj_id+1)), :][where_mask]
+            # tmp_sub[where_mask] = hdulist_sc["SCI"].data[where_mask] - new_model[where_mask]
+            # tmp_model[where_mask] = new_model[where_mask]
+            # a2d = combdataobj.area2d[(ny * obj_id):(ny * (obj_id+1)), :]
+            tmp_sub = hdulist_sc["SCI"].data - new_model
+            # tmp_model = new_model
+
+
+
+            # tmp_sub[where_bad] = np.nan
             hdulist_sc["SCI"].data = tmp_sub
             hdulist_sc["DQ"].data[where_bad] = 1
             # Write the new HDU list to a new FITS file
@@ -3487,7 +3518,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             except TypeError:
                 hdulist_sc.writeto(psfsub_filename, clobber=True)
 
-            hdulist_sc["SCI"].data = tmp_model
+            hdulist_sc["SCI"].data = new_model
             psfmod_filename = os.path.join(RDI_model_dir, os.path.basename(filename))
             try:
                 hdulist_sc.writeto(psfmod_filename, overwrite=True)
