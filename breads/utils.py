@@ -14,7 +14,7 @@ from scipy.optimize import lsq_linear
 from scipy.signal import correlate2d
 from  scipy.interpolate import interp1d
 from matplotlib import pyplot as plt
-import astropy.io.fits as pyfits
+import astropy.io.fits as pyfits, astropy.units as u
 import astropy.coordinates
 
 from astroquery.simbad import Simbad
@@ -692,3 +692,48 @@ def propagate_coordinates_at_epoch(targetname, date, verbose=True):
         print(f"Coordinates at {date}:  {host_coord_at_date.icrs.to_string('hmsdms')}")
 
     return host_coord_at_date
+
+@u.quantity_input(comp_sep=u.arcsec, comp_pa=u.deg)
+def companion_relative_to_absolute_position(star_name, comp_name, comp_sep, comp_pa, obs_date, verbose=True):
+    """ Compute absolute ICRS coordinates of a substellar companion at a given date
+
+    - Retrieves the host star's coordinates (including RA, Dec, proper motion, and parallax)
+    - Propagates to the desired date
+    - Performs coordinate offset to the companion location
+    - Prints out the results, in format suitable to enter into APT
+    """
+
+    if verbose:
+        print("**HOST STAR:**")
+    star_coord = propagate_coordinates_at_epoch(star_name, date=obs_date, verbose=verbose)
+    if verbose:
+        print(f'Proper motion  pm_ra_cosdec: {star_coord.pm_ra_cosdec:.3f}\tpm_dec: {star_coord.pm_dec:.3f}'  )
+        print(f'Parallax : {1000/star_coord.distance.to_value(u.pc):.3f} mas'  )
+
+    # Offset coordinates calculation for the companion using astropy coords machinery
+    # Convert from sep, pa to dRA, dDec
+    d_dec= comp_sep *  np.cos(np.deg2rad(comp_pa))
+    d_ra = comp_sep *  np.sin(np.deg2rad(comp_pa))
+    # Compute the offset coordinate at those deltas
+    star_frame = astropy.coordinates.SkyOffsetFrame(origin=star_coord)
+    planet_relative_loc = astropy.coordinates.SkyCoord(lon=d_ra, lat=d_dec, frame=star_frame)
+    planet_coord = planet_relative_loc.transform_to(astropy.coordinates.ICRS)
+
+    if verbose:
+        print("\n**COMPANION:**")
+        print(f"{comp_name} has r={comp_sep}, pa={comp_pa}, which is (dDec,dR.A.) = {d_dec:.3f}, {d_ra:.3f}")
+        print(f"{comp_name} ICRS coords at {obs_date}: "+planet_coord.to_string('hmsdms'))
+        print("")
+        print(f"        Crosscheck PA: {star_coord.position_angle(planet_coord).to(u.deg):.3f}  should equal {comp_pa}")
+        print(f"        Crosscheck sep: {star_coord.separation(planet_coord).to(u.arcsec):.6f}  should equal {comp_sep} ")
+        print(f"        if the above are not equal then something went wrong in this calculation. ")
+        print("")
+
+
+        print('**COMPANION ABSOLUTE POINTING INFO FOR APT:**')
+        print(f'\tName:\t\t\t{comp_name}')
+        print(f'\tICRS coordinates:\t{planet_coord.to_string("hmsdms", sep=" ")}')
+        print(f'\tEpoch:\t\t\t{astropy.time.Time(obs_date).jyear:.2f}')
+        print(f'\tProper Motion:\t\tRA: {star_coord.pm_ra_cosdec:.3f}\tDec: {star_coord.pm_dec:.3f}')
+        print(f'\tAnnual Parallax:\t{1/star_coord.distance.to_value(u.pc):.4f} arcsec')
+    return planet_coord
