@@ -3402,7 +3402,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             all_interp_psfmodel[:, debug_init+out_id] = out[1]
             all_interp_psfsub[:, debug_init+out_id] = all_interp_flux[:, debug_init+out_id] - out[1]
 
-    all_interp_psfsub *= all_interp_badpix
+    # all_interp_psfsub *= all_interp_badpix
 
     all_interp_psfsub = all_interp_psfsub*all_interp_area2d/psf_spaxel_area
     all_interp_psfmodel = all_interp_psfmodel*all_interp_area2d/psf_spaxel_area

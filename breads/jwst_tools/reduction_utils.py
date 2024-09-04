@@ -12,6 +12,7 @@ import jwst
 from jwst.pipeline import Detector1Pipeline, Spec2Pipeline
 
 from breads.fit import fitfm
+import datetime
 
 ###########################################################################
 #                       JWST reduction tools
@@ -29,7 +30,10 @@ from breads.fit import fitfm
 def find_files_to_process(input_dir, filetype='uncal.fits'):
     """ Utility function to find files of a given type """
 
-    files = glob(os.path.join(input_dir,"jw0*_"+filetype))
+    if "jw0" in filetype:
+        files = glob(os.path.join(input_dir,filetype))
+    else:
+        files = glob(os.path.join(input_dir,"jw0*_"+filetype))
     files.sort()
     for file in files:
         print(file)
@@ -39,7 +43,7 @@ def find_files_to_process(input_dir, filetype='uncal.fits'):
 ###########################################################################
 # Functions for invoking the pipeline
 
-def run_stage1(uncal_files, output_dir, overwrite=False):
+def run_stage1(uncal_files, output_dir, overwrite=False,maximum_cores="all"):
     """ Run pipeline stage 1, with some customizations for reductions
     intended to be used with breads for IFU high contrast
 
@@ -78,8 +82,8 @@ def run_stage1(uncal_files, output_dir, overwrite=False):
             # linearity - run with defaults
             'persistence': {'skip' : True},         # This step does nothing; there are no nonzero parameters in the reference files yet
             # dark_current : run with defaults
-            'jump': {'maximum_cores': 'all'},       # parallelize
-            'ramp_fit': {'maximum_cores': 'all'},   # parallelize
+            'jump': {'maximum_cores': maximum_cores},       # parallelize
+            'ramp_fit': {'maximum_cores': maximum_cores},   # parallelize
             # gain_scale : run with defaults
         }
 
@@ -159,6 +163,199 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
     print(f"Total Runtime: {time1 - time0:0.4f} seconds")
     return cal_files
 
+###########################################################################
+#  Function for centroid calibration
+
+import multiprocessing as mp
+from breads.instruments.jwstnirspec_cal import JWSTNirspec_cal
+from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_cals
+from breads.instruments.jwstnirspec_cal import fitpsf
+import matplotlib.gridspec as gridspec # GRIDSPEC !
+import matplotlib.pyplot as plt
+
+# # Definition of the wavelength sampling on which the detector images are interpolated (for each detector)
+# wv_for_cent_calib_dict = {}
+# #"G140H","G235H","G395H"
+# wv_for_cent_calib_dict["G140H nrs1"] = np.arange(0.96646905,1.4494654,0.003)
+# wv_for_cent_calib_dict["G140H nrs2"] = []
+# wv_for_cent_calib_dict["G235H nrs1"] = []#0.005
+# wv_for_cent_calib_dict["G235H nrs2"] = []
+# wv_for_cent_calib_dict["G395H nrs1"] = np.arange(2.859, 4.103, 0.01)
+# wv_for_cent_calib_dict["G395H nrs2"] = np.arange(4.081, 5.280, 0.01)
+
+def run_coordinate_recenter(cal_files, utils_dir,crds_dir, init_centroid = (0,0),wv_sampling=None, N_wvs_nodes=40,
+                             mask_charge_transfer_radius = None,
+                             IWA=0.3,OWA=1.0,
+                             debug_init=None,debug_end=None,
+                             numthreads = 16,
+                             save_plots=False):
+
+    mypool = mp.Pool(processes=numthreads)
+
+    if not os.path.exists(utils_dir):
+        os.makedirs(utils_dir)
+
+    # Science data: List of stage 2 cal.fits files
+    for filename in cal_files:
+        print(filename)
+    print("N files: {0}".format(len(cal_files)))
+
+    hdulist_sc = fits.open(cal_files[0])
+    grating = hdulist_sc[0].header["GRATING"].strip()
+    detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
+    if wv_sampling is None:
+        wv_sampling = np.arange(np.nanmin(hdulist_sc["WAVELENGTH"].data),
+                                np.nanmax(hdulist_sc["WAVELENGTH"].data),
+                                np.nanmedian(hdulist_sc["WAVELENGTH"].data)/300)
+    hdulist_sc.close()
+
+    #     wv_for_cent_calib_dict[grating+" "+detector]
+
+    regwvs_dataobj_list= []
+    for filename in cal_files[0::]:
+        print(filename)
+        if detector not in filename:
+            raise Exception("The files in cal_files should all be for the same detector")
+
+        preproc_task_list = []
+        preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
+        preproc_task_list.append(["compute_coordinates_arrays"])
+        preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
+        preproc_task_list.append(["compute_starspectrum_contnorm", {"N_nodes": N_wvs_nodes,
+                                                                     "threshold_badpix": 100,
+                                                                     "mppool": mypool}, True, True])
+        preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d_tmp",
+                                                              "threshold_badpix": 10,
+                                                              "mppool": mypool}, True, True])
+        preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, False])
+
+        dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
+                                  save_utils=True,load_utils=True,preproc_task_list=preproc_task_list)
+        regwvs_dataobj_list.append(dataobj.reload_interpdata_regwvs())
+
+    regwvs_combdataobj = JWSTNirspec_multiple_cals(regwvs_dataobj_list)
+    if mask_charge_transfer_radius is not None:
+        regwvs_combdataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
+
+    # Load the webbPSF model (or compute if it does not yet exist)
+    webbpsf_reload = regwvs_combdataobj.reload_webbpsf_model()
+    if webbpsf_reload is None:
+        webbpsf_reload = regwvs_combdataobj.compute_webbpsf_model(wv_sampling=regwvs_combdataobj.wv_sampling,
+                                                                  image_mask=None,
+                                                                  pixelscale=0.1, oversample=10,
+                                                                  parallelize=False, mppool=mypool,
+                                                                  save_utils=True)
+    wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale = webbpsf_reload
+    webbpsf_X = np.tile(webbpsf_X[None, :, :], (wepsfs.shape[0], 1, 1))
+    webbpsf_Y = np.tile(webbpsf_Y[None, :, :], (wepsfs.shape[0], 1, 1))
+
+
+    # Definie the filename of the output file saved by fitpsf
+    splitbasename = os.path.basename(regwvs_combdataobj.filename).split("_")
+    filename_suffix = "_webbpsf"
+    fitpsf_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3] + "_fitpsf" + filename_suffix + ".fits")
+
+    # Fit a model PSF (WebbPSF) to the combined point cloud of dataobj_list
+    # Save output as fitpsf_filename
+    ann_width = None
+    padding = 0.0
+    sector_area = None
+    where_center_disk = regwvs_combdataobj.where_point_source((0.0,0.0),IWA)
+    regwvs_combdataobj.bad_pixels[where_center_disk] = np.nan
+
+    # l0 = 100
+    # plt.scatter(regwvs_combdataobj.dra_as_array[:, l0], regwvs_combdataobj.ddec_as_array[:, l0],
+    #             c=10 * regwvs_combdataobj.data[:, l0] / np.nanmax(regwvs_combdataobj.data[:, l0]), s=1)
+    # plt.show()
+    fitpsf(regwvs_combdataobj,wepsfs,webbpsf_X,webbpsf_Y, out_filename=fitpsf_filename,IWA = 0.0,OWA = OWA,
+           mppool=mypool,init_centroid=init_centroid,ann_width=ann_width,padding=padding,
+           sector_area=sector_area,RDI_folder_suffix=filename_suffix,rotate_psf=regwvs_combdataobj.east2V2_deg,
+           flipx=True,psf_spaxel_area=(wpsf_pixelscale) ** 2,debug_init=debug_init,debug_end=debug_end)
+
+    with fits.open(fitpsf_filename) as hdulist:
+        bestfit_coords = hdulist[0].data
+        wpsf_angle_offset = hdulist[0].header["INIT_ANG"]
+        wpsf_ra_offset = hdulist[0].header["INIT_RA"]
+        wpsf_dec_offset = hdulist[0].header["INIT_DEC"]
+
+    x2fit = wv_sampling - np.nanmedian(wv_sampling)
+    y2fit = bestfit_coords[0, :, 2]
+    # if detector == "nrs1":
+    #     _wv_min, _wv_max = 3.0, 4.0
+    # elif detector == "nrs2":
+    #     _wv_min, _wv_max = 4.3, 5.2
+    _wv_min = wv_sampling[0]+0.1*(wv_sampling[-1]-wv_sampling[0])
+    _wv_max = wv_sampling[-1]-0.1*(wv_sampling[-1]-wv_sampling[0])
+    print(_wv_min, _wv_max)
+    wherefinite = np.where(np.isfinite(y2fit) * (wv_sampling > _wv_min) * (wv_sampling < _wv_max))
+    poly_p_RA = np.polyfit(x2fit[wherefinite], y2fit[wherefinite], deg=2)
+    print("RA correction " + detector, poly_p_RA)
+
+    x2fit = wv_sampling - np.nanmedian(wv_sampling)
+    y2fit = bestfit_coords[0, :, 3]
+    wherefinite=np.where(np.isfinite(y2fit)*(wv_sampling>_wv_min)*(wv_sampling<_wv_max))
+    poly_p_dec = np.polyfit(x2fit[wherefinite],y2fit[wherefinite], deg=2)
+    # plt.scatter(x2fit[wherefinite],y2fit[wherefinite],label=detector)
+    print("Dec correction "+detector, poly_p_dec)
+
+    if save_plots:
+        color_list = ["#ff9900", "#006699", "#6600ff", "#006699", "#ff9900", "#6600ff"]
+        print(bestfit_coords.shape)
+        fontsize=12
+        plt.figure(figsize=(12,10))
+        plt.subplot(3,1,1)
+
+        plt.plot(wv_sampling,bestfit_coords[0,:,0]*1e9,linestyle="-",color=color_list[0],label="Fixed centroid",linewidth=1)
+        plt.plot(wv_sampling,bestfit_coords[0,:,1]*1e9,linestyle="--",color=color_list[2],label="Free centroid",linewidth=1)
+        plt.xlim([wv_sampling[0],wv_sampling[-1]])
+        plt.xlabel("Wavelength ($\mu$m)",fontsize=fontsize)
+        plt.ylabel("Flux density (mJy)",fontsize=fontsize)
+        plt.gca().tick_params(axis='x', labelsize=fontsize)
+        plt.gca().tick_params(axis='y', labelsize=fontsize)
+        plt.legend(loc="upper right")
+
+        plt.subplot(3,1,2)
+        plt.plot(wv_sampling,bestfit_coords[0,:,2],label="bestfit centroid")
+        poly_model = np.polyval(poly_p_RA,wv_sampling - np.nanmedian(wv_sampling))
+        plt.plot(wv_sampling,poly_model,label="polyfit")
+        plt.plot(wv_sampling,bestfit_coords[0,:,2]-poly_model,label="residuals")
+        plt.xlabel("Wavelength ($\mu$m)",fontsize=fontsize)
+        plt.ylabel("$\Delta$RA (as)",fontsize=fontsize)
+        plt.gca().tick_params(axis='x', labelsize=fontsize)
+        plt.gca().tick_params(axis='y', labelsize=fontsize)
+        plt.legend(loc="upper right")
+
+        plt.subplot(3,1,3)
+        plt.plot(wv_sampling,bestfit_coords[0,:,3],label="bestfit centroid")
+        poly_model = np.polyval(poly_p_dec,wv_sampling - np.nanmedian(wv_sampling))
+        plt.plot(wv_sampling,poly_model,label="polyfit")
+        plt.plot(wv_sampling,bestfit_coords[0,:,3]-poly_model,label="residuals")
+        plt.xlabel("Wavelength ($\mu$m)",fontsize=fontsize)
+        plt.ylabel("$\Delta$Dec (as)",fontsize=fontsize)
+        plt.gca().tick_params(axis='x', labelsize=fontsize)
+        plt.gca().tick_params(axis='y', labelsize=fontsize)
+
+        plt.tight_layout()
+
+        now = datetime.datetime.now()
+        formatted_datetime = now.strftime("%Y%m%d_%H%M%S")
+
+        out_filename = os.path.join(utils_dir, formatted_datetime+"_centroid_calibration.png")
+        print("Saving " + out_filename)
+        plt.savefig(out_filename, dpi=300)
+        plt.savefig(out_filename.replace(".png", ".pdf"),bbox_inches='tight')
+
+        # out_filename = os.path.join(out_png, "HR8799_spectrum_microns_MJy_"+obsnum+".png")
+        # hdulist = fits.HDUList()
+        # hdulist.append(fits.PrimaryHDU(data=flux2save_wvs))
+        # hdulist.append(fits.ImageHDU(data=flux2save))
+        # try:
+        #     hdulist.writeto(out_filename, overwrite=True)
+        # except TypeError:
+        #     hdulist.writeto(out_filename, clobber=True)
+        # hdulist.close()
+
+    return poly_p_RA,poly_p_dec
 
 
 ###########################################################################
