@@ -1678,7 +1678,7 @@ class JWSTNirspec_cal(Instrument):
         self.ifuy_nodes = ifuy_nodes
         return subtracted_im,star_model,spline_paras0,wv_nodes,ifuy_nodes
 
-    def compute_interpdata_regwvs(self, save_utils=False,wv_sampling=None):
+    def compute_interpdata_regwvs(self, save_utils=False,wv_sampling=None,replace_data=None):
         """Interpolate onto a regular wavelength sampling.
 
         Parameters
@@ -1707,26 +1707,31 @@ class JWSTNirspec_cal(Instrument):
 
         regwvs_dataobj.coords = self.coords + " regwvs"
 
-        regwvs_dataobj.dra_as_array = np.zeros((self.data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.ddec_as_array = np.zeros((self.data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.wavelengths = np.zeros((self.data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.leftnright_wavelengths = np.zeros((2,self.data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.data = np.zeros((self.data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.noise = np.zeros((self.data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.bad_pixels = np.zeros((self.data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.area2d = np.zeros((self.data.shape[0], Nwv))+np.nan
+        if replace_data is not None:
+            _data = replace_data
+        else:
+            _data = self.data
 
-        # self.data[np.where(np.isnan(self.bad_pixels))] = 0
+        regwvs_dataobj.dra_as_array = np.zeros((_data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.ddec_as_array = np.zeros((_data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.wavelengths = np.zeros((_data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.leftnright_wavelengths = np.zeros((2,_data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.data = np.zeros((_data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.noise = np.zeros((_data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.bad_pixels = np.zeros((_data.shape[0], Nwv))+np.nan
+        regwvs_dataobj.area2d = np.zeros((_data.shape[0], Nwv))+np.nan
+
+        # _data[np.where(np.isnan(self.bad_pixels))] = 0
 
         # rowid = 1552
         # print(wv_sampling)
         # where_finite = np.where(np.isfinite(self.bad_pixels[rowid, :]))
-        # test = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.data[rowid, where_finite[0]])#, left=np.nan,right=np.nan
+        # test = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], _data[rowid, where_finite[0]])#, left=np.nan,right=np.nan
         # # plt.plot(self.wavelengths[rowid, 1::]-self.wavelengths[rowid, 0:2047])
         # # plt.show()
         # # print(np.where(np.isnan(self.wavelengths[rowid, :])))
         # plt.subplot(3,1,1)
-        # plt.plot(self.wavelengths[rowid, :],self.data[rowid, :]*self.bad_pixels[rowid, :])
+        # plt.plot(self.wavelengths[rowid, :],_data[rowid, :]*self.bad_pixels[rowid, :])
         # plt.ylim([0,3e-9])
         # plt.subplot(3,1,2)
         # plt.plot(self.wavelengths[rowid, :],self.bad_pixels[rowid, :])
@@ -1735,7 +1740,7 @@ class JWSTNirspec_cal(Instrument):
         # plt.plot(wv_sampling,np.ones(wv_sampling.shape)*np.nanmedian(test))
         # plt.ylim([0,3e-9])
         # plt.show()
-        for rowid in range(self.data.shape[0]):
+        for rowid in range(_data.shape[0]):
             wvs_finite = np.where(np.isfinite(self.wavelengths[rowid, :]))
             if np.size(wvs_finite[0]) == 0:
                 # print("No ref points")
@@ -1759,7 +1764,7 @@ class JWSTNirspec_cal(Instrument):
             if np.size(where_finite[0]) == 0:
                 # print("No ref points")
                 continue
-            regwvs_dataobj.data[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.data[rowid, where_finite[0]], left=np.nan,right=np.nan)
+            regwvs_dataobj.data[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], _data[rowid, where_finite[0]], left=np.nan,right=np.nan)
             regwvs_dataobj.noise[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.noise[rowid, where_finite[0]], left=np.nan, right=np.nan)
 
 
@@ -1773,7 +1778,7 @@ class JWSTNirspec_cal(Instrument):
 
         # rowid = 1552
         # plt.subplot(3,1,1)
-        # plt.plot(self.wavelengths[rowid, :],self.data[rowid, :]*self.bad_pixels[rowid, :])
+        # plt.plot(self.wavelengths[rowid, :],_data[rowid, :]*self.bad_pixels[rowid, :])
         # plt.ylim([0,3e-9])
         # # plt.scatter(self.wavelengths[rowid, :],self.wavelengths[rowid, :])
         # plt.subplot(3,1,2)
