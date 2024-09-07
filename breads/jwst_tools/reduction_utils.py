@@ -909,7 +909,7 @@ def compute_starlight_subtraction(cal_files,utils_dir,crds_dir,wv_nodes=None,com
             dataobj.reload_starspectrum_contnorm()
             dataobj.star_func = combined_star_func
 
-        outputs = dataobj.reload_starsubtraction_2dspline()
+        outputs = dataobj.reload_starsubtraction()
         # outputs = None
         if outputs is None:
             outputs = dataobj.compute_starsubtraction(save_utils=True, starsub_dir="starsub1d",
