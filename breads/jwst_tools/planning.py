@@ -3,9 +3,12 @@ import matplotlib.pyplot as plt
 import pysiaf
 import astropy.units as u
 
-def visualize_nrs_ifu_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
-                          show_inner_diff_spikes=False):
-    """ Visualize NIRSpec IFU FOV for a companion"""
+def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
+                          show_inner_diff_spikes=True, diff_spike_len = 2,
+                          nirspec_aperture='ifu'):
+    """ Visualize NIRSpec IFU or slit FOV for a companion
+
+    """
 	# Disclaimer: Written in a bit of a rush; code could be cleaned up some still...
 
     comp_rel_pa = v3pa - comp_pa.to_value(u.deg)
@@ -15,13 +18,20 @@ def visualize_nrs_ifu_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star'
     # Setup figure draf siaf
     plt.figure()
     nrs_siaf = pysiaf.Siaf('NIRSpec')
-    for apname in nrs_siaf.apernames:
-        if 'IFU_SLICE' in apname:
-            nrs_siaf.apertures[apname].plot(frame='tel', color='gray', alpha=0.5)
+    if nirspec_aperture == 'ifu':
+        for apname in nrs_siaf.apernames:
+            if 'IFU_SLICE' in apname:
+                nrs_siaf.apertures[apname].plot(frame='tel', color='gray', alpha=0.5)
+        ref_aperture = nrs_siaf.apertures['NRS_FULL_IFU']
+    else:
+        ref_aperture = nrs_siaf.apertures['NRS_'+nirspec_aperture+'_SLIT']
+        ref_aperture.plot(frame='tel', color='gray', alpha=0.5)
 
 
-    v2ref = nrs_siaf.apertures['NRS_FULL_IFU'].V2Ref
-    v3ref = nrs_siaf.apertures['NRS_FULL_IFU'].V3Ref
+
+
+    v2ref = ref_aperture.V2Ref
+    v3ref = ref_aperture.V3Ref
 
     # How should the FOV be centered?
     if center_on.lower() == 'star':
@@ -39,7 +49,7 @@ def visualize_nrs_ifu_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star'
     for angle in range(6):
         ang_rad = np.deg2rad(angle*60)
         # Big diffraction spikes
-        spikelen = 2
+        spikelen = diff_spike_len
         plt.plot([v2star, v2star-np.sin(ang_rad)*spikelen], [v3star, v3star+np.cos(ang_rad)*spikelen],
                  color='black', lw=1, marker='none')
         # smaller inner diffraction spikes
@@ -78,13 +88,21 @@ def visualize_nrs_ifu_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star'
              v3star+np.cos(comp_rel_pa_rad)*(comp_sep.to_value(u.arcsec)+0.5),
              comp_name,    color='blue')
 
-    slice_V3IdlYAngle = nrs_siaf.apertures['NRS_IFU_SLICE00'].V3IdlYAngle
+    if nirspec_aperture == 'ifu':
+        slice_V3IdlYAngle = nrs_siaf.apertures['NRS_IFU_SLICE00'].V3IdlYAngle
+        aplabel = 'IFUalign'
+        plt.text(298.7, -499.3, f"{aplabel} X axis. Bottom of NRS detectors", rotation=slice_V3IdlYAngle-90, fontsize=8, color='green',
+                horizontalalignment='center', verticalalignment='center')
+        plt.text(301., -499.7, f"{aplabel} Y axis. ", rotation=slice_V3IdlYAngle-180, fontsize=8, color='green',
+                horizontalalignment='center', verticalalignment='center')
+        plt.text(301.2, -496.9, "Top of NRS detectosr", rotation=slice_V3IdlYAngle-90, fontsize=8, color='green',
+                horizontalalignment='center', verticalalignment='center')
 
-    plt.text(298.7, -499.3, "IFUalign X axis. Bottom of NRS detectors", rotation=slice_V3IdlYAngle-90, fontsize=8, color='green',
-            horizontalalignment='center', verticalalignment='center')
-    plt.text(301., -499.7, "IFUalign Y axis. ", rotation=slice_V3IdlYAngle-180, fontsize=8, color='green',
-            horizontalalignment='center', verticalalignment='center')
-    plt.text(301.2, -496.9, "Top of NRS detectosr", rotation=slice_V3IdlYAngle-90, fontsize=8, color='green',
-            horizontalalignment='center', verticalalignment='center')
+    else:
+        slice_V3IdlYAngle = ref_aperture.V3IdlYAngle
+        xtel, ytel = ref_aperture.idl_to_tel(0,0)
+        aplabel = nirspec_aperture
+        plt.text(xtel+0.5, ytel+0.5, f"{aplabel}", rotation=slice_V3IdlYAngle-90, fontsize=8, color='green',
+                horizontalalignment='center', verticalalignment='center')
 
-    plt.title(f'{comp_name} at V3PA={v3pa}')
+    plt.title(f'{comp_name} at V3PA={v3pa} for NRS {nirspec_aperture.upper()}')
