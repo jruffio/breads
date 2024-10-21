@@ -29,6 +29,7 @@ dependencies = [
     "webbpsf",
     "emcee",
     "PyAstronomy",
+    "pandas>2.0.0",
 
 ]
 
