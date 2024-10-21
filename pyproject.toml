@@ -1,0 +1,58 @@
+[build-system]
+requires = [
+    "setuptools >= 61.2",
+    "setuptools_scm[toml]>=3.4.3",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "breads"
+description = "Broad Respository for Exoplanet Analysis, Discovery, and Spectroscopy"
+authors = [
+    { name = "Jean-Baptiste Ruffio", email = "jruffio@ucsd.edu" },
+    { name = "Marshall Perirn", email = "mperrin@stsci.edu" },
+    { name = "Shubh Agrawal", email = "shubh@caltech.edu" },
+    { name = "Alex Madurowicz", email = "amadurowicz@stsci.edu" },
+    { name = "Ben Sappey", email = "bsappey@ucsd.edu" },
+]
+dynamic = [
+    "version",
+]
+readme = "README.rst"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "astropy>=4.0.0",
+    "webbpsf",
+    "emcee",
+    "PyAstronomy",
+
+]
+
+[project.license]
+file = "LICENSE"
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+docs = [
+    "nbsphinx",
+    "sphinx",
+    "stsci_rtd_theme",
+    "sphinx-astropy",
+    "sphinx-automodapi",
+    "sphinx-issues",
+    "tomli; python_version <\"3.11\"",
+]
+
+[project.urls]
+Homepage = "http://breads.readthedocs.io/"
+github_project = "https://github.com/jruffio/breads"
+
+[tool.setuptools.packages.find]
+namespaces = false
+
