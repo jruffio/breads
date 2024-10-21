@@ -53,6 +53,8 @@ docs = [
 Homepage = "http://breads.readthedocs.io/"
 github_project = "https://github.com/jruffio/breads"
 
+[tool.setuptools_scm]
+
 [tool.setuptools.packages.find]
 namespaces = false
 
