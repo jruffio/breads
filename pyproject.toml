@@ -48,6 +48,7 @@ docs = [
     "sphinx-automodapi",
     "sphinx-issues",
     "tomli; python_version <\"3.11\"",
+    "jwst",
 ]
 
 [project.urls]
