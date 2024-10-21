@@ -3,8 +3,8 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Documentation for breads, the Broad Repository for Exoplanet Analysis, Discovery, and Spectroscopy
-==================================================================================================
+breads, the Broad Repository for Exoplanet Analysis, Discovery, and Spectroscopy
+================================================================================
 
 
 ``breads`` is a toolkit for data analyses in astronomical spectroscopy of
