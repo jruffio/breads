@@ -1,54 +1,50 @@
-import os.path
-
-from matplotlib.pyplot import axis
-import matplotlib.pyplot as plt
-from breads.instruments.instrument import Instrument
-import breads.utils as utils
-from warnings import warn
-import astropy.io.fits as pyfits
-import numpy as np
-import ctypes
-# from astropy.coordinates import SkyCoord, EarthLocation
-import astropy.units as u
-from astropy.time import Time
 from copy import copy,deepcopy
-from breads.utils import broaden
-from breads.calibration import SkyCalibration
-import multiprocessing as mp
-# import pandas as pd
-import astropy
-from astropy.coordinates import SkyCoord
-from astropy import units as u
-from astropy.time import Time
+import ctypes
 from glob import glob
 import itertools
-from scipy.interpolate import interp1d
-from astropy.stats import sigma_clip
-from breads.utils import get_spline_model
+import multiprocessing as mp
+import os.path
+from warnings import warn
+# import pandas as pd
+
+import numpy as np
+from matplotlib.pyplot import axis
+import matplotlib.pyplot as plt
+import matplotlib.tri as tri
 from scipy.optimize import lsq_linear
-import astropy
-import webbpsf
 from scipy.interpolate import griddata
+from scipy.interpolate import splev, splrep
+from scipy.interpolate import interp1d
 from scipy.interpolate import RegularGridInterpolator
 from scipy.interpolate import CloughTocher2DInterpolator
 from scipy.interpolate import LinearNDInterpolator
-from scipy.optimize import curve_fit
-from stdatamodels.jwst import datamodels
-from scipy.signal import convolve2d
 import scipy.linalg as la
 from scipy.optimize import minimize
-from astropy import constants as const
-from scipy.stats import median_abs_deviation
-from gwcs import wcstools
-
-from breads.utils import rotate_coordinates,find_closest_leftnright_elements
-
-import matplotlib.tri as tri
-import numpy as np
+from scipy.optimize import curve_fit
 from scipy.ndimage import generic_filter
-
 from scipy.ndimage import median_filter
-from scipy.interpolate import splev, splrep
+from scipy.signal import convolve2d
+from scipy.stats import median_abs_deviation
+
+from breads.instruments.instrument import Instrument
+import breads.utils as utils
+from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_elements
+from breads.calibration import SkyCalibration
+from breads.utils import get_spline_model
+
+import astropy
+from astropy import constants as const
+import astropy.io.fits as pyfits
+# from astropy.coordinates import SkyCoord, EarthLocation
+import astropy.units as u
+from astropy.time import Time
+from astropy.coordinates import SkyCoord
+from astropy import units as u
+from astropy.stats import sigma_clip
+
+import webbpsf
+
+
 
 
 
@@ -332,8 +328,10 @@ class JWSTNirspec_cal(Instrument):
         area2d: in arcsec^2
 
         """
+        from stdatamodels.jwst import datamodels
         import jwst.datamodels, jwst.assign_wcs
         from jwst.photom.photom import DataSet
+        from gwcs import wcstools
         if self.verbose:
             print(f"Computing coordinates arrays.")
 
