@@ -17,7 +17,6 @@ from breads.calibration import SkyCalibration
 import multiprocessing as mp
 # import pandas as pd
 import astropy
-import jwst.datamodels, jwst.assign_wcs
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from astropy.time import Time
@@ -34,7 +33,6 @@ from scipy.interpolate import RegularGridInterpolator
 from scipy.interpolate import CloughTocher2DInterpolator
 from scipy.interpolate import LinearNDInterpolator
 from scipy.optimize import curve_fit
-from jwst.photom.photom import DataSet
 from stdatamodels.jwst import datamodels
 from scipy.signal import convolve2d
 import scipy.linalg as la
@@ -334,6 +332,8 @@ class JWSTNirspec_cal(Instrument):
         area2d: in arcsec^2
 
         """
+        import jwst.datamodels, jwst.assign_wcs
+        from jwst.photom.photom import DataSet
         if self.verbose:
             print(f"Computing coordinates arrays.")
 
