@@ -11,6 +11,9 @@ import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import RegularGridInterpolator
+from species.phot.syn_phot import SyntheticPhotometry
+import astropy.units as u
+from astropy import constants as const
 
 from contextlib import redirect_stdout
 from io import StringIO
@@ -37,6 +40,8 @@ class miniRGI():
                  model_name,
                  wavelength_bounds = None,
                  R = None,
+                 filter_name = None,
+                 MJy_flag = False,
                  parallel_broadening_flag = True,
                  save_flag = True,
                  load_flag = True):
@@ -44,6 +49,8 @@ class miniRGI():
         self.model_name = model_name
         self.wavelength_bounds = wavelength_bounds
         self.R = R
+        self.filter_name = filter_name
+        self.MJy_flag = MJy_flag
         self.parallel_broadening_flag = parallel_broadening_flag
         self.save_flag = save_flag
         self.load_flag = load_flag
@@ -68,6 +75,10 @@ class miniRGI():
             self.wavelength = self.wavelength[self.wavelength_bool]
         print('Spectral Resolution: {}'.format(self.R)) if R is not None else None
         self.values = self.fakeNDarray([len(v) for v in self.points.values()]+[len(self.wavelength)])
+        
+        if self.MJy_flag:
+            print('Normalizing to 1 MJy in filter : {}'.format(self.filter_name))
+            self.synphot = SyntheticPhotometry(self.filter_name)
 
         if self.load_flag:
             self.load()
@@ -81,7 +92,12 @@ class miniRGI():
         if not (slice_string in self.miniRGI_dictionary.keys()):
             self.load_and_broaden_mini_hypercube(slicing, mini_param_list)
             
-        return self.miniRGI_dictionary[slice_string](atm_paras)
+        mRGI = self.miniRGI_dictionary[slice_string]
+            
+        if self.MJy_flag:
+            return self.normalize(mRGI(atm_paras))
+        else:
+            return mRGI(atm_paras)
     
     def define_subgrid_slice(self, atm_paras):
         
@@ -148,6 +164,17 @@ class miniRGI():
         self.miniRGI_dictionary[str(slicing)] = RegularGridInterpolator(tuple(mini_param_list), mini_hypercube, method='linear', fill_value=np.nan)
         if self.save_flag:
             self.save()
+            
+    def normalize(self,flux):
+
+        flam = flux*u.W/u.m**2/u.micron
+        w0 = np.mean(self.synphot.wavel_range)
+        fnu = flam * (w0 * u.um)**2 / const.c
+        fMJy = fnu.to(u.MJy).value
+        bandflux, _ = self.synphot.spectrum_to_flux(self.wavelength,fMJy.reshape(-1))
+        normflux = fMJy/bandflux
+        
+        return normflux
         
     def load(self):
         if os.path.exists(self.savedir+self.fname):
