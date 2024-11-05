@@ -3669,243 +3669,58 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
         hdulist.close()
     return snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
 
+import sys
+def rprint(string):
+    sys.stdout.write('\r'+str(string))
+    sys.stdout.flush()
+
 def _build_cube_task(inputs):
-    combdataobj, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inputs
+    X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inputs
 
-    wv_sampling = combdataobj.wv_sampling
-    east2V2_deg = combdataobj.east2V2_deg
-    all_interp_ra = combdataobj.dra_as_array
-    all_interp_dec = combdataobj.ddec_as_array
-    all_interp_flux = combdataobj.data
-    all_interp_err = combdataobj.noise
-    all_interp_badpix = combdataobj.bad_pixels
-
-    rprint("computing build_cube parallel {} {} {}          ".format(wv_id,wv,np.size(wv_sampling)))  
+    rprint("computing _build_cube_task id: {} wave: {}".format(wv_id,wv))  
     psf_interp = _interp_psf(psf_interp_paras)
 
     outs = [] 
     for ra_id, ra in enumerate(ra_vec):
         for dec_id, dec in enumerate(dec_vec):
 
-            X = all_interp_ra[:, wv_id]
-            Y = all_interp_dec[:, wv_id]
-            Z = all_interp_flux[:, wv_id]
-            Zerr = all_interp_err[:, wv_id]
             R = np.sqrt((X - ra) ** 2 + (Y - dec) ** 2)
             Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
-            where_finite = np.where(np.isfinite(all_interp_badpix[:, wv_id]) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
+            #print(ra_id,dec_id,Zbp.shape,Zerr_masking.shape,X.shape,Y.shape,R.shape)
+            where_finite = np.where(np.isfinite(Zbp) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
         
             if np.size(where_finite[0]) < N_pix_min:
-                outs.append([ra_id, ra, dec_id, dec, np.nan, np.nan]) #changed from continue
+                outs.append([ra_id, dec_id, np.nan, np.nan]) #changed from continue
             else:
-                X = X[where_finite]
-                Y = Y[where_finite]
-                Z = Z[where_finite]
+                X_fin = X[where_finite]
+                Y_fin = Y[where_finite]
+                Z_fin = Z[where_finite]
             
-                Zerr = Zerr[where_finite]
-                M = psf_interp(X - ra, Y - dec)
+                Zerr_fin = Zerr[where_finite]
+                M = psf_interp(X_fin - ra, Y_fin - dec)
             
-                deno = np.nansum(M ** 2 / Zerr ** 2)
-                mfflux = np.nansum(M * Z / Zerr ** 2) / deno
+                deno = np.nansum(M ** 2 / Zerr_fin ** 2)
+                mfflux = np.nansum(M * Z_fin / Zerr_fin ** 2) / deno
                 mffluxerr = 1 / np.sqrt(deno)
             
-                res = Z - mfflux * M
-                noise_factor = np.nanstd(res / Zerr)
-                outs.append([ra_id, ra, dec_id, dec, mfflux, mffluxerr * noise_factor])
+                res = Z_fin - mfflux * M
+                noise_factor = np.nanstd(res / Zerr_fin)
+                outs.append([ra_id, dec_id, mfflux, mffluxerr * noise_factor])
     return outs
-
-import sys
-def rprint(string):
-    sys.stdout.write('\r'+str(string))
-    sys.stdout.flush()
 
 def build_cube(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
                     linear_interp=True, mppool=None, aper_radius=0.5,
                     debug_init=None,debug_end=None,N_pix_min=None):
     if "regwvs" not in combdataobj.coords:
         raise Exception("This data object needs to be interpolated on regular wavelength grid. See dataobj.compute_interpdata_regwvs")
+        
     if mppool is not None:
-        #raise Exception("Parallelization not implemented yet.")
-        print('passed Exception block. Testing parallelization... setting parallel_flag = True')
+        print('Setting parallel_flag = True')
         parallel_flag = True
-
-    # plt.imshow(combdataobj.data * combdataobj.bad_pixels, interpolation="nearest", origin="lower")
-    # print("coucou")
-    # plt.show()
-    
-    wv_sampling = combdataobj.wv_sampling
-    east2V2_deg = combdataobj.east2V2_deg
-    all_interp_ra = combdataobj.dra_as_array
-    all_interp_dec = combdataobj.ddec_as_array
-    all_interp_flux = combdataobj.data
-    all_interp_err = combdataobj.noise
-    all_interp_badpix = combdataobj.bad_pixels
-    # plt.imshow(all_interp_flux*all_interp_badpix, interpolation="nearest",origin="lower")
-    # plt.show()
-
-    if hasattr(combdataobj,"filelist"):
-        N_dithers = len(combdataobj.filelist)
     else:
-        N_dithers = 1
-
-    ra_grid, dec_grid = np.meshgrid(ra_vec, dec_vec)
-
-    flux_cube = np.zeros((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1])) + np.nan
-    fluxerr_cube = np.zeros((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1])) + np.nan
-
-    print("create psf model")
-    # test  = np.where((wv_sampling>3.2465)*(wv_sampling<3.250))
-    # test  = np.where((wv_sampling>4.8)*(wv_sampling<4.85))
-
-    # only process frames with wavelength index between debug_init and debug_end
-    if debug_init is None:
-        debug_init = 0
-    if debug_end is None:
-        debug_end = np.size(wv_sampling)
-    print(debug_init, debug_end)
-
-    if parallel_flag:
-        #do the same thing as below just inside a pool
-        if N_pix_min is None:
-            N_pix_min = (np.pi * aper_radius ** 2 / (0.01) * N_dithers)/4
-        #step 1 prepare list of inputs
-        inputs = []
-        for wv_id, wv in enumerate(wv_sampling):
-            if not (wv_id >= debug_init and wv_id < debug_end):
-                continue
-            rprint("prepping build_cube inputs {} {} {}          ".format(wv_id,wv,np.size(wv_sampling)))
-            psf_interp_paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
-            inputs.append([combdataobj, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min])
-        print()  
-        #step 2 map _build_cube_task over input list     
-        print('starting pool.map()')
-        outputs = mppool.map(_build_cube_task,inputs)
-
-        #step 3 iterate over outputs and save values
-        for j, inp in enumerate(inputs):
-            rprint('outputs {} {} {}          '.format(wv_id,wv,np.size(wv_sampling)))
-            
-            combdataobj, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inp
-            outs = outputs[j]
-            for o in outs:
-                ra_id, ra, dec_id, dec, flux, err = o
-                
-                flux_cube[wv_id, dec_id, ra_id] = flux
-                fluxerr_cube[wv_id, dec_id, ra_id] = err
-        print()
-                    
-    else:
-        if N_pix_min is None:
-            N_pix_min = (np.pi * aper_radius ** 2 / (0.01) * N_dithers)/4
-        for wv_id, wv in enumerate(wv_sampling):
-            if not (wv_id >= debug_init and wv_id < debug_end):
-                continue
-            print("build_cube",wv_id,wv,np.size(wv_sampling))
-            psf_interp_paras= linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
-            psf_interp = _interp_psf(psf_interp_paras)
-            for ra_id, ra in enumerate(ra_vec):
-                for dec_id, dec in enumerate(dec_vec):
-                    # print("ra, dec", ra, dec)
-                    X = all_interp_ra[:, wv_id]
-                    Y = all_interp_dec[:, wv_id]
-                    Z = all_interp_flux[:, wv_id]
-                    Zerr = all_interp_err[:, wv_id]
-                    R = np.sqrt((X - ra) ** 2 + (Y - dec) ** 2)
-                    Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
-                    where_finite = np.where(np.isfinite(all_interp_badpix[:, wv_id]) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
-                    # print(np.size(where_finite[0]),30*N_dithers)
-                    # if np.size(where_finite[0]) < 30 * N_dithers:
-                    # print(np.size(where_finite[0]), N_pix_min)
-                    if np.size(where_finite[0]) < N_pix_min:
-                        continue
-                    X = X[where_finite]
-                    Y = Y[where_finite]
-                    Z = Z[where_finite]
-                    # Zp=Zp[where_finite]
-                    Zerr = Zerr[where_finite]
-                    M = psf_interp(X - ra, Y - dec)
-                    # # print(wv,ra,dec)
-                    # # # plt.scatter(X,Y,s=psf_interp_list[wv_id](X,Y)/np.nanmedian(psf_interp_list[wv_id](X,Y)))#,s=sampled_psf[:,wv_id]/np.nanmedian(sampled_psf[:,wv_id])
-                    # plt.figure(10)
-                    # plt.subplot(1,2,1)
-                    # plt.scatter(X,Y,s=M/np.nanmedian(M))#,s=sampled_psf[:,wv_id]/np.nanmedian(sampled_psf[:,wv_id])
-                    # plt.subplot(1,2,2)
-                    # plt.scatter(X,Y,s=Z/np.nanmedian(Z))
-                    # plt.show()
-                    # # plt.figure(11)
-                    # #
-                    # # # plt.scatter(np.sqrt(X**2+Y**2),M,label="M")
-                    # # plt.subplot(1,3,1)
-                    # # plt.scatter(np.sqrt(X**2+Y**2),Z,label="Z")
-                    # # # plt.subplot(1,3,2)
-                    # # # plt.scatter(np.sqrt(X**2+Y**2),Zp,label="Zp")
-                    # # plt.subplot(1,3,3)
-                    # # plt.scatter(np.sqrt(X**2+Y**2),Zerr,label="Zerr")
-                    # # plt.legend()
-                    # # plt.show()
-                    # # # exit()
+        print('Setting parallel_flag = False')
+        parallel_flag = False
     
-                    deno = np.nansum(M ** 2 / Zerr ** 2)
-                    mfflux = np.nansum(M * Z / Zerr ** 2) / deno
-                    mffluxerr = 1 / np.sqrt(deno)
-    
-                    res = Z - mfflux * M
-                    noise_factor = np.nanstd(res / Zerr)
-    
-                    flux_cube[wv_id, dec_id, ra_id] = mfflux
-                    fluxerr_cube[wv_id, dec_id, ra_id] = mffluxerr * noise_factor
-    
-                # snr_vec = flux_cube[:, dec_id, ra_id] / fluxerr_cube[:, dec_id, ra_id]
-                # snr_vec = snr_vec - generic_filter(snr_vec, np.nanmedian, size=50)
-                # snr_vec = snr_vec / median_abs_deviation(snr_vec[np.where(np.isfinite(snr_vec))])
-                # where_outliers = np.where(snr_vec > 10)
-                # flux_cube[where_outliers[0], dec_id, ra_id] = np.nan
-                # fluxerr_cube[where_outliers[0], dec_id, ra_id] = np.nan
-
-    if out_filename is not None:
-        if debug_init != 0 or debug_end != np.size(wv_sampling):
-            out_filename = out_filename.replace(".fits","_from{0}to{1}.fits".format(debug_init,debug_end))
-        print("saving",out_filename)
-        hdulist = pyfits.HDUList()
-        hdulist.append(pyfits.PrimaryHDU(data=flux_cube))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_cube, name='FLUXERR_CUBE'))
-        hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
-        hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
-        hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WAVE'))
-        try:
-            hdulist.writeto(out_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(out_filename, clobber=True)
-        hdulist.close()
-    return flux_cube, fluxerr_cube, ra_grid, dec_grid
-
-    # dataobj0 = dataobj_list[0]
-    # wv_sampling = dataobj0.wv_sampling
-    # east2V2_deg = dataobj0.east2V2_deg
-
-def build_cube_v2(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
-                    linear_interp=True, parallel_flag=False, threads=None, aper_radius=0.5,
-                    debug_init=None,debug_end=None,N_pix_min=None):
-    '''
-    build_cube_v2 is identical to build_cube with the following exceptions:
-    - It utilize multiprocess instead of multiprocessing for local function serialization
-    - it accepts arguments parallel_flag = boolean, and threads = integer instead of mppool = mp.Pool() 
-      so that the pool can be properly closed to prevent hanging threads.
-
-    The main bottleneck in parallelization appears to be memory related for the combdataojb.
-    I find that using 12 / 64 possible threads has the best performance (roughly 7.5x speedup).
-    '''
-    
-    if "regwvs" not in combdataobj.coords:
-        raise Exception("This data object needs to be interpolated on regular wavelength grid. See dataobj.compute_interpdata_regwvs")
-    if parallel_flag:
-        print('parallel_flag = True : build_cube_v2 parallelization testing. ')
-        if threads is None:
-            threads = os.cpu_count()
-            print('detected {} threads'.format(threads))
-        else:
-            print('specified {} threads'.format(threads))
-
     wv_sampling = combdataobj.wv_sampling
     east2V2_deg = combdataobj.east2V2_deg
     all_interp_ra = combdataobj.dra_as_array
@@ -3924,95 +3739,51 @@ def build_cube_v2(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=No
     flux_cube = np.zeros((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1])) + np.nan
     fluxerr_cube = np.zeros((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1])) + np.nan
 
-    print("create psf model")
-
     # only process frames with wavelength index between debug_init and debug_end
     if debug_init is None:
         debug_init = 0
     if debug_end is None:
         debug_end = np.size(wv_sampling)
-    print('debug range {} {}'.format(debug_init, debug_end))
+    print('debug range: {} {}'.format(debug_init, debug_end))
 
     if N_pix_min is None:
         N_pix_min = (np.pi * aper_radius ** 2 / (0.01) * N_dithers)/4
-
-    ##############
-
-    #step 1 prepare input wavelength ids and PSF interpolator objects
-    
-    inputs = range(debug_init,debug_end)
-
-    def _interp_psf_v2(wv_id):
-        rprint('loading interpolator...  id: {} wave: {}'.format(wv_id,wv_sampling[wv_id]))
         
-        wepsf, wifuX, wifuY = psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :] 
-        wX, wY, wZ = wifuX.ravel(), wifuY.ravel(), wepsf.flatten()
-        wX, wY = rotate_coordinates(wX, wY, -east2V2_deg, flipx=True)
-        wherepsffinite = np.where(np.isfinite(wZ))
-        wX, wY, wZ = wX[wherepsffinite], wY[wherepsffinite], wZ[wherepsffinite]
-        if linear_interp:
-            webbpsf_interp = LinearNDInterpolator((wX, wY), wZ, fill_value=0.0)
-        else:
-            webbpsf_interp = CloughTocher2DInterpolator((wX, wY), wZ, fill_value=0.0)
+    #step 1 prepare list of inputs
+    inputs = []
+    for wv_id, wv in enumerate(wv_sampling):
+        if not (wv_id >= debug_init and wv_id < debug_end):
+            continue
+        rprint("prepping build_cube inputs... id: {} wave: {}".format(wv_id,wv))
+        
+        psf_interp_paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
 
-        return webbpsf_interp
+        X = all_interp_ra[:, wv_id]
+        Y = all_interp_dec[:, wv_id]
+        Z = all_interp_flux[:, wv_id]
+        Zerr = all_interp_err[:, wv_id]
+        Zbp = all_interp_badpix[:, wv_id]
+        
+        inputs.append([X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg,
+                       psf_interp_paras,
+                       wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min])
+    print() 
 
-    from multiprocess import Pool
-
-    #step 2 iterate over input ids and run _build_cube_v2_task()
-
-    def _build_cube_v2_task(inputs):
-        wv_id = inputs 
-
-        psf_interp = _interp_psf_v2(wv_id)
-
-        rprint("computing build_cube_v2... id: {}, wave: {} ".format(wv_id,wv_sampling[wv_id]))
-    
-        outs = [] 
-        for ra_id, ra in enumerate(ra_vec):
-            for dec_id, dec in enumerate(dec_vec):
-    
-                X = all_interp_ra[:, wv_id]
-                Y = all_interp_dec[:, wv_id]
-                Z = all_interp_flux[:, wv_id]
-                Zerr = all_interp_err[:, wv_id]
-                R = np.sqrt((X - ra) ** 2 + (Y - dec) ** 2)
-                Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
-                where_finite = np.where(np.isfinite(all_interp_badpix[:, wv_id]) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
-            
-                if np.size(where_finite[0]) < N_pix_min:
-                    outs.append([ra_id, dec_id, np.nan, np.nan]) #changed from continue
-                else:
-                    X = X[where_finite]
-                    Y = Y[where_finite]
-                    Z = Z[where_finite]
-                
-                    Zerr = Zerr[where_finite]
-                    M = psf_interp(X - ra, Y - dec)
-                
-                    deno = np.nansum(M ** 2 / Zerr ** 2)
-                    mfflux = np.nansum(M * Z / Zerr ** 2) / deno
-                    mffluxerr = 1 / np.sqrt(deno)
-                
-                    res = Z - mfflux * M
-                    noise_factor = np.nanstd(res / Zerr)
-                    outs.append([ra_id, dec_id, mfflux, mffluxerr * noise_factor])
-        return outs
-
-    if parallel_flag:
-        print('starting parallel _build_cube_v2_task...')
-        with Pool(threads) as pool:
-            outputs = pool.map(_build_cube_v2_task,inputs)
+    #step 2 map _build_cube_task over input list 
+    if parallel_flag:        
+        print('starting parallel _build_cube_task...')
+        outputs = mppool.map(_build_cube_task,inputs)
     else:
-        print('starting serial _build_cube_v2_task...')
+        print('starting serial _build_cube_task...')
         outputs = []
         for inp in inputs:
-            outputs.append(_build_cube_v2_task(inp))
-
-    #step 3 iterate over outputs and save values into a cube
+            outputs.append(_build_cube_task(inp))
+    print()
     
-    for j, wv_id in enumerate(inputs):
-        rprint('cubing outputs... id: {} wave: {}'.format(wv_id,wv_sampling[wv_id]))
+    #step 3 iterate over outputs and save values
+    for j, inp in enumerate(inputs):
+        X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inp
+        rprint('cubing outputs... id: {} wave: {}'.format(wv_id,wv))
         outs = outputs[j]
         for o in outs:
             ra_id, dec_id, flux, err = o
@@ -4037,153 +3808,6 @@ def build_cube_v2(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=No
         hdulist.close()
     return flux_cube, fluxerr_cube, ra_grid, dec_grid
 
-
-def build_cube_v3(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
-                    linear_interp=True, parallel_flag=False, threads=None, aper_radius=0.5,
-                    debug_init=None,debug_end=None,N_pix_min=None):
-    '''
-    build_cube_v3 is a modification of build_cube_v2 that only works in the special case where the PSF can be
-    specified on a regular grid. This mean we can build the interpolator object once for all wavelengths instead
-    of for each wavelength slice on its own.
-
-    From testing the median relative difference between extracted spectra is ~3%, but the speedup is around 15x.
-    '''
-    if "regwvs" not in combdataobj.coords:
-        raise Exception("This data object needs to be interpolated on regular wavelength grid. See dataobj.compute_interpdata_regwvs")
-    if parallel_flag:
-        print('parallel_flag = True : build_cube_v3 parallelization testing. ')
-        if threads is None:
-            threads = os.cpu_count()
-            print('detected {} threads'.format(threads))
-        else:
-            print('specified {} threads'.format(threads))
-
-    wv_sampling = combdataobj.wv_sampling
-    east2V2_deg = combdataobj.east2V2_deg
-    all_interp_ra = combdataobj.dra_as_array
-    all_interp_dec = combdataobj.ddec_as_array
-    all_interp_flux = combdataobj.data
-    all_interp_err = combdataobj.noise
-    all_interp_badpix = combdataobj.bad_pixels
-
-    if hasattr(combdataobj,"filelist"):
-        N_dithers = len(combdataobj.filelist)
-    else:
-        N_dithers = 1
-
-    ra_grid, dec_grid = np.meshgrid(ra_vec, dec_vec)
-
-    flux_cube = np.zeros((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1])) + np.nan
-    fluxerr_cube = np.zeros((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1])) + np.nan
-
-    print("create psf model")
-
-    # only process frames with wavelength index between debug_init and debug_end
-    if debug_init is None:
-        debug_init = 0
-    if debug_end is None:
-        debug_end = np.size(wv_sampling)
-    print('debug range {} {}'.format(debug_init, debug_end))
-
-    if N_pix_min is None:
-        N_pix_min = (np.pi * aper_radius ** 2 / (0.01) * N_dithers)/4
-
-    ##############
-
-    #step 1 prepare input wavelength ids and the single PSF interpolator
-    
-    inputs = []
-    for wv_id, wv in enumerate(wv_sampling):
-        for ra_id, ra in enumerate(ra_vec):
-            for dec_id, dec in enumerate(dec_vec):
-                if not (wv_id >= debug_init and wv_id < debug_end):
-                    continue
-                inputs.append([wv_id,wv,ra_id,ra,dec_id,dec])
-
-    from scipy.interpolate import RegularGridInterpolator
-    
-    rgipsf = RegularGridInterpolator((wv_sampling,psfX[0,0,:],psfY[0,:,0]),psfs)
-
-    #step 2 iterate over input ids and run _build_cube_v3_task()
-
-    def _build_cube_v3_task(inputs):
-        
-        wv_id,wv,ra_id,ra,dec_id,dec = inputs 
-        
-        rprint("computing build_cube_v3... inputs : {} ".format(inputs))
-    
-        X = all_interp_ra[:, wv_id]
-        Y = all_interp_dec[:, wv_id]
-        Z = all_interp_flux[:, wv_id]
-        Zerr = all_interp_err[:, wv_id]
-        R = np.sqrt((X - ra) ** 2 + (Y - dec) ** 2)
-        Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
-        where_finite = np.where(np.isfinite(all_interp_badpix[:, wv_id]) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
-    
-        if np.size(where_finite[0]) < N_pix_min:
-            return np.nan, np.nan #changed from continue
-        else:
-            X = X[where_finite]
-            Y = Y[where_finite]
-            Z = Z[where_finite]
-        
-            Zerr = Zerr[where_finite]
-
-            #must rotate coordinates first
-            x = X - ra
-            y = Y - dec
-            # rotate_coordinates(wX, wY, -east2V2_deg, flipx=True) before the webbpsf was rotated like so
-            # we need the opposite rotation somehow ???
-            # rotate_coordinates does flip first and then rotate, so we must derotate and then flip
-            x, y = rotate_coordinates(x,y,east2V2_deg,flipx=False)
-            x = -x
-            M = rgipsf((wv, x, y))
-        
-            deno = np.nansum(M ** 2 / Zerr ** 2)
-            mfflux = np.nansum(M * Z / Zerr ** 2) / deno
-            mffluxerr = 1 / np.sqrt(deno)
-        
-            res = Z - mfflux * M
-            noise_factor = np.nanstd(res / Zerr)
-        return mfflux, mffluxerr * noise_factor
-
-    if parallel_flag:
-        print('starting parallel _build_cube_v3_task...')
-        from multiprocess import Pool
-        with Pool(threads) as pool:
-            outputs = pool.map(_build_cube_v3_task,inputs)
-    else:
-        print('starting serial _build_cube_v3_task...')
-        outputs = []
-        for inp in inputs:
-            outputs.append(_build_cube_v3_task(inp))
-
-    #step 3 iterate over outputs and save values into a cube
-    
-    for j, inp in enumerate(inputs):
-        rprint('cubing outputs... inputs : {}'.format(inp))
-        wv_id,wv,ra_id,ra,dec_id,dec = inp
-        flux, err = outputs[j]
-        flux_cube[wv_id, dec_id, ra_id] = flux
-        fluxerr_cube[wv_id, dec_id, ra_id] = err
-    print()
-
-    if out_filename is not None:
-        if debug_init != 0 or debug_end != np.size(wv_sampling):
-            out_filename = out_filename.replace(".fits","_from{0}to{1}.fits".format(debug_init,debug_end))
-        print("saving",out_filename)
-        hdulist = pyfits.HDUList()
-        hdulist.append(pyfits.PrimaryHDU(data=flux_cube))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_cube, name='FLUXERR_CUBE'))
-        hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
-        hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
-        hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WAVE'))
-        try:
-            hdulist.writeto(out_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(out_filename, clobber=True)
-        hdulist.close()
-    return flux_cube, fluxerr_cube, ra_grid, dec_grid
 
 def cube_matchedfilter(flux_cube,fluxerr_cube,wv_sampling,ra_grid, dec_grid,planet_f, rv=0,out_filename=None,outlier_threshold=None):
     comp_spec = planet_f(wv_sampling * (1 - (rv) / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
