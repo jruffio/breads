@@ -317,4 +317,7 @@ def object_memory_profiler(obj,g            ,level = 0, verbose=True):
             total_bytes += size
         return total_bytes
     else:
-        return sys.getsizeof(obj)
+        if obj.__class__ is type(np.array([])):
+            return obj.nbytes
+        else:
+            return sys.getsizeof(obj)
