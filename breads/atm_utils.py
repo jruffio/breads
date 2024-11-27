@@ -226,9 +226,11 @@ def download_all_models(skip=[], verbose=True, clobber=False):
         silent(download_all_task)(skip,clobber)
 
 def viable_models():
-
-    with h5py.File(database.database, "r") as hdf_file:
-        downloaded_model_keys = list(hdf_file['models'].keys())
+    try:
+        with h5py.File(database.database, "r") as hdf_file:
+            downloaded_model_keys = list(hdf_file['models'].keys())
+    except:
+        downloaded_model_keys = []
     
     dbdict = silent(database.available_models)()
     all_available_keys = list(dbdict.keys())
@@ -348,3 +350,111 @@ def object_memory_profiler(obj,g            ,level = 0, verbose=True):
             return obj.nbytes
         else:
             return sys.getsizeof(obj)
+
+class broadRGI():
+    def __init__(self,model_name,R=2700,preload=False):
+        self.model_name = model_name
+        self.R = R
+
+        self.identity = 'broadRGI_'+model_name+'_R'+str(R)
+        self.savedir = database.data_folder[:-6]+'/broadRGI/'
+        self.filename = self.savedir+self.identity+'.hdf5'
+
+        RM = ReadModel(model=self.model_name)
+        self.points = RM.get_points()
+        self.bounds = RM.get_bounds()
+
+        if not os.path.exists(self.savedir):
+            os.mkdir(self.savedir)
+        if not os.path.exists(self.filename):
+            self.pre_broaden()
+        else:
+            print('already exists, no preperations.')
+
+        with h5py.File(database.database, "r") as hdf_file:
+            model = hdf_file['models'][self.model_name]
+            n_param = model.attrs['n_param']
+            self.param_list = []
+            for n in range(n_param):
+                key = model.attrs['parameter{}'.format(n)]
+                point_vector = np.copy(model[key])
+                self.param_list.append(point_vector)
+        
+        if preload:
+            print('preloading...')
+            self.preload = preload
+            with h5py.File(self.filename,'a') as f:
+                hypercube = np.copy(f['flux'])
+                self.wavelength = np.copy(f['wavelength'])
+            self.miniRGI = RegularGridInterpolator(tuple(self.param_list), hypercube, method='linear', fill_value=np.nan)
+            print('done.')
+
+    def __call__(self,atm_paras):
+        if self.preload:
+            return self.miniRGI(atm_paras)
+        else:
+            slicing, mini_param_list = self.define_subgrid_slice(atm_paras)
+            slice_string = str(slicing)
+            self.load_mini_hypercube(slicing, mini_param_list)
+            return self.miniRGI(atm_paras)
+
+    def define_subgrid_slice(self,atm_paras):
+
+        slicing = []
+        mini_param_list = []
+        for ind,p in enumerate(atm_paras):
+            plist = self.param_list[ind]
+            w1 = np.where(plist<=p)[0][-1]
+            w2 = np.where(plist>=p)[0][0]
+            slicing.append(slice(w1,w2+1))
+            if w2 == w1:
+                mini_param_list.append([self.param_list[ind][w1]])
+            else:
+                mini_param_list.append([self.param_list[ind][w1],self.param_list[ind][w2]])
+        
+        #if self.wavelength_bounds is None:
+        slicing.append(slice(None))
+        #else:
+        #    where_wavelength_bool = np.where(self.wavelength_bool==True)[0]
+        #    slicing.append(slice(where_wavelength_bool[0],where_wavelength_bool[-1]+1))
+        return slicing, mini_param_list
+
+    def load_mini_hypercube(self, slicing, mini_param_list):
+        with h5py.File(self.filename, "r") as hdf_file: 
+            model_hypercube = hdf_file['flux']
+            self.wavelength = np.copy(hdf_file['wavelength'])
+            mini_hypercube = np.copy(model_hypercube[tuple(slicing)])
+        self.miniRGI = RegularGridInterpolator(tuple(mini_param_list), mini_hypercube, method='linear', fill_value=np.nan)
+            
+    def pre_broaden(self):
+        print('loading...')
+        with h5py.File(database.database, "r") as hdf_file:
+            model = hdf_file['models'][self.model_name]    
+            model_hypercube = np.copy(model['flux'])
+            w = np.copy(model['wavelength'])
+
+        parameter_shape = model_hypercube.shape[:-1]
+        n_grid_points = np.prod(parameter_shape)
+        
+        global global_reshaped_cube
+        global_reshaped_cube = model_hypercube.reshape(n_grid_points,-1)
+        
+        broad_cube = np.empty(global_reshaped_cube.shape)
+
+        def _broadening_task(i):
+            rprint('broadening... {}/{} '.format(i+1,n_grid_points))
+            return broaden(w,global_reshaped_cube[i,:],R=self.R)
+
+        from multiprocess import Pool
+        threads = os.cpu_count()
+        with Pool(threads) as pool:
+            outputs = pool.map(_broadening_task,range(n_grid_points))
+        print()
+
+        for i,o in enumerate(outputs):
+            broad_cube[i,:] = o
+        re_reshaped_cube = broad_cube.reshape(parameter_shape+(-1,))
+
+        with h5py.File(self.filename,'a') as f:
+            f['flux'] = re_reshaped_cube
+            f['wavelength'] = w
