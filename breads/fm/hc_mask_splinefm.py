@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import InterpolatedUnivariateSpline
 from astropy import constants as const
-from scipy.optimize.linesearch import line_search_armijo
 from copy import deepcopy
 from breads.utils import get_spline_model
 from copy import copy

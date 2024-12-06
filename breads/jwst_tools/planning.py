@@ -95,7 +95,7 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
                 horizontalalignment='center', verticalalignment='center')
         plt.text(301., -499.7, f"{aplabel} Y axis. ", rotation=slice_V3IdlYAngle-180, fontsize=8, color='green',
                 horizontalalignment='center', verticalalignment='center')
-        plt.text(301.2, -496.9, "Top of NRS detectosr", rotation=slice_V3IdlYAngle-90, fontsize=8, color='green',
+        plt.text(301.2, -496.9, "Top of NRS detectors", rotation=slice_V3IdlYAngle-90, fontsize=8, color='green',
                 horizontalalignment='center', verticalalignment='center')
 
     else:

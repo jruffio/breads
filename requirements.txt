@@ -7,3 +7,4 @@ py
 scipy
 emcee
 PyAstronomy
+pandas

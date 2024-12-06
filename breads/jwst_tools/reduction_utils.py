@@ -8,8 +8,6 @@ import numpy as np
 from scipy.stats import median_abs_deviation
 from astropy.io import fits
 
-import jwst
-from jwst.pipeline import Detector1Pipeline, Spec2Pipeline
 
 import multiprocessing as mp
 import matplotlib.pyplot as plt
@@ -66,6 +64,7 @@ def run_stage1(uncal_files, output_dir, overwrite=False,maximum_cores="all"):
 
     Currently only tested on NIRSpec IFU data
     """
+    from jwst.pipeline import Detector1Pipeline
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -125,6 +124,8 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
     Currently only tested on NIRSpec IFU data
 
     """
+    from jwst.pipeline import Spec2Pipeline
+
 
 
     # We need to check that the desired output directories exist, and if not create them
