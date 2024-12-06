@@ -236,7 +236,7 @@ def mask_bleeding(data, threshold=1.05, per=[5, 95], mask_region = (5, 6, 2), ed
                 #     plt.plot(data.data[:,i,j] * data.bad_pixels[:,i,j])
                 #     plt.show()
                 data.bad_pixels[:, i, j] = np.nan
-            if high_end / np.nanmedian(data_f) > threshold:  
+            if high_end / np.nanmedian(data_f) > threshold:
                 data.bad_pixels[:, i, j] = np.nan
             # else:
             #     if not all(np.isnan(data.data[:,i,j] * data.bad_pixels[:,i,j])):
@@ -256,7 +256,7 @@ def mask_bleeding(data, threshold=1.05, per=[5, 95], mask_region = (5, 6, 2), ed
             #         left, right = np.where(~outliers)[0][0], np.where(~outliers)[0][-1]
             #         data_f = data_f[~np.isnan(data_f)]
             #         if np.nanmean(data_f[:6]) > np.nanmean(data_f[-6:]):
-            #             data.bad_pixels[:left, i, j] = np.nan 
+            #             data.bad_pixels[:left, i, j] = np.nan
             #         else:
             #             data.bad_pixels[right+1:, i, j] = np.nan
             #     plt.plot(data.continuum[:, i, j] * data.bad_pixels[:,i,j])
@@ -433,8 +433,8 @@ def clean_nans(arr, set_to="median", allowed_range=None, continuum=None):
         min_v, max_v = allowed_range
         arr[arr > max_v] = set_to
         arr[arr < min_v] = set_to
-    
-        
+
+
 
 def _task_broaden(paras):
     """
@@ -580,45 +580,45 @@ def broaden_kernel(wvs,spectrum,kernel):
     return conv_spectrum
 
 def open_psg_allmol(filename,l0,l1):
-	"""
-	Open psg model for all molecules
-	returns wavelength, h2o, co2, ch4, co for l0-l1 range specified
+    """
+    Open psg model for all molecules
+    returns wavelength, h2o, co2, ch4, co for l0-l1 range specified
 
-	no o3 here .. make this more flexible
-	--------
-	"""
+
+    no o3 here .. make this more flexible
+    --------
+    """
     f = fits.getdata(filename)
 
+    x = f['Wave/freq']
 
-	x = f['Wave/freq']
+    h2o = f['H2O']
+    co2 = f['CO2']
+    ch4 = f['CH4']
+    co  = f['CO']
+    o3  = f['O3'] # O3 messes up in PSG at lam<550nm and high resolution bc computationally expensive, so don't use it if l1<550
+    n2o = f['N2O']
+    o2  = f['O2']
+    # also dont use rayleigh scattering, it fails at NIR wavelengths. absorbs into a continuum fit anyhow
 
-	h2o = f['H2O']
-	co2 = f['CO2']
-	ch4 = f['CH4']
-	co  = f['CO']
-	o3  = f['O3'] # O3 messes up in PSG at lam<550nm and high resolution bc computationally expensive, so don't use it if l1<550
-	n2o = f['N2O']
-	o2  = f['O2']
-	# also dont use rayleigh scattering, it fails at NIR wavelengths. absorbs into a continuum fit anyhow
+    idelete = np.where(np.diff(x) < .0001)[0]  # delete non unique points - though I fixed it in code but seems to pop up still at very high resolutions
+    x, h2o, co2, ch4, co, o3, n2o, o2= np.delete(x,idelete),np.delete(h2o,idelete), np.delete(co2,idelete),np.delete(ch4,idelete),np.delete(co,idelete),np.delete(o3,idelete),np.delete(n2o,idelete),np.delete(o2,idelete)
 
-	idelete = np.where(np.diff(x) < .0001)[0]  # delete non unique points - though I fixed it in code but seems to pop up still at very high resolutions
-	x, h2o, co2, ch4, co, o3, n2o, o2= np.delete(x,idelete),np.delete(h2o,idelete), np.delete(co2,idelete),np.delete(ch4,idelete),np.delete(co,idelete),np.delete(o3,idelete),np.delete(n2o,idelete),np.delete(o2,idelete)
-
-	isub = np.where((x > l0) & (x < l1))[0]
-	return x[isub], (h2o[isub], co2[isub], ch4[isub], co[isub], o3[isub], n2o[isub], o2[isub])
+    isub = np.where((x > l0) & (x < l1))[0]
+    return x[isub], (h2o[isub], co2[isub], ch4[isub], co[isub], o3[isub], n2o[isub], o2[isub])
 
 
 def scale_psg(psg_tuple, airmass, pwv):
-	"""
-	psg_tuple : (tuple) of loaded psg spectral components from "open_psg_allmol" fxn
-	airmass: (float) airmass of final spectrum applied to all molecules spectra
-	pwv: (float) extra scaling for h2o spectrum to account for changes in the precipitable water vapor
-	"""
-	h2o, co2, ch4, co, o3, n2o, o2 = psg_tuple
+    """
+    psg_tuple : (tuple) of loaded psg spectral components from "open_psg_allmol" fxn
+    airmass: (float) airmass of final spectrum applied to all molecules spectra
+    pwv: (float) extra scaling for h2o spectrum to account for changes in the precipitable water vapor
+    """
+    h2o, co2, ch4, co, o3, n2o, o2 = psg_tuple
 
-	model = h2o**(airmass + pwv) * (co2 * ch4 * co * o3 * n2o * o2)**airmass # do the scalings
+    model = h2o**(airmass + pwv) * (co2 * ch4 * co * o3 * n2o * o2)**airmass # do the scalings
 
-	return model
+    return model
 
 
 def rotate_coordinates(x, y, angle, flipx=False):
