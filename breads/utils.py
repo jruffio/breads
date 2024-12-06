@@ -18,6 +18,20 @@ from scipy.stats import median_abs_deviation
 
 
 def filter_spec_with_spline(wvs, spec,specerr=None,x_nodes=None,M_spline=None):
+    """
+
+    Parameters
+    ----------
+    wvs
+    spec
+    specerr
+    x_nodes
+    m_spline
+
+    Returns
+    -------
+
+    """
     if specerr is None:
         specerr = np.ones(spec.shape)
 
@@ -42,17 +56,22 @@ def filter_spec_with_spline(wvs, spec,specerr=None,x_nodes=None,M_spline=None):
     return HPF_spec,LPF_spec
 
 def find_closest_leftnright_elements(v1, v2):
-    """
-    Find the closest elements in v1 to the left and right of each element in v2.
+    """ Find the closest elements in v1 to the left and right of each element in v2.
     (By chatgpt)
 
-    Parameters:
-    v1 (np.ndarray): The array to search within (may contain NaNs).
-    v2 (np.ndarray): The array with values to find bounds for (may contain NaNs).
+    Parameters
+    ----------
+    v1 : np.ndarray
+        The array to search within (may contain NaNs).
+    v2 : np.ndarray
+        The array with values to find bounds for (may contain NaNs).
 
-    Returns:
-    v_left (np.ndarray): Closest elements in v1 to the left of each element in v2.
-    v_right (np.ndarray): Closest elements in v1 to the right of each element in v2.
+    Returns
+    -------
+    v_left : np.ndarray
+        Closest elements in v1 to the left of each element in v2.
+    v_right: np.ndarray
+        Closest elements in v1 to the right of each element in v2.
     """
 
     # Remove NaNs from v1 and get corresponding indices
@@ -83,15 +102,16 @@ def find_closest_leftnright_elements(v1, v2):
 
     return v_left, v_right
 
-def get_err_from_posterior(x,posterior):
-    """
-    Return the mode, and the left and right errors of a distribution. The errors are defined with a 68% confidence level.
+def get_err_from_posterior(x, posterior):
+    """ Return the mode, and the left and right errors of a distribution. The errors are defined with a 68% confidence level.
 
-    Args:
-        x: Sampling of the 1D posterior
-        posterior: Posterior array
+    Parameters
+    ----------
+    x : Sampling of the 1D posterior
+    posterior : Posterior array
 
-    Returns:
+    Returns
+    -------
         Mode, left error, right error
 
     """
@@ -133,6 +153,17 @@ def get_err_from_posterior(x,posterior):
     return x[argmax_post],x[argmax_post]-lx,rx-x[argmax_post]
 
 def _task_findbadpix(paras):
+    """
+
+    Parameters
+    ----------
+    paras
+
+    Returns
+    -------
+
+    """
+
     data_arr,noise_arr,badpix_arr,med_spec,M_spline,threshold = paras
     new_data_arr = np.array(copy(data_arr), '<f4')#.byteswap().newbyteorder()
     new_badpix_arr = copy(badpix_arr)
@@ -187,6 +218,17 @@ def _task_findbadpix(paras):
     return new_data_arr,new_badpix_arr,res
 
 def _remove_edges(paras):
+    """
+
+    Parameters
+    ----------
+    paras
+
+    Returns
+    -------
+
+    """
+
     slices,nan_mask_boxsize = paras
     cp_slices = copy(slices)
     if nan_mask_boxsize != 0:
@@ -200,6 +242,20 @@ def _remove_edges(paras):
     return cp_slices
 
 def corrected_wavelengths(data, off0, off1, center_data):
+    """
+
+    Parameters
+    ----------
+    data
+    off0
+    off1
+    center_data
+
+    Returns
+    -------
+
+    """
+
     wavs = data.read_wavelengths.astype(float) * u.micron
     if center_data:
         wavs = wavs + (wavs - np.mean(wavs)) * off1 + off0 * u.angstrom
@@ -208,6 +264,21 @@ def corrected_wavelengths(data, off0, off1, center_data):
     return wavs
 
 def mask_bleeding(data, threshold=1.05, per=[5, 95], mask_region = (5, 6, 2), edge=5):
+    """
+
+    Parameters
+    ----------
+    data
+    threshold
+    per
+    mask_region
+    edge
+
+    Returns
+    -------
+
+    """
+
     nz, ny, nx = data.data.shape
     width_mask_y, region_mask_x_left, region_mask_x_right = mask_region
     img_mean = np.nanmedian(data.data, axis=0)
@@ -272,6 +343,24 @@ def mask_bleeding(data, threshold=1.05, per=[5, 95], mask_region = (5, 6, 2), ed
     # exit()
 
 def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_spec=None,nan_mask_boxsize=3,threshold=3):
+    """
+
+    Parameters
+    ----------
+    cube
+    noisecube
+    badpixcube
+    chunks
+    mypool
+    med_spec
+    nan_mask_boxsize
+    threshold
+
+    Returns
+    -------
+
+    """
+
     if noisecube is None:
         noisecube = np.ones(cube.shape)
     if badpixcube is None:
@@ -412,6 +501,19 @@ def broaden(wvs,spectrum,R,mppool=None,kernel=None):
         return conv_spectrum
 
 def clean_nans(arr, set_to="median", allowed_range=None, continuum=None):
+    """
+
+    Parameters
+    ----------
+    arr
+    set_to
+    allowed_range
+    continuum
+
+    Returns
+    -------
+
+    """
     if set_to == "continuum":
         cont = np.ravel(continuum)
         shape = arr.shape
@@ -437,8 +539,7 @@ def clean_nans(arr, set_to="median", allowed_range=None, continuum=None):
 
 
 def _task_broaden(paras):
-    """
-    Perform the spectrum broadening for broaden().
+    """ Perform the spectrum broadening for broaden().
     """
     indices, wvs, spectrum, R,kernel = paras
 
@@ -470,11 +571,30 @@ def _task_broaden(paras):
     return conv_spectrum
 
 def file_directory(file):
+    """
+
+    Parameters
+    ----------
+    file
+
+    Returns
+    -------
+
+    """
+
     return os.path.dirname(local(file))
 
-def LPFvsHPF(myvec,cutoff):
-    """
-    Ask JB to write documentation!
+def LPFvsHPF(myvec, cutoff):
+    """ Ask JB to write documentation!
+
+    Parameters
+    ----------
+    myvec
+    cutoff
+
+    Returns
+    -------
+
     """
     myvec_cp = copy(myvec)
     #handling nans:
@@ -505,18 +625,31 @@ def LPFvsHPF(myvec,cutoff):
     return LPF_myvec,HPF_myvec
 
 def gaussian2D(nx, ny, mu_x, mu_y, sig_x, sig_y, A):
+    """ Two Dimensional Gaussian for getting PSF for different wavelength slices
+
+    Parameters
+    ----------
+    nx
+    ny
+    mu_x
+    mu_y
+    sig_x
+    sig_y
+    a
+
+    Returns
+    -------
+
     """
-    Two Dimensional Gaussian for getting PSF for different wavelength slices
-    """
+
     x_vals, y_vals = np.meshgrid(np.arange(nx), np.arange(ny), indexing='ij')
     gauss = A * np.exp(-((x_vals - mu_x) ** 2) / (2 * sig_x * sig_x)) * \
         np.exp(-((y_vals - mu_y) ** 2) / (2 * sig_y * sig_y))
     return gauss
 
 def get_spline_model(x_knots, x_samples, spline_degree=3):
-    """
-    Compute a spline based linear model.
-    If Y=[y1,y2,..] are the values of the function at the location of the node [x1,x2,...].
+    """ Compute a spline based linear model.
+    If Y = [y1, y2, ...] are the values of the function at the location of the node [x1,x2,...].
     np.dot(M,Y) is the interpolated spline corresponding to the sampling of the x-axis (x_samples)
 
 
@@ -556,8 +689,7 @@ def get_spline_model(x_knots, x_samples, spline_degree=3):
     return np.concatenate(M_list, axis=1)
 
 def broaden_kernel(wvs,spectrum,kernel):
-    """
-    Broaden a spectrum to instrument resolution assuming a custom kernel.
+    """ Broaden a spectrum to instrument resolution assuming a custom kernel.
 
     Args:
         wvs: Wavelength vector (ndarray).
@@ -580,8 +712,7 @@ def broaden_kernel(wvs,spectrum,kernel):
     return conv_spectrum
 
 def open_psg_allmol(filename,l0,l1):
-    """
-    Open psg model for all molecules
+    """ Open psg model for all molecules
     returns wavelength, h2o, co2, ch4, co for l0-l1 range specified
 
 
@@ -610,6 +741,9 @@ def open_psg_allmol(filename,l0,l1):
 
 def scale_psg(psg_tuple, airmass, pwv):
     """
+
+    Parameters
+    ----------
     psg_tuple : (tuple) of loaded psg spectral components from "open_psg_allmol" fxn
     airmass: (float) airmass of final spectrum applied to all molecules spectra
     pwv: (float) extra scaling for h2o spectrum to account for changes in the precipitable water vapor
@@ -622,6 +756,19 @@ def scale_psg(psg_tuple, airmass, pwv):
 
 
 def rotate_coordinates(x, y, angle, flipx=False):
+    """
+
+    Parameters
+    ----------
+    x
+    y
+    angle
+    flipx
+
+    Returns
+    -------
+
+    """
     x_shape = np.array(x).shape
     if flipx:
         _x,_y = -np.array(x).ravel(),np.array(y).ravel()
@@ -650,6 +797,20 @@ def propagate_coordinates_at_epoch(targetname, date, verbose=True):
 
     Retrieves the SIMBAD coordinates, applies proper motion, returns the result as an
     astropy coordinates object
+
+    Parameters
+    ----------
+    targetname : str
+        Target name, resolvable by SIMBAD
+    date : str, or astropy.time.Time
+        Epoch of observation, in a format understandable by astropy.time.Time, e.g. "YYYY-MM-DD"
+    verbose : bool
+        Print more verbose text output?
+
+    Returns
+    -------
+    an astropy.coordinates.SkyCoord for the computed position
+
     """
 
     # Configure Simbad query to retrieve some extra fields
@@ -698,6 +859,27 @@ def companion_relative_to_absolute_position(star_name, comp_name, comp_sep, comp
     - Propagates to the desired date
     - Performs coordinate offset to the companion location
     - Prints out the results, in format suitable to enter into APT
+
+
+    Parameters
+    ----------
+    star_name : str
+        Star name, resolvable by SIMBAD
+    comp_name : str
+        Companion name, for display
+    comp_sep : astropy.units.Quantity
+        Separation of the companion relative to the host, for instance in arcseconds
+    comp_pa : astropy.units.Quantity
+        Position angle of the companion relative to North, for instance in degrees east of north
+    obs_date : str or astropy.time.Time
+        Observation epoch, in a format understandable by astropy.time
+    verbose : bool
+        Be more verbose in output?
+
+    Returns
+    -------
+    planet_coord : astropy.coordinates.SkyCoord
+        Computed absolute ICRS coordinates of the companion at the specified epoch
     """
 
     if verbose:
