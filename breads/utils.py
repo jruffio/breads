@@ -1,23 +1,20 @@
-import numpy as np
+import itertools
 import os
 from copy import copy
-from astropy.time import Time
+
+import astropy.coordinates
+import astropy.io.fits as fits
 import astropy.units as u
-from astropy.coordinates import SkyCoord, EarthLocation
-from scipy.interpolate import InterpolatedUnivariateSpline
-import multiprocessing as mp
+import numpy as np
 import pandas as pd
-import itertools
+from astropy.time import Time
+from astroquery.simbad import Simbad
 from py.path import local
-from scipy.stats import median_abs_deviation
+from scipy.interpolate import InterpolatedUnivariateSpline
+from scipy.interpolate import interp1d
 from scipy.optimize import lsq_linear
 from scipy.signal import correlate2d
-from  scipy.interpolate import interp1d
-from matplotlib import pyplot as plt
-import astropy.io.fits as pyfits, astropy.units as u
-import astropy.coordinates
-
-from astroquery.simbad import Simbad
+from scipy.stats import median_abs_deviation
 
 
 def filter_spec_with_spline(wvs, spec,specerr=None,x_nodes=None,M_spline=None):
@@ -591,7 +588,8 @@ def open_psg_allmol(filename,l0,l1):
 	no o3 here .. make this more flexible
 	--------
 	"""
-	f = pyfits.getdata(filename)
+    f = fits.getdata(filename)
+
 
 	x = f['Wave/freq']
 
