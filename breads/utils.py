@@ -207,7 +207,7 @@ def corrected_wavelengths(data, off0, off1, center_data):
         wavs = wavs * (1 + off1) + off0 * u.angstrom
     return wavs
 
-def mask_bleeding(data, threshold=1.05, mask=0.9, per=[5, 95], mask_region = (5, 6, 2), edge=5):
+def mask_bleeding(data, threshold=1.05, per=[5, 95], mask_region = (5, 6, 2), edge=5):
     nz, ny, nx = data.data.shape
     width_mask_y, region_mask_x_left, region_mask_x_right = mask_region
     img_mean = np.nanmedian(data.data, axis=0)
@@ -225,7 +225,6 @@ def mask_bleeding(data, threshold=1.05, mask=0.9, per=[5, 95], mask_region = (5,
             num_mask[i, j] = sum(np.isnan(data.bad_pixels[:, i, j]))
             data_f = data.continuum[:, i, j] * data.bad_pixels[:,i,j]
             data_f_nonans = data_f[~np.isnan(data_f)]
-            percentiles = np.nanpercentile(data_f, per)
             high_end = np.nanmax([np.nanmean(data_f_nonans[:edge]), np.nanmean(data_f_nonans[-edge:])])
             # print(percentiles)
             if sum(~np.isnan(data.data[:,i,j] * data.bad_pixels[:,i,j])) < nz / 5:
