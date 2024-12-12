@@ -16,8 +16,8 @@ from astropy import units as u
 from astropy.stats import sigma_clip
 from scipy.interpolate import CloughTocher2DInterpolator, LinearNDInterpolator
 from scipy.interpolate import interp1d, splev, splrep
-from scipy.ndimage import generic_filter, median_filter, lsq_linear
-from scipy.optimize import minimize, curve_fit
+from scipy.ndimage import generic_filter, median_filter
+from scipy.optimize import minimize, curve_fit, lsq_linear
 from scipy.signal import convolve2d
 from scipy.stats import median_abs_deviation
 
