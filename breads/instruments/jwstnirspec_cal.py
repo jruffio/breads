@@ -1,5 +1,6 @@
 import itertools
 import os.path
+import sys
 from copy import copy, deepcopy
 from glob import glob
 from warnings import warn
@@ -15,8 +16,8 @@ from astropy import units as u
 from astropy.stats import sigma_clip
 from scipy.interpolate import CloughTocher2DInterpolator, LinearNDInterpolator
 from scipy.interpolate import interp1d, splev, splrep
-from scipy.ndimage import generic_filter, median_filter, curve_fit, lsq_linear
-from scipy.optimize import minimize
+from scipy.ndimage import generic_filter, median_filter, lsq_linear
+from scipy.optimize import minimize, curve_fit
 from scipy.signal import convolve2d
 from scipy.stats import median_abs_deviation
 
@@ -24,6 +25,7 @@ import breads.utils as utils
 from breads.instruments.instrument import Instrument
 from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_elements
 from breads.utils import get_spline_model
+
 
 class JWSTNirspec_cal(Instrument):
     def __init__(self, filename=None, crds_dir=None, utils_dir=None, save_utils=True,
@@ -1918,6 +1920,7 @@ def _get_wpsf_task(paras):
     smoothed_im = convolve2d(webbpsfim, kernel, mode='same') / wpsf_oversample ** 2
     return webbpsfim, smoothed_im
 
+
 def untangle_dq(arr, verbose=True):
     """Reshape and unpack Data Quality array from ints using a bitmask to a datacube of individual bits
 
@@ -2014,8 +2017,6 @@ def set_nans(arr, n):
 
 
 def crop_trace_edges(im, N_pix,trace_id_map=None):
-
-
     if trace_id_map is None:
         trace_id_map = np.zeros(im.shape)
     im_out = np.zeros(im.shape) + np.nan
@@ -2032,6 +2033,7 @@ def crop_trace_edges(im, N_pix,trace_id_map=None):
         im_out[row_id_min:row_id_max, :][where_finite_in_slice] = new_slice[where_finite_in_slice]
 
     return im_out
+
 
 def _task_normrows(paras):
     im_rows, im_wvs_rows, noise_rows, badpix_rows, x_nodes, star_model, threshold, star_sub_mode,regularization,reg_mean_map,reg_std_map = paras
@@ -2312,8 +2314,6 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
             new_spline_paras[row_indices, :] = spline_paras
 
     return new_image, new_noise, new_badpixs, new_res,new_spline_paras
-    #
-    # return bestfit_paras, psfsub_model_im, psfsub_sc_im
 
 
 def _task_normslice_2dspline(paras):
@@ -2829,6 +2829,7 @@ def combine_spectrum(wavelengths, fluxes, errors, bin_size):
 
     return new_wavelengths, combined_fluxes, combined_errors
 
+
 def combine_spectrum_1dspline(wavelengths, fluxes, errors, bin_size,oversampling=10):
     new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(wavelengths, fluxes, errors, bin_size)
     star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
@@ -2856,23 +2857,6 @@ def combine_spectrum_1dspline(wavelengths, fluxes, errors, bin_size,oversampling
 
     hd_wvs = np.arange(new_wavelengths[0],new_wavelengths[-1], bin_size / oversampling)
     return hd_wvs, splev(hd_wvs, spl),err_func(hd_wvs),spl
-    # return spl
-
-# def find_bleeding_bar(ra_arr, dec_arr, threshold2mask=0.15):
-#
-#     plt.scatter(ra_arr, dec_arr)
-#
-#     nx = ra_arr.shape[1]
-#     dist2host_as_col = np.sqrt((ra_arr[:, nx // 2]) ** 2 + (dec_arr[:, nx // 2]) ** 2)
-#     k = np.nanargmin(dist2host_as_col)
-#     x, y = ra_arr[k - 10:k + 10, nx // 2], dec_arr[k - 10:k + 10, nx // 2]
-#     where_finite = np.where(np.isfinite(x) * np.isfinite(y))
-#     bleeding_slope = np.polyfit(x[where_finite], y[where_finite], 1)[0]
-#     # Calculate the distances of each point to the line
-#     distances2bleeding = np.abs(dec_arr - bleeding_slope * ra_arr) / np.sqrt(1 + bleeding_slope ** 2)
-#     # Find the indices of the points within the threshold distance
-#     return np.where(distances2bleeding < threshold2mask)
-
 
 
 # Define the function to fit
@@ -3174,7 +3158,6 @@ def _interp_psf(paras):
         webbpsf_interp = CloughTocher2DInterpolator((wX, wY), wZ, fill_value=0.0)
 
     return webbpsf_interp
-
 
 
 def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, mppool=None,
@@ -3578,10 +3561,11 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
         hdulist.close()
     return snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
 
-import sys
+
 def rprint(string):
     sys.stdout.write('\r'+str(string))
     sys.stdout.flush()
+
 
 def _build_cube_task(inputs):
     X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inputs
@@ -3616,6 +3600,7 @@ def _build_cube_task(inputs):
                 noise_factor = np.nanstd(res / Zerr_fin)
                 outs.append([ra_id, dec_id, mfflux, mffluxerr * noise_factor])
     return outs
+
 
 def build_cube(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
                     linear_interp=True, mppool=None, aper_radius=0.5,
@@ -3838,8 +3823,4 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=
                 hdulist.writeto(out_filename, clobber=True)
             hdulist.close()
     return new_wavelengths, combined_fluxes, combined_errors
-        #
-        # plt.scatter(dataobj.wavelengths.flatten(), normalized_im.flatten())
-        # plt.ylim([0, 2])
-        # plt.show()
 
