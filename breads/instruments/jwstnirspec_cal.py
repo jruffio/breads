@@ -2379,7 +2379,7 @@ def PCA_wvs_axis(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
                                tot_basis - 1)  # clip values, for output consistency we'll keep duplicates
     max_basis = np.max(
         tmp_res_numbasis) + 1  # maximum number of eigenvectors/KL basis we actually need to use/calculate
-    evals, evecs = la.eigh(C, eigvals=(tot_basis - max_basis, tot_basis - 1))
+    evals, evecs = la.eigh(C, subset_by_index=[tot_basis - max_basis, tot_basis - 1])
     evals = np.copy(evals[::-1])
     evecs = np.copy(evecs[:, ::-1], order='F')  # fortran order to improve memory caching in matrix multiplication
     # calculate the KL basis vectors
