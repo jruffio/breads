@@ -93,13 +93,9 @@ class JWSTNirspec_cal(Instrument):
         #high level decision flag
         self.opmode = self.priheader["OPMODE"].strip() #"FIXEDSLIT" or "IFU"
         self.data = hdulist_sc["SCI"].data
-        if 0:
-            # 20240125 Currently a problem with noise propagation in the JWST pipeline from the flats onto the science data
-            self.noise = hdulist_sc["ERR"].data
-        else:
-            rnoise_var = hdulist_sc["VAR_RNOISE"].data
-            pnoise_var = hdulist_sc["VAR_POISSON"].data
-            self.noise = np.sqrt(rnoise_var+pnoise_var)
+        rnoise_var = hdulist_sc["VAR_RNOISE"].data
+        pnoise_var = hdulist_sc["VAR_POISSON"].data
+        self.noise = np.sqrt(rnoise_var+pnoise_var)
         dq = hdulist_sc["DQ"].data
         self.wavelengths = hdulist_sc["WAVELENGTH"].data
         if wv_ref is not None:
@@ -211,7 +207,7 @@ class JWSTNirspec_cal(Instrument):
         self.valid_data_check()
         return
 
-    def compute_med_filt_badpix(self, save_utils=False, window_size=50,mad_threshold=50,crop_Npix_from_trace_edges=0):
+    def compute_med_filt_badpix(self, save_utils=False, window_size=50, mad_threshold=50, crop_Npix_from_trace_edges=0):
         """ Quick bad pixel identification.
         The data is first high-pass filtered row by row with a median filter with a window size of 50 (window_size)
         pixels. The median absolute deviation (MAP) is then calculated row by row, and any pixel deviating by more than
@@ -443,6 +439,7 @@ class JWSTNirspec_cal(Instrument):
         else:
             self.coords = "ifu"
         return ifuX, ifuY
+
     def set_coords2sky(self):
         dra_as_array, ddec_as_array = self.getskycoords()
         self.dra_as_array, self.ddec_as_array = dra_as_array, ddec_as_array
@@ -1627,6 +1624,7 @@ class JWSTNirspec_cal(Instrument):
         mask = dist_to_bin_edges>dwv_threshold
         self.bad_pixels[np.where(mask)] = np.nan
         return mask
+
     def getifucoords(self, ras=None, decs=None):
         """ Get IFU coordinates
 
@@ -1678,20 +1676,22 @@ class JWSTNirspec_cal(Instrument):
         LSF is assumed to be a 1D gaussian.
         The broadening is technically fiber dependent so you need to specify which fiber calibration to use.
 
-        Args:
-            wvs: Wavelength sampling of the spectrum to be broadened.
-            spectrum: 1D spectrum to be broadened.
-            loc: To be ignored. Could be used in the future to specify (x,y) position if field dependent resolution is
-                available.
-            mypool: Multiprocessing pool to parallelize the code. If None (default), non parallelization is applied.
-                E.g. mppool = mp.Pool(processes=10) # 10 is the number processes
+        Parameters
+        ----------
+        wvs : ndarray
+            Wavelength sampling of the spectrum to be broadened.
+        spectrum : ndarray
+            1D spectrum to be broadened.
+        loc : None
+            To be ignored. Could be used in the future to specify (x,y) position if field dependent resolution is
+            available.
+        mppool : multiprocessing Pool
+            Multiprocessing pool to parallelize the code. If None (default), no parallelization is applied.
+            E.g. mppool = mp.Pool(processes=10) # 10 is the number processes
 
         Return:
             Broadened spectrum
 
-        Parameters
-        ----------
-        mppool
         """
         return broaden(wvs, spectrum, self.R, mppool=mppool)
 
@@ -1822,7 +1822,7 @@ def crop_trace_edges(im, N_pix,trace_id_map=None):
     return im_out
 
 
-def _task_normrows(paras):
+def _task_normrows(paras, plot=False):
     im_rows, im_wvs_rows, noise_rows, badpix_rows, x_nodes, star_model, threshold, star_sub_mode,regularization,reg_mean_map,reg_std_map = paras
 
     new_im_rows = np.array(copy(im_rows), '<f4')  # .byteswap().newbyteorder()
@@ -1880,31 +1880,17 @@ def _task_normrows(paras):
         norm_res_row = np.zeros(im_rows.shape[1]) + np.nan
         norm_res_row[where_data_finite] = (d - m) / d_err
 
-        # where_bad = np.where((np.abs(res[:,k])>3*np.nanstd(res[:,k])) | np.isnan(res[:,k]))
-        # meddev=median_abs_deviation(res[k,where_data_finite[0]])
-        # where_bad = np.where((np.abs(res[k,:])>threshold*meddev) | np.isnan(res[k,:]))
         meddev = median_abs_deviation(norm_res_row[where_data_finite])
         where_bad = np.where((np.abs(norm_res_row) / meddev > threshold) | np.isnan(norm_res_row))
         new_badpix_rows[k, where_bad[0]] = np.nan
-        # where_bad = np.where(np.isnan(np.correlate(new_badpix_rows[k,:] ,np.ones(2),mode="same")))
-        # new_badpix_rows[k,where_bad[0]] = np.nan
-        # new_badpix_rows[k,np.where(np.isnan(new_badpix_rows[k,:]))[0]] = 1
 
-        if 0:
-            # plt.figure(2)
-            # plt.plot(new_im_rows[k,:],label="d")
-            # # plt.plot(new_noise_rows[k,:],label="n")
-            # plt.legend()
-
+        if plot:
             plt.figure(1)
             plt.subplot(3, 1, 1)
             plt.plot(d, label="d")
-            # m0 = med_spec[where_data_finite[0],None]
-            # plt.plot(m0/np.nansum(m0)*np.nansum(d),label="m0")
             plt.plot(m, label="m")
             plt.plot(d_err, label="err")
             plt.plot(d - m, label="res")
-            # plt.plot(d / d * threshold * meddev, label="threshold")
             plt.legend()
 
             plt.subplot(3, 1, 2)
@@ -2548,14 +2534,12 @@ def filter_big_triangles(X,Y, max_edge_length):
     return filtered_triangles
 
 
-def _fit_wpsf_task(paras):
+def _fit_wpsf_task(paras, plot=False):
     if len(paras) == 16:
         linear_interp, wepsf, wifuX, wifuY, east2V2_deg,flipx, _X, _Y, _Z, _Zerr, _Zbad, IWA, OWA, fit_cen, fit_angle, init_paras = paras
         ann_width, padding, sector_area = None, 0.0, None
     else:
         linear_interp, wepsf, wifuX, wifuY, east2V2_deg,flipx, _X, _Y, _Z, _Zerr, _Zbad, IWA, OWA, fit_cen, fit_angle, init_paras, ann_width, padding, sector_area = paras
-    # R = np.sqrt((X)**2+ (Y)**2)
-    # Xrav, Yrav, Zrav, Zerrrav, Zbadrav = _X.ravel(), _Y.ravel(), _Z.ravel(), _Zerr.ravel(), _Zbad.ravel()
     _R = np.sqrt((_X - init_paras[0]) ** 2 + (_Y - init_paras[1]) ** 2)
     _PA = np.arctan2(_X- init_paras[0], _Y- init_paras[1]) % (2 * np.pi)
 
@@ -2611,44 +2595,23 @@ def _fit_wpsf_task(paras):
         if np.size(where_fit[0])<1:
             continue
         X, Y, Z, Zerr, Zbad = _X[where_fit], _Y[where_fit], _Z[where_fit], _Zerr[where_fit], _Zbad[where_fit]
-        # Zerr = Z/10.
         where_sc = np.where(sc_sector)
         if np.size(where_sc[0])<1:
             continue
-        # Xsc, Ysc, Zsc, Zerrsc, Zbadsc = _X[where_sc], _Y[where_sc], _Z[where_sc], _Zerr[where_sc], _Zbad[where_sc]
         Xsc, Ysc = _X[where_sc], _Y[where_sc]
 
         where_wepsf_finite = np.where(np.isfinite(wepsf)*np.isfinite(wifuX)*np.isfinite(wifuY))
-        # print(np.size(where_wepsf_finite[0]))
         if np.size(where_wepsf_finite[0])<3:
             continue
         wX, wY, wZ = wifuX[where_wepsf_finite], wifuY[where_wepsf_finite], wepsf[where_wepsf_finite]
         wX, wY = rotate_coordinates(wX, wY, -east2V2_deg, flipx=flipx)
 
-        # plt.scatter(wX, wY,s=100*wZ/np.nanmax(wZ))
-        # plt.show()
-
-        # if linear_interp:
-        #     filtered_triangles = filter_big_triangles(wX, wY,0.2)
-        #     # Create filtered triangulation
-        #     filtered_tri = tri.Triangulation(wX, wY, triangles=filtered_triangles)
-        #
-        #     # Perform LinearTriInterpolator for filtered triangulation
-        #     webbpsf_interp = tri.LinearTriInterpolator(filtered_tri, wZ)
-        #
-        #     # webbpsf_interp = LinearNDInterpolator(filtered_tri.points, wZ, fill_value=0.0)
-        # else:
-        #     webbpsf_interp = CloughTocher2DInterpolator(filtered_tri.points, wZ, fill_value=0.0)
         if linear_interp:
             webbpsf_interp = LinearNDInterpolator((wX, wY), wZ, fill_value=0.0)
         else:
             webbpsf_interp = CloughTocher2DInterpolator((wX, wY), wZ, fill_value=0.0)
-        # slice_currmodel = np.zeros(slice_flux.shape)
-        # slice_all_ampls = np.zeros((Nit_max + 1, np.size(dec_vec), np.size(ra_vec))) + np.nan
-        # slice_ampls_err = np.zeros((np.size(dec_vec), np.size(ra_vec))) + np.nan
 
-        # #PA_V3   =    64.98555793945364 / [deg] Position angle of telescope V3 axis
-        if 0:
+        if plot:
             fluxfinite = np.isfinite(Zbad)
             wherefluxfinite = np.where(fluxfinite)
             X, Y, Z, Zerr, Zbad = X[wherefluxfinite], Y[wherefluxfinite], Z[wherefluxfinite], Zerr[wherefluxfinite], \
@@ -2709,11 +2672,8 @@ def _fit_wpsf_task(paras):
             a = np.nansum(Z * m0 / Zerr ** 2) / np.nansum(m0 ** 2 / Zerr ** 2)
         except:
             a, xc, yc, th = np.nan, np.nan, np.nan, np.nan
-        # print(a,xc, yc, th)
-        # 0.00014184273586106017 -0.1364760635130025 -0.08421747641555134 0.0013115802927045803
-        # 0.0001436426668425129 -0.1330706312425748 -0.0827898233517135 0.001335870184394232
 
-        if 0:
+        if plot:
             print(a, xc, yc, th)
             print(np.nansum(m0)/4.)
             plt.figure(1)
