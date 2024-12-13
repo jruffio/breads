@@ -1,24 +1,23 @@
-from breads.utils import broaden
+import os
+import sys
+from contextlib import redirect_stdout
+from io import StringIO
 
+import astropy.units as u
+import h5py
+import matplotlib.pyplot as plt
+import numpy as np
 import species
+from astropy import constants as const
+from scipy.interpolate import RegularGridInterpolator
 from species.data.database import Database
+from species.phot.syn_phot import SyntheticPhotometry
 from species.read.read_model import ReadModel
+
+from breads.utils import broaden
 
 species.SpeciesInit()
 database = Database()
-
-import h5py
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.interpolate import RegularGridInterpolator
-from species.phot.syn_phot import SyntheticPhotometry
-import astropy.units as u
-from astropy import constants as const
-
-from contextlib import redirect_stdout
-from io import StringIO
-import sys
-import os
 
 def rprint(string):
     sys.stdout.write('\r'+str(string))

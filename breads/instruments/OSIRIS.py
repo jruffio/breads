@@ -1,20 +1,22 @@
-from matplotlib.pyplot import axis
-import matplotlib.pyplot as plt
 from breads.instruments.instrument import Instrument
 import breads.utils as utils
-from warnings import warn
-import astropy.io.fits as pyfits
-import numpy as np
-import ctypes
-from astropy.coordinates import SkyCoord, EarthLocation
-import astropy.units as u
-from astropy.time import Time
-from copy import copy, deepcopy
-from breads.utils import broaden
-from breads.calibration import SkyCalibration
 import multiprocessing as mp
+from copy import copy
 from itertools import repeat
+from warnings import warn
+
+import astropy.io.fits as pyfits
+import astropy.units as u
+import numpy as np
 import pandas as pd
+from astropy.coordinates import SkyCoord, EarthLocation
+from astropy.time import Time
+
+import breads.utils as utils
+from breads.calibration import SkyCalibration
+from breads.instruments.instrument import Instrument
+from breads.utils import broaden
+
 
 class OSIRIS(Instrument):
     def __init__(self, filename=None, skip_baryrv=False):

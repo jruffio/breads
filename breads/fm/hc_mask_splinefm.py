@@ -1,11 +1,12 @@
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.interpolate import InterpolatedUnivariateSpline
-from astropy import constants as const
-from copy import deepcopy
-from breads.utils import get_spline_model
 from copy import copy
+
+import matplotlib.pyplot as plt
+import numpy as np
+from astropy import constants as const
 from scipy.optimize import lsq_linear
+
+from breads.utils import get_spline_model
+
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     """

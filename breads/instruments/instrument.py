@@ -1,6 +1,8 @@
 import os
-import breads.utils as utils
 from warnings import warn
+
+import breads.utils as utils
+
 
 class Instrument:
     def __init__(self, ins_type="custom", verbose=True):

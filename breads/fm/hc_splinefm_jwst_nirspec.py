@@ -1,9 +1,8 @@
 import numpy as np
-
-from scipy.interpolate import InterpolatedUnivariateSpline
 from astropy import constants as const
 
 from breads.utils import get_spline_model
+
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     """

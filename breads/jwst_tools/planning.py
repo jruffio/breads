@@ -1,7 +1,8 @@
-import numpy as np
-import matplotlib.pyplot as plt
-import pysiaf
 import astropy.units as u
+import matplotlib.pyplot as plt
+import numpy as np
+import pysiaf
+
 
 def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
                           show_inner_diff_spikes=True, diff_spike_len = 2,

@@ -1,11 +1,10 @@
 import numpy as np
-
-from scipy.interpolate import InterpolatedUnivariateSpline
-from astropy import constants as const
 import scipy.ndimage as ndi
+from astropy import constants as const
 from scipy.interpolate import interp1d
 
 from breads.utils import get_spline_model, scale_psg
+
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     """

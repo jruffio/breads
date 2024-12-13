@@ -1,15 +1,11 @@
-import numpy as np
-from copy import copy
-import pandas as pd
-from astropy import constants as const
-from  scipy.interpolate import interp1d
-from PyAstronomy import pyasl
 import astropy.units as u
-
-from breads.utils import broaden
-# from breads.utils import LPFvsHPF
+import numpy as np
+from PyAstronomy import pyasl
+from astropy import constants as const
+from scipy.interpolate import interp1d
 
 from breads.utils import get_spline_model
+
 
 
 # pos: (x,y) or fiber, position of the companion
@@ -124,7 +120,6 @@ def hc_atmgrid_2dsplinefm_jwst_nirspec_cal(nonlin_paras, dataobj, ifuy_array=Non
     valid_pix_map = map_of_valid_traces*\
                     (dist2pl_array<3*dist2pl_max)*np.isfinite(trace_id_map)*np.isfinite(data)*\
                     np.isfinite(bad_pixels)*(noise!=0)*np.isfinite(comp_spec)
-    import matplotlib.pyplot as plt
     # plt.imshow(valid_pix_map,origin="lower")
     # plt.show()
     where_finite = np.where(valid_pix_map)

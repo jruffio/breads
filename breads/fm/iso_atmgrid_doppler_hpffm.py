@@ -1,14 +1,13 @@
 import numpy as np
-from copy import copy
-import pandas as pd
-from astropy import constants as const
-from  scipy.interpolate import interp1d
 from PyAstronomy import pyasl
+from astropy import constants as const
+from scipy.interpolate import interp1d
 
-from breads.utils import broaden
 from breads.utils import LPFvsHPF
+from breads.utils import broaden
 from breads.utils import broaden_kernel
 from breads.utils import get_spline_model
+
 
 def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     """
