@@ -23,7 +23,7 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
     show_inner_diff_spikes : bool
         Also display lines to indicate the inner smaller set of diffraction spikes in JWST's complex PSF.
     diff_spike_len:
-    nirspec_aperture:
+    nirspec_aperture: e.g., "ifu" or "S200A1", etc.
 
     Returns
     -------
