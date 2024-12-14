@@ -916,3 +916,20 @@ def companion_relative_to_absolute_position(star_name, comp_name, comp_sep, comp
         print(f'\tProper Motion:\t\tRA: {star_coord.pm_ra_cosdec:.3f}\tDec: {star_coord.pm_dec:.3f}')
         print(f'\tAnnual Parallax:\t{1/star_coord.distance.to_value(u.pc):.4f} arcsec')
     return planet_coord
+
+
+def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
+    """
+    2d gaussian model. Documentation to be completed. Also faint of t
+    """
+    A, xA, yA, w, bkg = p
+    ny, nx = shape
+    if xhdgrid is None or yhdgrid is None:
+        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * nx).astype(np.float) / hdfactor,
+                                       np.arange(hdfactor * ny).astype(np.float) / hdfactor)
+    else:
+        hdfactor = xhdgrid.shape[0] // ny
+    gaussA_hd = A / (2 * np.pi * w ** 2) * np.exp(
+        -0.5 * ((xA - xhdgrid) ** 2 + (yA - yhdgrid) ** 2) / w ** 2)
+    gaussA = np.nanmean(np.reshape(gaussA_hd, (ny, hdfactor, nx, hdfactor)), axis=(1, 3))
+    return gaussA + bkg
