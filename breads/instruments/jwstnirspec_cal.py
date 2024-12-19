@@ -587,7 +587,7 @@ class JWSTNirspec_cal(Instrument):
             outarr_not_created = True
             for wv_id, wv in enumerate(wv_sampling):
                 print(wv_id, wv, nwavelen)
-                paras = nrs, wv, oversample, self.opmode
+                paras = nrs, wv, oversample, self.opmode, parallelize
                 out = _get_wpsf_task(paras)
                 if outarr_not_created:
                     wpsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
@@ -596,7 +596,61 @@ class JWSTNirspec_cal(Instrument):
                 wpsfs[wv_id, :, :] = out[0]
                 wepsfs[wv_id, :, :] = out[1]
         else: # Parallelized version
-            raise Exception("Parallelized version of compute_webbpsf_model does not work, run with parallelize = False.")
+            #raise Exception("Parallelized version of compute_webbpsf_model does not work, run with parallelize = False.")
+            print('Parallel compute_webbpsf_model testing...')
+            
+            #we must prepare the nrs.pupilopd object to get pickled
+            import tempfile
+            fp = tempfile.NamedTemporaryFile()
+            temp_filename = fp.name
+            print('Writing pupilopd tempfile : {}'.format(temp_filename))
+            nrs.pupilopd.writeto(temp_filename)  # save that FITS to disk
+            nrs.pupilopd = temp_filename         # the object is now a pickle-able string
+            
+            print('preparing parameter list...')
+            paras_list = []
+            for wv_id, wv in enumerate(wv_sampling):
+                rprint('{},{},{}'.format(wv_id, wv, nwavelen))
+                paras = nrs, wv, oversample, self.opmode, parallelize
+                paras_list.append(paras)
+            print('')
+                
+            if mppool is None:
+                print('no pool supplied, creating one with {} threads'.format(os.cpu_count()))
+                from multiprocess import Pool
+                mppool = Pool()
+                
+            print('starting parallel _get_wpsf_task ...')
+            pool_out = mppool.map(_get_wpsf_task,paras_list)
+            print('')
+            mppool.close()
+                      
+            print('collating pool outputs...')    
+            out = pool_out[0]
+            wpsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
+            wepsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
+            for ind,out in enumerate(pool_out):
+                rprint(ind)
+                wpsfs[ind, :, :] = out[0]
+                wepsfs[ind, :, :] = out[1]  
+            print('')
+            print('done.')
+            
+            
+            #old code below
+            
+            # output_lists = mppool.map(_get_wpsf_task, zip(itertools.repeat(nrs),
+            #                                               wv_sampling,
+            #                                               itertools.repeat(oversample)))
+            #
+            # outarr_not_created = True
+            # for wv_id, (wv,out) in enumerate(zip(wv_sampling,output_lists)):
+            #     if outarr_not_created:
+            #         wpsfs = np.zeros((nwavelen,out[0].shape[0],out[0].shape[1]))
+            #         wepsfs = np.zeros((nwavelen,out[0].shape[0],out[0].shape[1]))
+            #         outarr_not_created=False
+            #     wpsfs[wv_id,:,:] = out[0]
+            #     wepsfs[wv_id,:,:] = out[1
 
         wepsfs *= oversample ** 2
 
@@ -1718,7 +1772,7 @@ class JWSTNirspec_cal(Instrument):
 
 def _get_wpsf_task(paras):
     """ Run WebbPSF for a single wavelength. Utility function for compute_webbpsf_model."""
-    nrs, center_wv, wpsf_oversample, opmode = paras
+    nrs, center_wv, wpsf_oversample, opmode, parallelize = paras
     if opmode=='FIXEDSLIT':
         print('FixedSlit webbpsf kernel...')
         kernel = np.ones((wpsf_oversample, wpsf_oversample*2))
