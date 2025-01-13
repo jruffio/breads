@@ -980,10 +980,15 @@ def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_rad
         if use_starsub1d:
             starsub_filename = os.path.join(dataobj.utils_dir, "starsub1d", os.path.basename(dataobj.filename))
             starsub_dataobj = JWSTNirspec_cal(starsub_filename, crds_dir=dataobj.crds_dir, utils_dir=dataobj.utils_dir)
-            if dataobj.data_unit == 'MJy':
+            if (dataobj.data_unit == 'MJy') and (starsub_dataobj.data_unit == 'MJy/sr'):
                 replace_data = dataobj.convert_MJy_per_sr_to_MJy(data_in_MJy_per_sr=starsub_dataobj.data)
-            elif dataobj.data_unit == "MJy/sr":
+            elif (dataobj.data_unit == 'MJy/sr') and (starsub_dataobj.data_unit == 'MJy/sr'):
                 replace_data = starsub_dataobj.data
+            elif (dataobj.data_unit =='MJy') and (starsub_dataobj.data_unit == 'MJy'):
+                replace_data = starsub_dataobj.data
+            elif (dataobj.data_unit =='MJy/sr') and (starsub_dataobj.data_unit == 'MJy'):
+                print('Exception: data obj in MJy/sr and starsub in MJy')
+                raise Exception('conversion from MJy to MJy/sr not implemented yet.')
             regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"].replace("_regwvs.fits",
                                                                                              "_starsub1d_regwvs.fits")
         else:
