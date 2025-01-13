@@ -463,7 +463,7 @@ class JWSTNirspec_cal(Instrument):
             self.data_unit = "MJy"  # MJy/sr or MJy
             return self.data,self.noise
 
-    def apply_coords_offset(self, coords_offset=None):
+    def apply_coords_offset(self, coords_offset=None, save_utils=None, load_utils=None):
         """ Offset coordinates in the class:
         self.dra_as_array -= coords_offset[0]
         self.ddec_as_array -= coords_offset[1]
@@ -542,7 +542,7 @@ class JWSTNirspec_cal(Instrument):
 
         return wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
 
-    def compute_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, parallelize=False, wv_sampling=None, save_utils=False):
+    def compute_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, parallelize=False, wv_sampling=None, save_utils=False, mppool=None):
         """ Compute WebbPSF simulated PSFs for the NIRSpec IFU
 
         Parameters
@@ -1774,7 +1774,10 @@ def _get_wpsf_task(paras):
     """ Run WebbPSF for a single wavelength. Utility function for compute_webbpsf_model."""
     nrs, center_wv, wpsf_oversample, opmode, parallelize = paras
     if opmode=='FIXEDSLIT':
-        print('FixedSlit webbpsf kernel...')
+        if not parallelize:
+            print('FixedSlit webbpsf kernel...')
+        else:
+            rprint('FixedSlit webbpsf kernel...')
         kernel = np.ones((wpsf_oversample, wpsf_oversample*2))
     elif opmode=='IFU':
         kernel = np.ones((wpsf_oversample, wpsf_oversample))
