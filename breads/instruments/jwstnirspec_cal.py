@@ -449,7 +449,7 @@ class JWSTNirspec_cal(Instrument):
             self.coords = "sky"
         return dra_as_array, ddec_as_array
 
-    def convert_MJy_per_sr_to_MJy(self, data_in_MJy_per_sr=None):
+    def convert_MJy_per_sr_to_MJy(self, data_in_MJy_per_sr=None, save_utils=None, load_utils=None):
         if data_in_MJy_per_sr is not None:
             arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
             return data_in_MJy_per_sr*(self.area2d*arcsec2_to_sr)
