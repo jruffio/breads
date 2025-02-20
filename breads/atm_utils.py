@@ -168,7 +168,7 @@ class miniRGI():
 
         flam = flux*u.W/u.m**2/u.micron
         w0 = np.mean(self.synphot.wavel_range)
-        fnu = flam * (w0 * u.um)**2 / const.c
+        fnu = flam * (self.wavelength * u.um)**2 / const.c
         fMJy = fnu.to(u.MJy).value
         bandflux, _ = self.synphot.spectrum_to_flux(self.wavelength,fMJy.reshape(-1))
         normflux = fMJy/bandflux
