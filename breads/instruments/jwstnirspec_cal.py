@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import matplotlib.tri as tri
 import numpy as np
 import scipy.linalg as la
-import webbpsf
+import stpsf as webbpsf
 from astropy import constants as const
 from astropy import units as u
 from astropy.stats import sigma_clip
@@ -763,7 +763,7 @@ class JWSTNirspec_cal(Instrument):
         # nrs.options["source_offset_x"] = source_offset_x
         # nrs.options["source_offset_x"] = source_offset_y
 
-        paras = nrs, self.webbpsf_wv0, oversample, self.opmode
+        paras = nrs, self.webbpsf_wv0, oversample, self.opmode,None
         out = _get_wpsf_task(paras)
         wpsfs = out[0]
         wepsfs = out[1]
