@@ -120,7 +120,7 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
     return rate_files
 
 
-def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
+def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False):
     """ Run pipeline stage 2, with some customizations for reductions
     intended to be used with breads for IFU high contrast
 
@@ -152,6 +152,11 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
 
         spec2 = Spec2Pipeline()
 
+        if TA:
+            pathloss_skip = True
+        else:
+            pathloss_skip = False
+
         step_parameters = {
             # spec2.assign_wcs.skip = False
             # spec2.bkg_subtract.skip = False
@@ -160,6 +165,7 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
             # # spec2.srctype.source_type = 'POINT'
             # spec2.flat_field.skip = False
             # spec2.pathloss.skip = False
+            'pathloss':{'skip':pathloss_skip},
             # spec2.photom.skip = False
             'cube_build': {'skip': skip_cubes},  # We do not want or need interpolated cubes
             'extract_1d': {'skip': True},
@@ -202,7 +208,8 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
                             numthreads=16,
                             save_plots=False,
                             filename_suffix="_webbpsf",
-                            overwrite=False):
+                            overwrite=False,
+                           targetname=None):
     mypool = mp.Pool(processes=numthreads)
 
     if not os.path.exists(utils_dir):
@@ -245,7 +252,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays"])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"N_nodes": N_wvs_nodes,
                                                                     "threshold_badpix": 100,
@@ -823,7 +830,7 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, mod
 
 def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_offset=(0, 0), wv_nodes=None,
                                         mask_charge_transfer_radius=None, mppool=None,
-                                        ra_dec_point_sources=None, overwrite=False):
+                                        ra_dec_point_sources=None, overwrite=False,targetname=None):
     """
 
     Parameters
@@ -873,13 +880,13 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays"])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
                                                                     "threshold_badpix": 100,
                                                                     "mppool": mppool}, True, True])
-        preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d_tmp",
+        preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d",
                                                               "threshold_badpix": 10,
                                                               "mppool": mppool}, True, True])
 
@@ -909,7 +916,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
 
 
 def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None, combined_star_func=None,
-                                  coords_offset=(0, 0), mppool=None):
+                                  coords_offset=(0, 0), mppool=None,targetname=None):
     """
 
     Parameters
@@ -940,7 +947,7 @@ def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None,
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays"])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         if combined_star_func is None:
@@ -966,7 +973,7 @@ def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None,
     return dataobj_list
 
 
-def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_radius=None, use_starsub1d=False):
+def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_radius=None, use_starsub=False,recompute=False,starsub_dir='starsub1d'):
     """
 
     Parameters
@@ -983,8 +990,8 @@ def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_rad
     regwvs_dataobj_list = []
     for dataobj in dataobj_list:
 
-        if use_starsub1d:
-            starsub_filename = os.path.join(dataobj.utils_dir, "starsub1d", os.path.basename(dataobj.filename))
+        if use_starsub:
+            starsub_filename = os.path.join(dataobj.utils_dir, starsub_dir, os.path.basename(dataobj.filename))
             starsub_dataobj = JWSTNirspec_cal(starsub_filename, crds_dir=dataobj.crds_dir, utils_dir=dataobj.utils_dir)
             if (dataobj.data_unit == 'MJy') and (starsub_dataobj.data_unit == 'MJy/sr'):
                 replace_data = dataobj.convert_MJy_per_sr_to_MJy(data_in_MJy_per_sr=starsub_dataobj.data)
@@ -1001,7 +1008,11 @@ def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_rad
             replace_data = None
             regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"]
 
-        regwvs_dataobj = dataobj.reload_interpdata_regwvs(load_filename=regwvs_filename)
+        if not recompute:
+            regwvs_dataobj = dataobj.reload_interpdata_regwvs(load_filename=regwvs_filename)
+        else:
+            print('RECOMPUTING GET_combined_REGWVS...')
+            regwvs_dataobj = None
         if regwvs_dataobj is None:
             regwvs_dataobj = dataobj.compute_interpdata_regwvs(save_utils=regwvs_filename, wv_sampling=wv_sampling,
                                                                replace_data=replace_data)
