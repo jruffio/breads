@@ -30,6 +30,7 @@ dependencies = [
     "emcee",
     "PyAstronomy",
     "pandas>2.0.0",
+    "astroquery>=0.4.9"
 
 ]
 
