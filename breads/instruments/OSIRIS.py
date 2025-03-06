@@ -9,6 +9,7 @@ import astropy.io.fits as pyfits
 import astropy.units as u
 import numpy as np
 import pandas as pd
+import ctypes
 from astropy.coordinates import SkyCoord, EarthLocation
 from astropy.time import Time
 
