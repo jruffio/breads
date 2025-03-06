@@ -12,8 +12,8 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
     A, xA, yA, w, bkg = p
     ny, nx = shape
     if xhdgrid is None or yhdgrid is None:
-        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * nx).astype(np.float) / hdfactor,
-                                       np.arange(hdfactor * ny).astype(np.float) / hdfactor)
+        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * nx).astype(float) / hdfactor,
+                                       np.arange(hdfactor * ny).astype(float) / hdfactor)
     else:
         hdfactor = xhdgrid.shape[0] // ny
     gaussA_hd = A / (2 * np.pi * w ** 2) * np.exp(
@@ -195,8 +195,8 @@ def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_sp
         # Technically allows super sampled PSF to account for a true 2d gaussian integration of the area of a pixel.
         # But this is disabled for now with hdfactor=1.
         hdfactor = 1#5
-        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor,
-                                       np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor)
+        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * (boxw)).astype(float) / hdfactor,
+                                       np.arange(hdfactor * (boxw)).astype(float) / hdfactor)
         psfs += pixgauss2d([1., w+dx, w+dy, psfw, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 
