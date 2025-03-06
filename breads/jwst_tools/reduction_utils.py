@@ -1,20 +1,19 @@
-
 import os
 import time
 from glob import glob
 from copy import copy
+import fnmatch
 
 import numpy as np
 from scipy.stats import median_abs_deviation
 from astropy.io import fits
-
 
 import multiprocessing as mp
 import matplotlib.pyplot as plt
 import datetime
 from scipy.ndimage import generic_filter
 from scipy.ndimage import convolve1d
-from  scipy.interpolate import interp1d
+from scipy.interpolate import interp1d
 import matplotlib.tri as tri
 
 from breads.instruments.instrument import Instrument
@@ -27,6 +26,7 @@ from breads.instruments.jwstnirspec_cal import get_contnorm_spec
 from breads.instruments.jwstnirspec_cal import filter_big_triangles
 from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_cals
 from breads.fit import fitfm
+from breads.utils import get_spline_model
 
 
 ###########################################################################
@@ -42,23 +42,29 @@ from breads.fit import fitfm
 #   run_noise_clean
 #   run_stage2
 
-def find_files_to_process(input_dir, filetype='uncal.fits'):
+def find_files_to_process(input_dir, filetype='uncal.fits',exp_numbers=None):
     """ Utility function to find files of a given type """
 
     if "jw0" in filetype:
-        files = glob(os.path.join(input_dir,filetype))
+        files = glob(os.path.join(input_dir, filetype))
     else:
-        files = glob(os.path.join(input_dir,"jw0*_"+filetype))
+        files = glob(os.path.join(input_dir, "jw0*_" + filetype))
     files.sort()
     for file in files:
         print(file)
     print('Found ' + str(len(files)) + ' input files to process')
+
+    if exp_numbers is not None:
+        # Use fnmatch to filter only the wanted exposure numbers
+        files = [f for f in files if any(fnmatch.fnmatch(os.path.basename(f), "jw0*_*_{0:05d}_*".format(num)) for num in exp_numbers)]
+
     return files
+
 
 ###########################################################################
 # Functions for invoking the pipeline
 
-def run_stage1(uncal_files, output_dir, overwrite=False,maximum_cores="all"):
+def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
     """ Run pipeline stage 1, with some customizations for reductions
     intended to be used with breads for IFU high contrast
 
@@ -70,42 +76,40 @@ def run_stage1(uncal_files, output_dir, overwrite=False,maximum_cores="all"):
         os.makedirs(output_dir)
 
     time0 = time.perf_counter()
-    print(time0)
 
     rate_files = []
 
     for i, file in enumerate(uncal_files):
-        print(f"Processing file {i+1} of {len(uncal_files)}.")
+        print(f"Processing file {i + 1} of {len(uncal_files)}.")
 
         outname = os.path.join(output_dir, os.path.basename(file).replace('uncal.fits', 'rate.fits'))
         rate_files.append(outname)
 
-        #print(os.path.join(output_dir, outname))
         if os.path.exists(outname) and not overwrite:
             print(f"Output file {outname} already exists in output dir;\n\tskipping {file}.")
             continue
 
-        det1 = Detector1Pipeline() # Instantiate the pipeline
+        det1 = Detector1Pipeline()  # Instantiate the pipeline
 
-        #defining used pipeline steps
+        # defining used pipeline steps
         # This version only shows the step parameters which are changes from defaults.
         step_parameters = {
             # group_scale - run with defaults
             # dq_init - run with defaults
-            'saturation': {'n_pix_grow_sat': 0},    # check for saturated pixels, but do not expand to adjacent pixels
+            'saturation': {'n_pix_grow_sat': 0},  # check for saturated pixels, but do not expand to adjacent pixels
             # ipc - run with defaults
             # superbias - run with defaults
             # linearity - run with defaults
-            'persistence': {'skip' : True},         # This step does nothing; there are no nonzero parameters in the reference files yet
+            'persistence': {'skip': True},
+            # This step does nothing; there are no nonzero parameters in the reference files yet
             # dark_current : run with defaults
-            'jump': {'maximum_cores': maximum_cores},       # parallelize
-            'ramp_fit': {'maximum_cores': maximum_cores},   # parallelize
+            'jump': {'maximum_cores': maximum_cores},  # parallelize
+            'ramp_fit': {'maximum_cores': maximum_cores},  # parallelize
             # gain_scale : run with defaults
         }
 
-        det1.call(file, save_results=True, output_dir = output_dir,
+        det1.call(file, save_results=True, output_dir=output_dir,
                   steps=step_parameters)
-
 
         # Print out the time benchmark
         time1 = time.perf_counter()
@@ -116,8 +120,7 @@ def run_stage1(uncal_files, output_dir, overwrite=False,maximum_cores="all"):
     return rate_files
 
 
-
-def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
+def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False):
     """ Run pipeline stage 2, with some customizations for reductions
     intended to be used with breads for IFU high contrast
 
@@ -125,8 +128,6 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
 
     """
     from jwst.pipeline import Spec2Pipeline
-
-
 
     # We need to check that the desired output directories exist, and if not create them
     if not os.path.exists(output_dir):
@@ -138,8 +139,8 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
 
     cal_files = []
 
-    for fid,rate_file in enumerate(rate_files):
-        print(fid,rate_file)
+    for fid, rate_file in enumerate(rate_files):
+        print(fid, rate_file)
 
         # Setting up steps and running the Spec2 portion of the pipeline.
 
@@ -150,7 +151,11 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
             continue
 
         spec2 = Spec2Pipeline()
-        #spec2.output_dir = spec2_dir
+
+        if TA:
+            pathloss_skip = True
+        else:
+            pathloss_skip = False
 
         step_parameters = {
             # spec2.assign_wcs.skip = False
@@ -160,18 +165,18 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
             # # spec2.srctype.source_type = 'POINT'
             # spec2.flat_field.skip = False
             # spec2.pathloss.skip = False
+            'pathloss':{'skip':pathloss_skip},
             # spec2.photom.skip = False
-            'cube_build' : {'skip' : skip_cubes},   # We do not want or need interpolated cubes
-            'extract_1d' : {'skip' : True},
+            'cube_build': {'skip': skip_cubes},  # We do not want or need interpolated cubes
+            'extract_1d': {'skip': True},
             # spec3.cube_build.coord_system = 'skyalign'
             # spec2.cube_build.coord_system='ifualign'
         }
         spec2.save_bsub = True
 
-        #choose what results to save and from what steps
-        #spec2.save_results = True
-        spec2.call(rate_file, save_results=True, output_dir = output_dir,
-                   steps = step_parameters)
+        # choose what results to save and from what steps
+        spec2.call(rate_file, save_results=True, output_dir=output_dir,
+                   steps=step_parameters)
 
         # Print out the time benchmark
         time1 = time.perf_counter()
@@ -180,6 +185,7 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
     time1 = time.perf_counter()
     print(f"Total Runtime: {time1 - time0:0.4f} seconds")
     return cal_files
+
 
 ###########################################################################
 #  Function for centroid calibration
@@ -195,15 +201,15 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False):
 # wv_for_cent_calib_dict["G395H nrs1"] = np.arange(2.859, 4.103, 0.01)
 # wv_for_cent_calib_dict["G395H nrs2"] = np.arange(4.081, 5.280, 0.01)
 
-def run_coordinate_recenter(cal_files, utils_dir,crds_dir, init_centroid = (0,0),wv_sampling=None, N_wvs_nodes=40,
-                             mask_charge_transfer_radius = None,
-                             IWA=0.3,OWA=1.0,
-                             debug_init=None,debug_end=None,
-                             numthreads = 16,
-                             save_plots=False,
-                            filename_suffix = "_webbpsf",
-                            overwrite = False):
-
+def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0), wv_sampling=None, N_wvs_nodes=40,
+                            mask_charge_transfer_radius=None,
+                            IWA=0.3, OWA=1.0,
+                            debug_init=None, debug_end=None,
+                            numthreads=16,
+                            save_plots=False,
+                            filename_suffix="_webbpsf",
+                            overwrite=False,
+                           targetname=None):
     mypool = mp.Pool(processes=numthreads)
 
     if not os.path.exists(utils_dir):
@@ -216,9 +222,10 @@ def run_coordinate_recenter(cal_files, utils_dir,crds_dir, init_centroid = (0,0)
 
     # Definie the filename of the output file saved by fitpsf
     splitbasename = os.path.basename(cal_files[0]).split("_")
-    fitpsf_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3] + "_fitpsf" + filename_suffix + ".fits")
-    poly2d_centroid_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3] + "_poly2d_centroid" + filename_suffix + ".txt")
-
+    fitpsf_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[
+        3] + "_fitpsf" + filename_suffix + ".fits")
+    poly2d_centroid_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[
+        3] + "_poly2d_centroid" + filename_suffix + ".txt")
 
     hdulist_sc = fits.open(cal_files[0])
     grating = hdulist_sc[0].header["GRATING"].strip()
@@ -226,20 +233,18 @@ def run_coordinate_recenter(cal_files, utils_dir,crds_dir, init_centroid = (0,0)
     if wv_sampling is None:
         wv_sampling = np.arange(np.nanmin(hdulist_sc["WAVELENGTH"].data),
                                 np.nanmax(hdulist_sc["WAVELENGTH"].data),
-                                np.nanmedian(hdulist_sc["WAVELENGTH"].data)/300)
+                                np.nanmedian(hdulist_sc["WAVELENGTH"].data) / 300)
     hdulist_sc.close()
 
     if not overwrite:
         if len(glob(poly2d_centroid_filename)) == 1:
             output = np.loadtxt(poly2d_centroid_filename, delimiter=' ')
-            poly_p_RA, poly_p_dec = output[0],output[1]
-            print("RA correction " + detector, poly_p_RA)
-            print("Dec correction "+detector, poly_p_dec)
-            return poly_p_RA, poly_p_dec
+            poly_p_ra, poly_p_dec = output[0], output[1]
+            print("RA correction " + detector, poly_p_ra)
+            print("Dec correction " + detector, poly_p_dec)
+            return poly_p_ra, poly_p_dec
 
-    #     wv_for_cent_calib_dict[grating+" "+detector]
-
-    regwvs_dataobj_list= []
+    regwvs_dataobj_list = []
     for filename in cal_files[0::]:
         print(filename)
         if detector not in filename:
@@ -247,18 +252,18 @@ def run_coordinate_recenter(cal_files, utils_dir,crds_dir, init_centroid = (0,0)
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays"])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"N_nodes": N_wvs_nodes,
-                                                                     "threshold_badpix": 100,
-                                                                     "mppool": mypool}, True, True])
+                                                                    "threshold_badpix": 100,
+                                                                    "mppool": mypool}, True, True])
         preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d_tmp",
                                                               "threshold_badpix": 10,
                                                               "mppool": mypool}, True, True])
-        preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, False])
+        preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, True])
 
         dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
-                                  save_utils=True,load_utils=True,preproc_task_list=preproc_task_list)
+                                  save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
         regwvs_dataobj_list.append(dataobj.reload_interpdata_regwvs())
 
     regwvs_combdataobj = JWSTNirspec_multiple_cals(regwvs_dataobj_list)
@@ -273,27 +278,22 @@ def run_coordinate_recenter(cal_files, utils_dir,crds_dir, init_centroid = (0,0)
                                                                   pixelscale=0.1, oversample=10,
                                                                   parallelize=False, mppool=mypool,
                                                                   save_utils=True)
-    wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale = webbpsf_reload
-    webbpsf_X = np.tile(webbpsf_X[None, :, :], (wepsfs.shape[0], 1, 1))
-    webbpsf_Y = np.tile(webbpsf_Y[None, :, :], (wepsfs.shape[0], 1, 1))
-
+    wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_x, webbpsf_y, wpsf_oversample, wpsf_pixelscale = webbpsf_reload
+    webbpsf_x = np.tile(webbpsf_x[None, :, :], (wepsfs.shape[0], 1, 1))
+    webbpsf_y = np.tile(webbpsf_y[None, :, :], (wepsfs.shape[0], 1, 1))
 
     # Fit a model PSF (WebbPSF) to the combined point cloud of dataobj_list
     # Save output as fitpsf_filename
     ann_width = None
     padding = 0.0
     sector_area = None
-    where_center_disk = regwvs_combdataobj.where_point_source((0.0,0.0),IWA)
+    where_center_disk = regwvs_combdataobj.where_point_source((0.0, 0.0), IWA)
     regwvs_combdataobj.bad_pixels[where_center_disk] = np.nan
 
-    # l0 = 100
-    # plt.scatter(regwvs_combdataobj.dra_as_array[:, l0], regwvs_combdataobj.ddec_as_array[:, l0],
-    #             c=10 * regwvs_combdataobj.data[:, l0] / np.nanmax(regwvs_combdataobj.data[:, l0]), s=1)
-    # plt.show()
-    fitpsf(regwvs_combdataobj,wepsfs,webbpsf_X,webbpsf_Y, out_filename=fitpsf_filename,IWA = 0.0,OWA = OWA,
-           mppool=mypool,init_centroid=init_centroid,ann_width=ann_width,padding=padding,
-           sector_area=sector_area,RDI_folder_suffix=filename_suffix,rotate_psf=regwvs_combdataobj.east2V2_deg,
-           flipx=True,psf_spaxel_area=(wpsf_pixelscale) ** 2,debug_init=debug_init,debug_end=debug_end)
+    fitpsf(regwvs_combdataobj, wepsfs, webbpsf_x, webbpsf_y, out_filename=fitpsf_filename, IWA=0.0, OWA=OWA,
+           mppool=mypool, init_centroid=init_centroid, ann_width=ann_width, padding=padding,
+           sector_area=sector_area, RDI_folder_suffix=filename_suffix, rotate_psf=regwvs_combdataobj.east2V2_deg,
+           flipx=True, psf_spaxel_area=(wpsf_pixelscale) ** 2, debug_init=debug_init, debug_end=debug_end)
 
     with fits.open(fitpsf_filename) as hdulist:
         bestfit_coords = hdulist[0].data
@@ -303,60 +303,57 @@ def run_coordinate_recenter(cal_files, utils_dir,crds_dir, init_centroid = (0,0)
 
     x2fit = wv_sampling - np.nanmedian(wv_sampling)
     y2fit = bestfit_coords[0, :, 2]
-    # if detector == "nrs1":
-    #     _wv_min, _wv_max = 3.0, 4.0
-    # elif detector == "nrs2":
-    #     _wv_min, _wv_max = 4.3, 5.2
-    _wv_min = wv_sampling[0]+0.1*(wv_sampling[-1]-wv_sampling[0])
-    _wv_max = wv_sampling[-1]-0.1*(wv_sampling[-1]-wv_sampling[0])
+    _wv_min = wv_sampling[0] + 0.1 * (wv_sampling[-1] - wv_sampling[0])
+    _wv_max = wv_sampling[-1] - 0.1 * (wv_sampling[-1] - wv_sampling[0])
     print(_wv_min, _wv_max)
     wherefinite = np.where(np.isfinite(y2fit) * (wv_sampling > _wv_min) * (wv_sampling < _wv_max))
-    poly_p_RA = np.polyfit(x2fit[wherefinite], y2fit[wherefinite], deg=2)
-    print("RA correction " + detector, poly_p_RA)
+    poly_p_ra = np.polyfit(x2fit[wherefinite], y2fit[wherefinite], deg=2)
+    print("RA correction " + detector, poly_p_ra)
 
     x2fit = wv_sampling - np.nanmedian(wv_sampling)
     y2fit = bestfit_coords[0, :, 3]
-    wherefinite=np.where(np.isfinite(y2fit)*(wv_sampling>_wv_min)*(wv_sampling<_wv_max))
-    poly_p_dec = np.polyfit(x2fit[wherefinite],y2fit[wherefinite], deg=2)
-    # plt.scatter(x2fit[wherefinite],y2fit[wherefinite],label=detector)
-    print("Dec correction "+detector, poly_p_dec)
+    wherefinite = np.where(np.isfinite(y2fit) * (wv_sampling > _wv_min) * (wv_sampling < _wv_max))
+    poly_p_dec = np.polyfit(x2fit[wherefinite], y2fit[wherefinite], deg=2)
+    print("Dec correction " + detector, poly_p_dec)
 
-    np.savetxt(poly2d_centroid_filename, [poly_p_RA,poly_p_dec], delimiter=' ')
+    np.savetxt(poly2d_centroid_filename, [poly_p_ra, poly_p_dec], delimiter=' ')
 
     if save_plots:
         color_list = ["#ff9900", "#006699", "#6600ff", "#006699", "#ff9900", "#6600ff"]
         print(bestfit_coords.shape)
-        fontsize=12
-        plt.figure(figsize=(12,10))
-        plt.subplot(3,1,1)
+        fontsize = 12
+        plt.figure(figsize=(12, 10))
+        plt.subplot(3, 1, 1)
 
-        plt.plot(wv_sampling,bestfit_coords[0,:,0]*1e9,linestyle="-",color=color_list[0],label="Fixed centroid",linewidth=1)
-        plt.plot(wv_sampling,bestfit_coords[0,:,1]*1e9,linestyle="--",color=color_list[2],label="Free centroid",linewidth=1)
-        plt.xlim([wv_sampling[0],wv_sampling[-1]])
-        plt.xlabel("Wavelength ($\\mu$m)",fontsize=fontsize)
-        plt.ylabel("Flux density (mJy)",fontsize=fontsize)
+        plt.plot(wv_sampling, bestfit_coords[0, :, 0] * 1e9, linestyle="-", color=color_list[0], label="Fixed centroid",
+                 linewidth=1)
+        plt.plot(wv_sampling, bestfit_coords[0, :, 1] * 1e9, linestyle="--", color=color_list[2], label="Free centroid",
+                 linewidth=1)
+        plt.xlim([wv_sampling[0], wv_sampling[-1]])
+        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
+        plt.ylabel("Flux density (mJy)", fontsize=fontsize)
         plt.gca().tick_params(axis='x', labelsize=fontsize)
         plt.gca().tick_params(axis='y', labelsize=fontsize)
         plt.legend(loc="upper right")
 
-        plt.subplot(3,1,2)
-        plt.plot(wv_sampling,bestfit_coords[0,:,2],label="bestfit centroid")
-        poly_model = np.polyval(poly_p_RA,wv_sampling - np.nanmedian(wv_sampling))
-        plt.plot(wv_sampling,poly_model,label="polyfit")
-        plt.plot(wv_sampling,bestfit_coords[0,:,2]-poly_model,label="residuals")
-        plt.xlabel("Wavelength ($\\mu$m)",fontsize=fontsize)
-        plt.ylabel("$\\Delta$RA (as)",fontsize=fontsize)
+        plt.subplot(3, 1, 2)
+        plt.plot(wv_sampling, bestfit_coords[0, :, 2], label="bestfit centroid")
+        poly_model = np.polyval(poly_p_ra, wv_sampling - np.nanmedian(wv_sampling))
+        plt.plot(wv_sampling, poly_model, label="polyfit")
+        plt.plot(wv_sampling, bestfit_coords[0, :, 2] - poly_model, label="residuals")
+        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
+        plt.ylabel("$\\Delta$RA (as)", fontsize=fontsize)
         plt.gca().tick_params(axis='x', labelsize=fontsize)
         plt.gca().tick_params(axis='y', labelsize=fontsize)
         plt.legend(loc="upper right")
 
-        plt.subplot(3,1,3)
-        plt.plot(wv_sampling,bestfit_coords[0,:,3],label="bestfit centroid")
-        poly_model = np.polyval(poly_p_dec,wv_sampling - np.nanmedian(wv_sampling))
-        plt.plot(wv_sampling,poly_model,label="polyfit")
-        plt.plot(wv_sampling,bestfit_coords[0,:,3]-poly_model,label="residuals")
-        plt.xlabel("Wavelength ($\\mu$m)",fontsize=fontsize)
-        plt.ylabel("$\\Delta$Dec (as)",fontsize=fontsize)
+        plt.subplot(3, 1, 3)
+        plt.plot(wv_sampling, bestfit_coords[0, :, 3], label="bestfit centroid")
+        poly_model = np.polyval(poly_p_dec, wv_sampling - np.nanmedian(wv_sampling))
+        plt.plot(wv_sampling, poly_model, label="polyfit")
+        plt.plot(wv_sampling, bestfit_coords[0, :, 3] - poly_model, label="residuals")
+        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
+        plt.ylabel("$\\Delta$Dec (as)", fontsize=fontsize)
         plt.gca().tick_params(axis='x', labelsize=fontsize)
         plt.gca().tick_params(axis='y', labelsize=fontsize)
 
@@ -365,28 +362,17 @@ def run_coordinate_recenter(cal_files, utils_dir,crds_dir, init_centroid = (0,0)
         now = datetime.datetime.now()
         formatted_datetime = now.strftime("%Y%m%d_%H%M%S")
 
-        out_filename = os.path.join(utils_dir, formatted_datetime+"_centroid_calibration.png")
+        out_filename = os.path.join(utils_dir, formatted_datetime + "_centroid_calibration.png")
         print("Saving " + out_filename)
         plt.savefig(out_filename, dpi=300)
-        # plt.savefig(out_filename.replace(".png", ".pdf"),bbox_inches='tight')
 
-        # out_filename = os.path.join(out_png, "HR8799_spectrum_microns_MJy_"+obsnum+".png")
-        # hdulist = fits.HDUList()
-        # hdulist.append(fits.PrimaryHDU(data=flux2save_wvs))
-        # hdulist.append(fits.ImageHDU(data=flux2save))
-        # try:
-        #     hdulist.writeto(out_filename, overwrite=True)
-        # except TypeError:
-        #     hdulist.writeto(out_filename, clobber=True)
-        # hdulist.close()
-
-    return poly_p_RA,poly_p_dec
+    return poly_p_ra, poly_p_dec
 
 
 ###########################################################################
 #  Functions for noise cleaning
 
-from breads.utils import get_spline_model
+
 def fm_column_background(nonlin_paras, cubeobj, nodes=20,
                          fix_parameters=None,
                          return_where_finite=False,
@@ -396,6 +382,20 @@ def fm_column_background(nonlin_paras, cubeobj, nodes=20,
                          spline_reg_std=1.0):
     """ Forward model column background, for use in forward_model_noise_clean
 
+    Parameters
+    ----------
+    nonlin_paras
+    cubeobj
+    nodes
+    fix_parameters
+    return_where_finite
+    regularization
+    badpixfraction
+    M_spline
+    spline_reg_std
+
+    Returns
+    -------
 
     """
     if fix_parameters is not None:
@@ -406,50 +406,46 @@ def fm_column_background(nonlin_paras, cubeobj, nodes=20,
 
     if M_spline is None:
         if type(nodes) is int:
-            N_nodes = nodes
-            x_knots = np.linspace(0, np.size(cubeobj.data), N_nodes, endpoint=True).tolist()
+            n_nodes = nodes
+            x_knots = np.linspace(0, np.size(cubeobj.data), n_nodes, endpoint=True).tolist()
         elif type(nodes) is list or type(nodes) is np.ndarray:
             x_knots = nodes
             if type(nodes[0]) is list or type(nodes[0]) is np.ndarray:
-                N_nodes = np.sum([np.size(n) for n in nodes])
+                n_nodes = np.sum([np.size(n) for n in nodes])
             else:
-                N_nodes = np.size(nodes)
+                n_nodes = np.size(nodes)
         else:
             raise ValueError("Unknown format for nodes.")
     else:
-        N_nodes = M_spline.shape[1]
+        n_nodes = M_spline.shape[1]
 
     # Number of linear parameters
-    N_linpara = N_nodes
+    n_linpara = n_nodes
 
     data = cubeobj.data
     noise = cubeobj.noise
     bad_pixels = cubeobj.bad_pixels
 
-    where_trace_finite = np.where(np.isfinite(data)*np.isfinite(bad_pixels)*(noise!=0))
+    where_trace_finite = np.where(np.isfinite(data) * np.isfinite(bad_pixels) * (noise != 0))
     d = data[where_trace_finite]
     s = noise[where_trace_finite]
 
-    # print("coucou")
-    # print(np.size(where_trace_finite[0]), (1-badpixfraction) * np.sum(new_mask), vsini < 0)
-    if np.size(where_trace_finite[0]) <= (1-badpixfraction) * np.size(data):
+    if np.size(where_trace_finite[0]) <= (1 - badpixfraction) * np.size(data):
         # don't bother to do a fit if there are too many bad pixels
-        return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
+        return np.array([]), np.array([]).reshape(0, n_linpara), np.array([])
     else:
         x = np.arange(np.size(cubeobj.data))
         if M_spline is None:
-            M = get_spline_model(x_knots, x, spline_degree=3)
+            m_spline = get_spline_model(x_knots, x, spline_degree=3)
         else:
-            M =copy(M_spline)
-        # print(M_spline.shape)
+            m_spline = copy(M_spline)
 
-
-        M = M[where_trace_finite[0],:]
+        m_spline = m_spline[where_trace_finite[0], :]
 
         extra_outputs = {}
         if regularization == "default":
-            s_reg = np.zeros(N_nodes)+spline_reg_std#np.array(np.nanmax(d) + np.zeros(N_nodes))
-            d_reg = np.zeros(N_nodes)
+            s_reg = np.zeros(n_nodes) + spline_reg_std
+            d_reg = np.zeros(n_nodes)
             extra_outputs["regularization"] = (d_reg, s_reg)
         elif regularization == "user":
             raise Exception("user defined regularisation not yet implemented")
@@ -459,90 +455,88 @@ def fm_column_background(nonlin_paras, cubeobj, nodes=20,
             extra_outputs["where_trace_finite"] = where_trace_finite
 
         if len(extra_outputs) >= 1:
-            return d, M, s, extra_outputs
+            return d, m_spline, s, extra_outputs
         else:
-            return d, M, s
+            return d, m_spline, s
 
 
+def fm_charge_transfer(nonlin_paras, cubeobj, charge_transfer_mask=None, nodes=40, fix_parameters=None,
+                       return_where_finite=False,
+                       regularization=None, badpixfraction=0.75, M_spline=None, spline_reg_std=1.0):
+    """
 
-def fm_charge_transfer(nonlin_paras, cubeobj, charge_transfer_mask=None,nodes=40, fix_parameters=None,return_where_finite=False,
-             regularization=None,badpixfraction=0.75, M_spline=None,spline_reg_std=1.0):
+    Parameters
+    ----------
+    nonlin_paras
+    cubeobj
+    charge_transfer_mask
+    nodes
+    fix_parameters
+    return_where_finite
+    regularization
+    badpixfraction
+    M_spline
+    spline_reg_std
+
+    Returns
+    -------
+
+    """
     if fix_parameters is not None:
         _nonlin_paras = np.array(fix_parameters)
-        _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
+        _nonlin_paras[np.where(np.array(fix_parameters) is None)] = nonlin_paras
     else:
         _nonlin_paras = nonlin_paras
 
     if M_spline is None:
         if type(nodes) is int:
-            N_nodes = nodes
-            x_knots = np.linspace(np.nanmin(cubeobj.wavelengths), np.nanmax(cubeobj.wavelengths), N_nodes, endpoint=True).tolist()
+            n_nodes = nodes
+            x_knots = np.linspace(np.nanmin(cubeobj.wavelengths), np.nanmax(cubeobj.wavelengths), n_nodes,
+                                  endpoint=True).tolist()
         elif type(nodes) is list or type(nodes) is np.ndarray:
             x_knots = nodes
             if type(nodes[0]) is list or type(nodes[0]) is np.ndarray:
-                N_nodes = np.sum([np.size(n) for n in nodes])
+                n_nodes = np.sum([np.size(n) for n in nodes])
             else:
-                N_nodes = np.size(nodes)
+                n_nodes = np.size(nodes)
         else:
             raise ValueError("Unknown format for nodes.")
     else:
-        N_nodes = M_spline.shape[1]
+        n_nodes = M_spline.shape[1]
 
     # Number of linear parameters
-    N_linpara = N_nodes
+    n_linpara = n_nodes
 
-
-    where_finite = np.where(np.isfinite(cubeobj.data)*np.isfinite(cubeobj.bad_pixels)*(cubeobj.noise!=0))
+    where_finite = np.where(np.isfinite(cubeobj.data) * np.isfinite(cubeobj.bad_pixels) * (cubeobj.noise != 0))
     d = cubeobj.data[where_finite]
     s = cubeobj.noise[where_finite]
 
-
-    # print("coucou")
-    # print(np.size(where_trace_finite[0]), (1-badpixfraction) * np.sum(new_mask), vsini < 0)
-    if np.size(where_finite[0]) <= (1-badpixfraction) * np.size(cubeobj.data):
+    if np.size(where_finite[0]) <= (1 - badpixfraction) * np.size(cubeobj.data):
         # don't bother to do a fit if there are too many bad pixels
-        return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
+        return np.array([]), np.array([]).reshape(0, n_linpara), np.array([])
     else:
         where_finite_wvs = np.where(np.isfinite(cubeobj.wavelengths))
         if M_spline is None:
-            M_tmp = get_spline_model(x_knots, cubeobj.wavelengths[where_finite_wvs], spline_degree=3)
+            m_tmp = get_spline_model(x_knots, cubeobj.wavelengths[where_finite_wvs], spline_degree=3)
         else:
-            M_tmp =copy(M_spline)
-        M_entire_image = np.zeros((cubeobj.data.shape[0],cubeobj.data.shape[1],M_tmp.shape[1]))
-        M_entire_image[where_finite_wvs[0],where_finite_wvs[1],:] = M_tmp
-        M_entire_image = M_entire_image*charge_transfer_mask[:,:,None]
-        M_entire_image[np.where(np.isnan(M_entire_image))]=0
-        # print(M_spline.shape)
-        # # plt.figure()
-        # # plt.imshow(charge_transfer_mask,origin="lower")
-        # plt.figure()
-        # plt.imshow(M_entire_image[:,:,20],origin="lower")
-        # plt.figure()
-        # plt.plot(M_entire_image[:,1150,20])
-        # plt.show()
+            m_tmp = copy(M_spline)
+        m_entire_image = np.zeros((cubeobj.data.shape[0], cubeobj.data.shape[1], m_tmp.shape[1]))
+        m_entire_image[where_finite_wvs[0], where_finite_wvs[1], :] = m_tmp
+        m_entire_image = m_entire_image * charge_transfer_mask[:, :, None]
+        m_entire_image[np.where(np.isnan(m_entire_image))] = 0
 
         kernel_scale = _nonlin_paras[0]
-        x = np.arange(-cubeobj.data.shape[0],cubeobj.data.shape[0]+1)
-        charge_transfer_kernel = 1/(1+x**2/kernel_scale**2) #Lorentzian Function
-
-        # tmp = M_entire_image[:, 1150:1250, :]
-        # M_entire_image_convolved = convolve1d(tmp, weights=charge_transfer_kernel, axis=0, mode='constant')
-        # plt.figure()
-        # plt.plot(M_entire_image_convolved[:,0,2])
-        # plt.figure()
-        # plt.plot(tmp[:,0,2])
-        # plt.show()
+        x = np.arange(-cubeobj.data.shape[0], cubeobj.data.shape[0] + 1)
+        charge_transfer_kernel = 1 / (1 + x ** 2 / kernel_scale ** 2)  # Lorentzian Function
 
         # Convolve each column with the kernel
-        M_entire_image_convolved = convolve1d(M_entire_image, weights=charge_transfer_kernel, axis=0, mode='constant')
-        M = M_entire_image_convolved[where_finite[0],where_finite[1],:]
-        # plt.imshow(M_entire_image_convolved[:,:,2],origin="lower")
-        # plt.show()
+        m_entire_image_convolved = convolve1d(m_entire_image, weights=charge_transfer_kernel, axis=0, mode='constant')
+        m_output = m_entire_image_convolved[where_finite[0], where_finite[1], :]
 
         extra_outputs = {}
         if regularization == "default":
-            s_reg = np.zeros(N_nodes)+spline_reg_std#np.array(np.nanmax(d) + np.zeros(N_nodes))
-            d_reg = np.zeros(N_nodes)
+            s_reg = np.zeros(n_nodes) + spline_reg_std
+            d_reg = np.zeros(n_nodes)
             extra_outputs["regularization"] = (d_reg, s_reg)
         elif regularization == "user":
             raise Exception("user defined regularisation not yet implemented")
@@ -552,25 +546,41 @@ def fm_charge_transfer(nonlin_paras, cubeobj, charge_transfer_mask=None,nodes=40
             extra_outputs["where_finite"] = where_finite
 
         if len(extra_outputs) >= 1:
-            return d, M, s, extra_outputs
+            return d, m_output, s, extra_outputs
         else:
-            return d, M, s
+            return d, m_output, s
 
-def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_nodes = 40,model_charge_transfer=False,
-                              utils_dir=None,coords_offset=(0,0)):
+
+def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
+                              utils_dir=None, coords_offset=(0, 0)):
     """ Clean 1/f stripe noise from NIRSpec IFU data. Inspired by NSClean but implemented independently.
 
     The way it works:
         subtraction done on rate.fits
         Use the cal.fits to retrieve the mask of the IFU slices
-        Fit detector columns one at time. I just fit a smooth continuum (using my splines) to the masked detector column, and also masking the region around the star more aggressively I believe
+        Fit detector columns one at time. I just fit a smooth continuum (using my splines) to the masked detector
+        column, and also masking the region around the star more aggressively I believe
         subtract the fitted continuum
         Save new rate.fits
+
+    Parameters
+    ----------
+    rate_file
+    cal_file_dir
+    clean_dir
+    crds_dir
+    N_nodes
+    model_charge_transfer
+    utils_dir
+    coords_offset
+
+    Returns
+    -------
+
     """
 
-
     basename = os.path.basename(rate_file)
-    cal_filename = os.path.join(cal_file_dir, basename.replace("_rate.fits","_cal.fits"))
+    cal_filename = os.path.join(cal_file_dir, basename.replace("_rate.fits", "_cal.fits"))
     if len(glob(cal_filename)) == 0:
         raise Exception("Could not find the corresponding cal file. Please run stage 2 without cleaning first.")
 
@@ -588,8 +598,6 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     hdulist_cal = fits.open(cal_dataobj.filename)
     dq = hdulist_cal["DQ"].data
     hdulist_cal.close()
-
-
 
     print(cal_filename)
     print(glob(cal_filename))
@@ -623,7 +631,7 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
 
     im[np.where(np.isnan(im))] = 0
 
-    ## Extent the slices masks to the edge of the detector
+    # Extent the slices masks to the edge of the detector
     if "nrs1" in rate_file:
         for rowid in range(im.shape[0]):
             finite_ids = np.where(np.isfinite(sep_im[rowid, 0:450]))[0]
@@ -648,7 +656,6 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
         new_badpix[rowid, np.where((row_data_masking > mad_threshold))[0]] = np.nan
     bad_pixels *= new_badpix
 
-
     if model_charge_transfer:
         data = Instrument()
 
@@ -660,9 +667,10 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
         cal_model_filename = os.path.join(utils_dir, "RDI_model_webbpsf", basename.replace("_rate.fits", "_cal.fits"))
         if len(glob(cal_model_filename)) == 0:
             raise Exception(
-                "Could not find the corresponding RDI model webbpsf cal file. Please run run_coordinate_recenter(...) first.")
+                "Could not find the corresponding RDI model webbpsf cal file. "
+                "Please run run_coordinate_recenter(...) first.")
         with fits.open(cal_model_filename) as hdul_model:
-            webbPSF_im = hdul_model["SCI"].data
+            webbpsf_im = hdul_model["SCI"].data
         saturated_mask = np.full(cal_dataobj.data.shape, np.nan)
         saturated_mask[np.where(untangle_dq(dq, verbose=False)[1, :, :])] = 1
         saturated_mask[np.where((sep_im > 0.5))] = np.nan
@@ -670,33 +678,33 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
         # Will probably need to fix later.
         saturation_threshold = 1e5  # Mjy/sr
 
-        charge_transfer_mask = (webbPSF_im - saturation_threshold) * saturated_mask
+        charge_transfer_mask = (webbpsf_im - saturation_threshold) * saturated_mask
         charge_transfer_mask[np.where(np.isnan(charge_transfer_mask))] = 0.0
         charge_transfer_mask = np.clip(charge_transfer_mask, 0, np.inf)
 
         # Define the spline nodes for fitting the background in each detector column
-        N_nodes_charge_transfer = 5  # number of nodes in the column
+        n_nodes_charge_transfer = 5  # number of nodes in the column
         x_knots_charge_transfer = np.linspace(np.nanmin(cal_dataobj.wavelengths), np.nanmax(cal_dataobj.wavelengths),
-                                              N_nodes_charge_transfer,
+                                              n_nodes_charge_transfer,
                                               endpoint=True).tolist()
         where_finite_wvs = np.where(np.isfinite(cal_dataobj.wavelengths))
-        M_spline_charge_transfer = get_spline_model(x_knots_charge_transfer, cal_dataobj.wavelengths[where_finite_wvs],
+        m_spline_charge_transfer = get_spline_model(x_knots_charge_transfer, cal_dataobj.wavelengths[where_finite_wvs],
                                                     spline_degree=3)
 
         fix_parameters = [10]  # width of the lorentzian
         fm_paras = {"charge_transfer_mask": charge_transfer_mask, "fix_parameters": fix_parameters,
-                    "regularization": None, "badpixfraction": 0.75, "M_spline": M_spline_charge_transfer,
+                    "regularization": None, "badpixfraction": 0.75, "M_spline": m_spline_charge_transfer,
                     "spline_reg_std": 1.0}
         nonlin_paras = []
         out_log_prob, _, rchi2, linparas, linparas_err = fitfm(nonlin_paras, data, fm_charge_transfer, fm_paras,
                                                                computeH0=False, scale_noise=False)
-        d_masked, M, s, extra_outputs = fm_charge_transfer(nonlin_paras, data, return_where_finite=True, **fm_paras)
+        d_masked, m, s, extra_outputs = fm_charge_transfer(nonlin_paras, data, return_where_finite=True, **fm_paras)
         where_finite = extra_outputs["where_finite"]
         d_masked_canvas = np.zeros(data.data.shape) + np.nan
         d_masked_canvas[where_finite] = d_masked
         data.bad_pixels = np.ones(data.data.shape)
-        d, M, s, _ = fm_charge_transfer(nonlin_paras, data, return_where_finite=True, **fm_paras)
-        model_canvas = np.dot(M, linparas)
+        d, m, s, _ = fm_charge_transfer(nonlin_paras, data, return_where_finite=True, **fm_paras)
+        model_canvas = np.dot(m, linparas)
         model_canvas = np.reshape(model_canvas, data.data.shape)
 
         ################################
@@ -706,7 +714,7 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
 
     x = np.arange(2048)
     x_knots_column = np.linspace(0, 2048, N_nodes, endpoint=True).tolist()
-    M_spline_column = get_spline_model(x_knots_column, x, spline_degree=3)
+    m_spline_column = get_spline_model(x_knots_column, x, spline_degree=3)
 
     data = Instrument()
     new_im = np.zeros(im.shape)
@@ -719,49 +727,42 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
 
         nonlin_paras = []
         fm_paras = {"badpixfraction": 0.99, "nodes": N_nodes, "fix_parameters": [],
-                    "regularization": "default", "M_spline": M_spline_column}
+                    "regularization": "default", "M_spline": m_spline_column}
         if 1:  # optimize non linear parameter
             out_log_prob, _, rchi2, linparas, linparas_err = fitfm(nonlin_paras, data, fm_column_background, fm_paras,
                                                                    computeH0=False, scale_noise=False)
             if not np.isfinite(out_log_prob):
                 continue
-            d_masked, M, s, extra_outputs = fm_column_background(nonlin_paras, data, return_where_finite=True,
+            d_masked, m, s, extra_outputs = fm_column_background(nonlin_paras, data, return_where_finite=True,
                                                                  **fm_paras)
             where_finite = extra_outputs["where_trace_finite"]
             data.bad_pixels = np.ones(data.data.shape)
-            d, M, s, _ = fm_column_background(nonlin_paras, data, return_where_finite=True, **fm_paras)
+            d, m, s, _ = fm_column_background(nonlin_paras, data, return_where_finite=True, **fm_paras)
             # print(data.data.shape,d.shape,np.size(where_finite[0]),np.size(d_masked))
             d_masked_canvas = np.zeros(d.shape) + np.nan
             d_masked_canvas[where_finite] = d_masked
 
-            m = np.dot(M, linparas)
+            m = np.dot(m, linparas)
             mad = median_abs_deviation(((d_masked_canvas - m))[np.where(np.isfinite(d_masked_canvas))])
 
             data.bad_pixels = bad_pixels[:, colid]
             data.bad_pixels[np.where(np.abs(d_masked_canvas - m) > 5 * mad)] = np.nan
 
-            # plt.plot(d_masked_canvas,label="d_masked_canvas")
-            # plt.plot(m,label="m")
-            # plt.plot(d_masked_canvas - m,label="r")
-            # plt.plot(np.zeros(m.shape)+5 * mad,label="5 * mad")
-            # plt.plot(np.zeros(m.shape)-5 * mad,label="-5 * mad")
-            # plt.legend()
-            # plt.show()
         if 1:  # optimize non linear parameter
             out_log_prob, _, rchi2, linparas, linparas_err = fitfm(nonlin_paras, data, fm_column_background, fm_paras,
                                                                    computeH0=False, scale_noise=False)
             if not np.isfinite(out_log_prob):
                 continue
-            d_masked, M, s, extra_outputs = fm_column_background(nonlin_paras, data, return_where_finite=True,
+            d_masked, m, s, extra_outputs = fm_column_background(nonlin_paras, data, return_where_finite=True,
                                                                  **fm_paras)
             where_finite = extra_outputs["where_trace_finite"]
             data.bad_pixels = np.ones(data.data.shape)
-            d, M, s, _ = fm_column_background(nonlin_paras, data, return_where_finite=True, **fm_paras)
+            d, m, s, _ = fm_column_background(nonlin_paras, data, return_where_finite=True, **fm_paras)
             # print(data.data.shape,d.shape,np.size(where_finite[0]),np.size(d_masked))
             d_masked_canvas = np.zeros(d.shape) + np.nan
             d_masked_canvas[where_finite] = d_masked
 
-            m = np.dot(M, linparas)
+            m = np.dot(m, linparas)
 
         new_im[:, colid] = im[:, colid] - m
 
@@ -774,10 +775,25 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     return new_rate_file
 
 
-
-def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes = 40,model_charge_transfer=False,
-                              utils_dir=None,coords_offset=(0,0),overwrite=False):
+def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
+                    utils_dir=None, coords_offset=(0, 0), overwrite=False):
     """Invoke forward model noise removal for a list of rate files
+
+    Parameters
+    ----------
+    rate_files
+    stage2_dir
+    clean_dir
+    crds_dir
+    N_nodes
+    model_charge_transfer
+    utils_dir
+    coords_offset
+    overwrite
+
+    Returns
+    -------
+
     """
     # We need to check that the desired output directories exist, and if not create them
     if not os.path.exists(clean_dir):
@@ -787,10 +803,9 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes = 40,mo
     time0 = time.perf_counter()
     print(time0)
 
-
     cleaned_rate_files = []
 
-    for fid,rate_file in enumerate(rate_files):
+    for fid, rate_file in enumerate(rate_files):
 
         outname = os.path.join(clean_dir, os.path.basename(rate_file))
         cleaned_rate_files.append(outname)
@@ -798,14 +813,12 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes = 40,mo
             print(f"Output file {outname} already exists in the cleaned output directory; skipping {rate_file}.")
             continue
 
-        print(f"Processing file {fid+1} of {len(rate_files)}: {rate_file}")
+        print(f"Processing file {fid + 1} of {len(rate_files)}: {rate_file}")
 
-        # forward_model_noise_clean(rate_file, cal_file_dir=stage2_dir, clean_dir=clean_dir)
-        forward_model_noise_clean(rate_file, stage2_dir, clean_dir,crds_dir,
-                                                      N_nodes=N_nodes,
-                                                      model_charge_transfer=model_charge_transfer, utils_dir=utils_dir,
-                                                      coords_offset=coords_offset)
-        # exit()
+        forward_model_noise_clean(rate_file, stage2_dir, clean_dir, crds_dir,
+                                  N_nodes=N_nodes,
+                                  model_charge_transfer=model_charge_transfer, utils_dir=utils_dir,
+                                  coords_offset=coords_offset)
         # Print out the time benchmark
         time1 = time.perf_counter()
         print(f"Runtime so far: {time1 - time0:0.4f} seconds\n")
@@ -814,9 +827,28 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes = 40,mo
 
     return cleaned_rate_files
 
-def compute_normalized_stellar_spectrum(cal_files,utils_dir,crds_dir,coords_offset=(0,0),wv_nodes=None,
-                                        mask_charge_transfer_radius=None,mppool=None,
-                                        ra_dec_point_sources=None,overwrite=False):
+
+def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_offset=(0, 0), wv_nodes=None,
+                                        mask_charge_transfer_radius=None, mppool=None,
+                                        ra_dec_point_sources=None, overwrite=False,targetname=None):
+    """
+
+    Parameters
+    ----------
+    cal_files
+    utils_dir
+    crds_dir
+    coords_offset
+    wv_nodes
+    mask_charge_transfer_radius
+    mppool
+    ra_dec_point_sources
+    overwrite
+
+    Returns
+    -------
+
+    """
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
 
@@ -829,7 +861,8 @@ def compute_normalized_stellar_spectrum(cal_files,utils_dir,crds_dir,coords_offs
     hdulist_sc.close()
 
     splitbasename = os.path.basename(cal_files[0]).split("_")
-    combined_contnorm_spec_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + detector + "_starspec_contnorm_combined_1dspline.fits")
+    combined_contnorm_spec_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[
+        1] + "_" + detector + "_starspec_contnorm_combined_1dspline.fits")
 
     if not overwrite:
         if len(glob(combined_contnorm_spec_filename)):
@@ -837,7 +870,8 @@ def compute_normalized_stellar_spectrum(cal_files,utils_dir,crds_dir,coords_offs
                 new_wavelengths = hdulist[0].data
                 combined_fluxes = hdulist[1].data
                 combined_errors = hdulist[2].data
-                combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+                combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False,
+                                              fill_value=1)
             return combined_star_func
 
     dataobj_list = []
@@ -846,13 +880,13 @@ def compute_normalized_stellar_spectrum(cal_files,utils_dir,crds_dir,coords_offs
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays"])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
                                                                     "threshold_badpix": 100,
                                                                     "mppool": mppool}, True, True])
-        preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d_tmp",
+        preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d",
                                                               "threshold_badpix": 10,
                                                               "mppool": mppool}, True, True])
 
@@ -865,7 +899,7 @@ def compute_normalized_stellar_spectrum(cal_files,utils_dir,crds_dir,coords_offs
             dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
         # mask planets before computing the star spectrum
         if ra_dec_point_sources is not None:
-            for ra_pl,dec_pl in ra_dec_point_sources:
+            for ra_pl, dec_pl in ra_dec_point_sources:
                 where_pl = where_point_source(dataobj, [ra_pl / 1000., dec_pl / 1000.], 0.16)
                 dataobj.bad_pixels[where_pl] = np.nan
 
@@ -880,8 +914,25 @@ def compute_normalized_stellar_spectrum(cal_files,utils_dir,crds_dir,coords_offs
     combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
     return combined_star_func
 
-def compute_starlight_subtraction(cal_files,utils_dir,crds_dir,wv_nodes=None,combined_star_func=None,coords_offset=(0,0),mppool=None):
 
+def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None, combined_star_func=None,
+                                  coords_offset=(0, 0), mppool=None,targetname=None):
+    """
+
+    Parameters
+    ----------
+    cal_files
+    utils_dir
+    crds_dir
+    wv_nodes
+    combined_star_func
+    coords_offset
+    mppool
+
+    Returns
+    -------
+
+    """
     hdulist_sc = fits.open(cal_files[0])
     detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
     if wv_nodes is None:
@@ -896,7 +947,7 @@ def compute_starlight_subtraction(cal_files,utils_dir,crds_dir,wv_nodes=None,com
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays"])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         if combined_star_func is None:
@@ -921,25 +972,50 @@ def compute_starlight_subtraction(cal_files,utils_dir,crds_dir,wv_nodes=None,com
 
     return dataobj_list
 
-def get_combined_regwvs(dataobj_list,wv_sampling=None,mask_charge_transfer_radius=None,use_starsub1d = False):
+
+def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_radius=None, use_starsub=False,recompute=False,starsub_dir='starsub1d'):
+    """
+
+    Parameters
+    ----------
+    dataobj_list
+    wv_sampling
+    mask_charge_transfer_radius
+    use_starsub1d
+
+    Returns
+    -------
+
+    """
     regwvs_dataobj_list = []
     for dataobj in dataobj_list:
 
-        if use_starsub1d:
-            starsub_filename = os.path.join(dataobj.utils_dir,"starsub1d",os.path.basename(dataobj.filename))
-            starsub_dataobj = JWSTNirspec_cal(starsub_filename,crds_dir=dataobj.crds_dir, utils_dir=dataobj.utils_dir)
-            if dataobj.data_unit == 'MJy':
+        if use_starsub:
+            starsub_filename = os.path.join(dataobj.utils_dir, starsub_dir, os.path.basename(dataobj.filename))
+            starsub_dataobj = JWSTNirspec_cal(starsub_filename, crds_dir=dataobj.crds_dir, utils_dir=dataobj.utils_dir)
+            if (dataobj.data_unit == 'MJy') and (starsub_dataobj.data_unit == 'MJy/sr'):
                 replace_data = dataobj.convert_MJy_per_sr_to_MJy(data_in_MJy_per_sr=starsub_dataobj.data)
-            elif dataobj.data_unit == "MJy/sr":
+            elif (dataobj.data_unit == 'MJy/sr') and (starsub_dataobj.data_unit == 'MJy/sr'):
                 replace_data = starsub_dataobj.data
-            regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"].replace("_regwvs.fits","_starsub1d_regwvs.fits")
+            elif (dataobj.data_unit =='MJy') and (starsub_dataobj.data_unit == 'MJy'):
+                replace_data = starsub_dataobj.data
+            elif (dataobj.data_unit =='MJy/sr') and (starsub_dataobj.data_unit == 'MJy'):
+                print('Exception: data obj in MJy/sr and starsub in MJy')
+                raise Exception('conversion from MJy to MJy/sr not implemented yet.')
+            regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"].replace("_regwvs.fits",
+                                                                                             "_starsub1d_regwvs.fits")
         else:
             replace_data = None
             regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"]
 
-        regwvs_dataobj = dataobj.reload_interpdata_regwvs(load_filename=regwvs_filename)
+        if not recompute:
+            regwvs_dataobj = dataobj.reload_interpdata_regwvs(load_filename=regwvs_filename)
+        else:
+            print('RECOMPUTING GET_combined_REGWVS...')
+            regwvs_dataobj = None
         if regwvs_dataobj is None:
-            regwvs_dataobj = dataobj.compute_interpdata_regwvs(save_utils=regwvs_filename,wv_sampling=wv_sampling,replace_data=replace_data)
+            regwvs_dataobj = dataobj.compute_interpdata_regwvs(save_utils=regwvs_filename, wv_sampling=wv_sampling,
+                                                               replace_data=replace_data)
         regwvs_dataobj_list.append(regwvs_dataobj)
 
     regwvs_combdataobj = JWSTNirspec_multiple_cals(regwvs_dataobj_list)
@@ -948,7 +1024,19 @@ def get_combined_regwvs(dataobj_list,wv_sampling=None,mask_charge_transfer_radiu
 
     return regwvs_combdataobj
 
-def save_combined_regwvs(regwvs_combdataobj,out_filename):
+
+def save_combined_regwvs(regwvs_combdataobj, out_filename):
+    """
+
+    Parameters
+    ----------
+    regwvs_combdataobj
+    out_filename
+
+    Returns
+    -------
+
+    """
     hdulist = fits.HDUList()
     hdulist.append(fits.ImageHDU(data=regwvs_combdataobj.data, name='DATA'))
     hdulist.append(fits.ImageHDU(data=regwvs_combdataobj.noise, name='ERR'))
@@ -963,7 +1051,19 @@ def save_combined_regwvs(regwvs_combdataobj,out_filename):
         hdulist.writeto(out_filename, clobber=True)
     hdulist.close()
 
-def get_2D_point_cloud_interpolator(regwvs_combdataobj,wv0):
+
+def get_2D_point_cloud_interpolator(regwvs_combdataobj, wv0):
+    """
+
+    Parameters
+    ----------
+    regwvs_combdataobj
+    wv0
+
+    Returns
+    -------
+
+    """
     if isinstance(regwvs_combdataobj, str):
         with fits.open(regwvs_combdataobj) as hdulist:
             data = hdulist["DATA"].data
@@ -976,21 +1076,22 @@ def get_2D_point_cloud_interpolator(regwvs_combdataobj,wv0):
         dra_as_array = regwvs_combdataobj.dra_as_array
         ddec_as_array = regwvs_combdataobj.ddec_as_array
         bad_pixels = regwvs_combdataobj.bad_pixels
-        wv_sampling =  regwvs_combdataobj.wv_sampling
+        wv_sampling = regwvs_combdataobj.wv_sampling
 
-    wv0_index = np.argmin(np.abs(wv_sampling-wv0))
+    wv0_index = np.argmin(np.abs(wv_sampling - wv0))
 
     where_good = np.where(np.isfinite(bad_pixels[:, wv0_index]))
-    X = dra_as_array[where_good[0], wv0_index]
-    Y = ddec_as_array[where_good[0], wv0_index]
-    Z = data[where_good[0], wv0_index]
-    filtered_triangles = filter_big_triangles(X, Y, 0.2)
+    x = dra_as_array[where_good[0], wv0_index]
+    y = ddec_as_array[where_good[0], wv0_index]
+    z = data[where_good[0], wv0_index]
+    filtered_triangles = filter_big_triangles(x, y, 0.2)
     # Create filtered triangulation
-    filtered_tri = tri.Triangulation(X, Y, triangles=filtered_triangles)
+    filtered_tri = tri.Triangulation(x, y, triangles=filtered_triangles)
     # Perform LinearTriInterpolator for filtered triangulation
-    pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
+    pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, z)
 
     return pointcloud_interp
+
 
 ############################################################################
 #  Function to invoke all reduction steps in one go
@@ -1002,16 +1103,27 @@ def run_complete_stage1_2_clean_reduction(input_dir, output_root_dir=None, overw
     This will run the complete reduction from uncal files to cal files. It will take a while.
 
     If files already exist, repeat reductions are skipped, unless overwrite is set True
+
+    Parameters
+    ----------
+    input_dir
+    output_root_dir
+    overwrite
+
+    Returns
+    -------
+
     """
 
     if output_root_dir is None:
         output_root_dir = input_dir
 
     # Set up subdirectory paths
-    det1_dir = os.path.join(output_root_dir,"stage1")    # Detector1 pipeline outputs will go here
-    spec2_dir = os.path.join(output_root_dir,"stage2")   # Initial spec2 pipeline outputs will go here
-    clean_det1_dir = os.path.join(output_root_dir,"stage1_clean")   # noise-cleaned Detector1 pipeline outputs will go here
-    clean_spec2_dir = os.path.join(output_root_dir,"stage2_clean")  # noise-cleaned Spec2 pipeline outputs will go here
+    det1_dir = os.path.join(output_root_dir, "stage1")  # Detector1 pipeline outputs will go here
+    spec2_dir = os.path.join(output_root_dir, "stage2")  # Initial spec2 pipeline outputs will go here
+    clean_det1_dir = os.path.join(output_root_dir,
+                                  "stage1_clean")  # noise-cleaned Detector1 pipeline outputs will go here
+    clean_spec2_dir = os.path.join(output_root_dir, "stage2_clean")  # noise-cleaned Spec2 pipeline outputs will go here
 
     # Find input rate files
     uncal_files = find_files_to_process(input_dir, 'uncal.fits')

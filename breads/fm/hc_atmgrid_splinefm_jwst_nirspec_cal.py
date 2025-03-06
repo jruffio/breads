@@ -1,15 +1,11 @@
-import numpy as np
-from copy import copy
-import pandas as pd
-from astropy import constants as const
-from  scipy.interpolate import interp1d
-from PyAstronomy import pyasl
 import astropy.units as u
-
-from breads.utils import broaden
-# from breads.utils import LPFvsHPF
+import numpy as np
+from PyAstronomy import pyasl
+from astropy import constants as const
+from scipy.interpolate import interp1d
 
 from breads.utils import get_spline_model
+
 
 
 # pos: (x,y) or fiber, position of the companion

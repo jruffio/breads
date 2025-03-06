@@ -1,9 +1,9 @@
+from copy import copy
+
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import lsq_linear
 from scipy.special import loggamma
-import matplotlib.pyplot as plt
-import warnings
-from copy import copy
 
 __all__ =  ('fitfm', 'log_prob', 'combined_log_prob', 'nlog_prob')
 

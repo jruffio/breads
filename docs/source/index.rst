@@ -27,10 +27,12 @@ Breads has been developed by Jean-Baptiste Ruffio (UC San Diego) and collaborato
 
    overview.rst
    installation.rst
+   tutorials.rst
    data_classes.rst
    forward_models.rst
    fitting.rst
    utils.rst
+   development.rst
 
 
 In addition to these docs, there are also separate repositories with example code and notebooks for particular datasets:
