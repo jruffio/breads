@@ -2,6 +2,7 @@ import os
 import time
 from glob import glob
 from copy import copy
+import fnmatch
 
 import numpy as np
 from scipy.stats import median_abs_deviation
@@ -41,7 +42,7 @@ from breads.utils import get_spline_model
 #   run_noise_clean
 #   run_stage2
 
-def find_files_to_process(input_dir, filetype='uncal.fits'):
+def find_files_to_process(input_dir, filetype='uncal.fits',exp_numbers=None):
     """ Utility function to find files of a given type """
 
     if "jw0" in filetype:
@@ -52,6 +53,11 @@ def find_files_to_process(input_dir, filetype='uncal.fits'):
     for file in files:
         print(file)
     print('Found ' + str(len(files)) + ' input files to process')
+
+    if exp_numbers is not None:
+        # Use fnmatch to filter only the wanted exposure numbers
+        files = [f for f in files if any(fnmatch.fnmatch(os.path.basename(f), "jw0*_*_{0:05d}_*".format(num)) for num in exp_numbers)]
+
     return files
 
 
@@ -254,7 +260,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d_tmp",
                                                               "threshold_badpix": 10,
                                                               "mppool": mypool}, True, True])
-        preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, False])
+        preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, True])
 
         dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)

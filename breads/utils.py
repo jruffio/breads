@@ -814,12 +814,11 @@ def propagate_coordinates_at_epoch(targetname, date, verbose=True):
     """
 
     # Configure Simbad query to retrieve some extra fields
-    if 'pmra' not in Simbad._VOTABLE_FIELDS:
-        Simbad.add_votable_fields("pmra")  # Retrieve proper motion in RA
-    if 'pmdec' not in Simbad._VOTABLE_FIELDS:
-        Simbad.add_votable_fields("pmdec")  # Retrieve proper motion in Dec.
-    if 'plx' not in Simbad._VOTABLE_FIELDS:
-        Simbad.add_votable_fields("plx")  # Retrieve parallax
+    Simbad.add_votable_fields("ra")  # Retrieve proper motion in RA
+    Simbad.add_votable_fields("dec")  # Retrieve proper motion in RA
+    Simbad.add_votable_fields("pmra")  # Retrieve proper motion in RA
+    Simbad.add_votable_fields("pmdec")  # Retrieve proper motion in Dec.
+    Simbad.add_votable_fields("plx")  # Retrieve parallax
 
     if verbose:
         print(f"Retrieving SIMBAD coordinates for {targetname}")
@@ -827,14 +826,14 @@ def propagate_coordinates_at_epoch(targetname, date, verbose=True):
     result_table = Simbad.query_object(targetname)
 
     # Get the coordinates and proper motion from the result table
-    ra = result_table["RA"][0]
-    dec = result_table["DEC"][0]
-    pm_ra = result_table["PMRA"][0]
-    pm_dec = result_table["PMDEC"][0]
-    plx = result_table["PLX_VALUE"][0]
+    ra = result_table["ra"][0]
+    dec = result_table["dec"][0]
+    pm_ra = result_table["pmra"][0]
+    pm_dec = result_table["pmdec"][0]
+    plx = result_table["plx_value"][0]
 
     # Create a SkyCoord object with the coordinates and proper motion
-    target_coord_j2000 = astropy.coordinates.SkyCoord(ra, dec, unit=(u.hourangle, u.deg),
+    target_coord_j2000 = astropy.coordinates.SkyCoord(ra, dec, unit=(u.deg, u.deg),
                                                       pm_ra_cosdec=pm_ra * u.mas / u.year,
                                                       pm_dec=pm_dec * u.mas / u.year,
                                                       distance=astropy.coordinates.Distance(parallax=plx * u.mas),
