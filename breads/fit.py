@@ -22,7 +22,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
         computeH0: If true (default), compute the probability of the model removing the first element of the linear
             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
             non-linear parameters
-        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+        bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
             e.g. ([0,0,...], [np.inf,np.inf,...]) default no bounds.
             Each numpy array must have shape (N_linear_parameters,).
@@ -296,7 +296,7 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,b
         computeH0: If true (default), compute the probability of the model removing the first element of the linear
             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
             non-linear parameters
-        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+        bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
             e.g. ([0,0,...], [np.inf,np.inf,...]). default no bounds.
             Each numpy array must have shape (N_linear_parameters,).
@@ -346,7 +346,7 @@ def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,
         computeH0: If true (default), compute the probability of the model removing the first element of the linear
             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
             non-linear parameters
-        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+        bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
             e.g. ([0,0,...], [np.inf,np.inf,...]) default no bounds.
             Each numpy array must have shape (N_linear_parameters,).

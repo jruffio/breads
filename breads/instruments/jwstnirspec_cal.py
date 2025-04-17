@@ -2799,7 +2799,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
            init_centroid=None, fit_cen=True, fit_angle = False,
            ann_width=None, padding=None, sector_area=None, RDI_folder_suffix=None,
            linear_interp=True, rotate_psf=0.0, flipx=False, psf_spaxel_area=None,
-           debug_init=None,debug_end=None):
+           debug_init=None,debug_end=None,save_combined_boolean=False):
     """
     Fit a model PSF (psfs, psfX, psfY) to a combined dataset (dataobj_list).
 
@@ -2927,6 +2927,23 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
         hdulist.append(pyfits.PrimaryHDU(data=bestfit_coords, header=pyfits.Header(cards=wpsfsfit_header)))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
+
+        if save_combined_boolean == True:
+            combined_fname = out_filename.replace(".fits",'_combined.fits')
+            valid_rows = []
+            for _i_ in range(all_interp_wvs.shape[0]):
+                if np.sum(np.isnan(all_interp_wvs[_i_,:])) == 0:
+                    valid_rows.append(_i_)
+            wv_sampling = all_interp_wvs[valid_rows[0],:]
+            hdulist = pyfits.HDUList()
+            hdulist.append(pyfits.PrimaryHDU(data=all_interp_psfsub))
+            hdulist.append(pyfits.ImageHDU(data=all_interp_psfmodel, name='DATA'))
+            hdulist.append(pyfits.ImageHDU(data=all_interp_ra, name='RA'))
+            hdulist.append(pyfits.ImageHDU(data=all_interp_dec, name='DEC'))
+            hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WV_SAMPLING'))
+            hdulist.append(pyfits.ImageHDU(data=all_interp_badpix, name='BADPIX'))
+            hdulist.writeto(combined_fname, overwrite=True)
+            hdulist.close()
 
         RDI_psfsub_dir = os.path.join(os.path.dirname(out_filename), "RDI_psfsub"+RDI_folder_suffix)
         if not os.path.exists(RDI_psfsub_dir):
