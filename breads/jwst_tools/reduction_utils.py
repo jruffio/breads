@@ -45,10 +45,10 @@ from breads.utils import get_spline_model
 def find_files_to_process(input_dir, filetype='uncal.fits',exp_numbers=None):
     """ Utility function to find files of a given type """
 
-    if "jw0" in filetype:
+    if filetype.startswith('jw'):
         files = glob(os.path.join(input_dir, filetype))
     else:
-        files = glob(os.path.join(input_dir, "jw0*_" + filetype))
+        files = glob(os.path.join(input_dir, "jw*_" + filetype))
     files.sort()
     for file in files:
         print(file)
@@ -56,7 +56,7 @@ def find_files_to_process(input_dir, filetype='uncal.fits',exp_numbers=None):
 
     if exp_numbers is not None:
         # Use fnmatch to filter only the wanted exposure numbers
-        files = [f for f in files if any(fnmatch.fnmatch(os.path.basename(f), "jw0*_*_{0:05d}_*".format(num)) for num in exp_numbers)]
+        files = [f for f in files if any(fnmatch.fnmatch(os.path.basename(f), "jw*_*_{0:05d}_*".format(num)) for num in exp_numbers)]
 
     return files
 
