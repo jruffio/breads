@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from  scipy.interpolate import interp1d
+from scipy.interpolate import interp1d
 import os
 import scipy.io as scio
 import astropy.io.fits as pyfits
@@ -10,6 +10,9 @@ from breads.grid_search import grid_search
 from breads.fm.hc_splinefm import hc_splinefm
 from breads.fm.iso_hpffm import iso_hpffm
 from breads.fm.hc_hpffm import hc_hpffm
+
+import warnings
+warnings.simplefilter('ignore')
 
 if __name__ == "__main__":
     try:
@@ -60,8 +63,8 @@ if __name__ == "__main__":
     # fm_func = hc_hpffm
 
     if 0: # Example code to test the forward model
-        # nonlin_paras = [-15,37,10] # rv (km/s), y (pix), x (pix)
-        nonlin_paras = [-15,33+0,4-0] # rv (km/s), y (pix), x (pix)
+        nonlin_paras = [-15,37,10] # rv (km/s), y (pix), x (pix)
+        # nonlin_paras = [-15,33+0,4-0] # rv (km/s), y (pix), x (pix)
         # nonlin_paras = [-15,46,14] # rv (km/s), y (pix), x (pix)
         # d is the data vector a the specified location
         # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
@@ -73,6 +76,8 @@ if __name__ == "__main__":
         d = d / s
         M = M / s[:, None]
         from scipy.optimize import lsq_linear
+        #print('how big:', np.size(M), np.size(d))
+        #print('how many nans:', np.sum(np.isnan(M)), np.sum(np.isnan(d)))
         paras = lsq_linear(M, d).x
         m = np.dot(M,paras)
         paras_H0 = lsq_linear(M[:,1::], d).x
@@ -104,9 +109,11 @@ if __name__ == "__main__":
     rvs = np.array([-15])
     ys = np.arange(ny)
     xs = np.arange(nx)
-    log_prob,log_prob_H0,rchi2,linparas,linparas_err = grid_search([rvs,ys,xs],dataobj,fm_func,fm_paras,numthreads=numthreads)
+    log_prob,log_prob_H0,rchi2,linparas,linparas_err = grid_search([rvs,ys,xs],dataobj,fm_func,fm_paras,numthreads=numthreads, computeH0=True)
     N_linpara = linparas.shape[-1]
 
+    # print('how big:',np.size(log_prob), np.size(log_prob_H0))
+    # print('how many nans:',np.sum(np.isnan(log_prob)), np.sum(np.isnan(log_prob_H0)))
     k,l,m = np.unravel_index(np.nanargmax(log_prob-log_prob_H0),log_prob.shape)
     print("best fit parameters: rv={0},y={1},x={2}".format(rvs[k],ys[l],xs[m]) )
     print(np.nanmax(log_prob-log_prob_H0))
@@ -117,13 +124,14 @@ if __name__ == "__main__":
     plt.subplot(1,2,1)
     snr_map = linparas[k,:,:,0]/linparas_err[k,:,:,0]
     plt.imshow(snr_map,origin="lower")
-    plt.clim([0,50])
+    plt.clim([np.nanmin(snr_map),np.nanmax(snr_map)])
     cbar = plt.colorbar()
     cbar.set_label("SNR")
     # plt.plot(out[:,0,0,2])
+    log_prob_diff = log_prob[k,:,:]-log_prob_H0[k,:,:]
     plt.subplot(1,2,2)
-    plt.imshow(log_prob[k,:,:]-log_prob_H0[k,:,:],origin="lower")
-    plt.clim([0,100])
+    plt.imshow(log_prob_diff,origin="lower")
+    plt.clim([0, np.nanmax(np.where(np.isfinite(log_prob_diff), log_prob_diff, np.nan))])
     cbar = plt.colorbar()
     cbar.set_label("log_prob_H1 - log_prob_H0")
     plt.show()
