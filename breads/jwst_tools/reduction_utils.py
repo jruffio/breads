@@ -1045,10 +1045,7 @@ def save_combined_regwvs(regwvs_combdataobj, out_filename):
     hdulist.append(fits.ImageHDU(data=regwvs_combdataobj.wavelengths, name='WAVE'))
     hdulist.append(fits.ImageHDU(data=regwvs_combdataobj.wv_sampling, name='WV_SAMPLING'))
     hdulist.append(fits.ImageHDU(data=regwvs_combdataobj.bad_pixels, name='BADPIX'))
-    try:
-        hdulist.writeto(out_filename, overwrite=True)
-    except TypeError:
-        hdulist.writeto(out_filename, clobber=True)
+    hdulist.writeto(out_filename, overwrite=True)
     hdulist.close()
 
 
