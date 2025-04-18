@@ -20,6 +20,7 @@ from scipy.ndimage import generic_filter, median_filter
 from scipy.optimize import minimize, curve_fit, lsq_linear
 from scipy.signal import convolve2d
 from scipy.stats import median_abs_deviation
+from tqdm import tqdm
 
 import breads.utils as utils
 from breads.instruments.instrument import Instrument
@@ -3120,7 +3121,6 @@ def rprint(string):
 def _build_cube_task(inputs):
     X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inputs
 
-    rprint("computing _build_cube_task id: {} wave: {}".format(wv_id,wv))  
     psf_interp = _interp_psf(psf_interp_paras)
 
     outs = [] 
@@ -3187,7 +3187,7 @@ def build_cube(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
         debug_init = 0
     if debug_end is None:
         debug_end = np.size(wv_sampling)
-    print('debug range: {} {}'.format(debug_init, debug_end))
+    print(f'Processing wavelength indices in range: {debug_init} to {debug_end}')
 
     if N_pix_min is None:
         N_pix_min = (np.pi * aper_radius ** 2 / 0.01 * N_dithers) / 4
@@ -3213,13 +3213,15 @@ def build_cube(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
     print() 
 
     #step 2 map _build_cube_task over input list 
-    if parallel_flag:        
+    if parallel_flag:
         print('starting parallel _build_cube_task...')
-        outputs = mppool.map(_build_cube_task,inputs)
+        # Iterate calculation in parallel, showing a progress bar of percentage completion
+        outputs = list(tqdm(mppool.imap(_build_cube_task, inputs), total=len(inputs), ncols=100))
     else:
         print('starting serial _build_cube_task...')
         outputs = []
-        for inp in inputs:
+        # Iterate calculation serially, also showing a progress bar of percentage completion
+        for inp in tqdm(inputs, total=len(inputs), dynamic_ncols=True):
             outputs.append(_build_cube_task(inp))
     print()
     
