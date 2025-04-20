@@ -42,8 +42,26 @@ from breads.utils import get_spline_model
 #   run_noise_clean
 #   run_stage2
 
-def find_files_to_process(input_dir, filetype='uncal.fits',exp_numbers=None):
-    """ Utility function to find files of a given type """
+def find_files_to_process(input_dir, filetype='uncal.fits', exp_numbers=None):
+    """ Utility function to find files of a given type
+
+    Parameters
+    ----------
+    input_dir : str
+        Input directory to search for files
+    filetype : str
+        Filename match pattern. Either a simple ending string like 'uncal.fits' or a more
+        complex regular expression search pattern. This will be used to search the
+        input directory for all FITS files matching this pattern.
+    exp_numbers :  list or ndarray of ints
+        Optional list of exposure numers. The list of files will be filtered to contiain
+        only this subset of exposure numbers.
+
+    Returns
+    -------
+    files : list of str
+        List of filenames found in input_dir matching the filetype (and exp_numbers, if provided)
+    """
 
     if filetype.startswith('jw'):
         files = glob(os.path.join(input_dir, filetype))
@@ -143,6 +161,19 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
 
     Currently only tested on NIRSpec IFU data
 
+
+    Parameters
+    ----------
+    rate_files
+    output_dir
+    skip_cubes
+    overwrite
+    TA
+
+    Returns
+    -------
+    cal_files : list of str
+        List of cal filenames produced by stage 2
     """
     from jwst.pipeline import Spec2Pipeline
 

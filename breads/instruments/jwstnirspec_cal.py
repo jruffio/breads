@@ -32,21 +32,42 @@ class JWSTNirspec_cal(Instrument):
     def __init__(self, filename=None, crds_dir=None, utils_dir=None, save_utils=True,
                  load_utils=True,
                  preproc_task_list = None,
-                 verbose=True,wv_ref=None):
+                 verbose=True, wv_ref=None):
         """JWST NIRSpec 2D calibrated data.
 
         #TODO write param docs
 
         Parameters
         ----------
-        filename
-        crds_dir
-        utils_dir
-        save_utils
-        load_utils
-        preproc_task_list
-        verbose
-        wv_ref
+        filename : str
+            Filename of a JWST cal file to load
+        crds_dir : str
+            Path to CRDS references directory
+        utils_dir : str
+            Path to a "utils" directory to write intermediate data products
+        save_utils : bool
+            Save outputs into utils directory?
+        load_utils : bool
+            load [something??] from utils directory?
+        preproc_task_list : list of strings
+            Very complex. List of tasks to run on the data. See further docs below.
+        verbose : bool
+            Be more verbose in output?
+        wv_ref : float
+            Reference wavelength. If not set, the shortest wavelength will be used by default.
+
+
+
+        About the "preproc_task_list" parameter. Each task should be a list containing:
+            task[0] = the name of the class method
+            task[1] = a dictionary with any relevant method arguments (but not including save_utils, see task[2])
+                If not defined, it assumes no parameters are needed (task[1] = {}).
+            task[2] = a boolean saying if the outputs should be saved in the utils folder.
+                Default to class save_utils if not defined for the task.
+                If it is a string instead, it will be saved with the string as the filename.
+            task[3] = a boolean saying if we should attempt to load the data from the utils folder.
+                Default to class load_utils if not defined for the task.
+
         """
         super().__init__('jwstnirspec_cal', verbose=verbose)
 
@@ -223,7 +244,7 @@ class JWSTNirspec_cal(Instrument):
         crop_Npix_from_trace_edges
         mad_threshold
         window_size
-        save_utils : bool
+        save_utils : bool or string
             Save the computed bad pixel map (nans=bad) into the utils directory
             Default filename (set save_utils as a string instead of bool to override filename):
             os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_med_filt_badpix.fits"))
@@ -251,7 +272,7 @@ class JWSTNirspec_cal(Instrument):
                 self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges)
 
         if save_utils:
-            if isinstance(save_utils,str):
+            if isinstance(save_utils, str):
                 out_filename = save_utils
             else:
                 out_filename = self.default_filenames["compute_med_filt_badpix"]
@@ -266,6 +287,7 @@ class JWSTNirspec_cal(Instrument):
 
     def reload_med_filt_badpix(self, load_filename=None):
         """ Reload and apply bad pixel map from med_filt_badpix.
+
         Parameters
         ----------
         load_filename
@@ -285,7 +307,7 @@ class JWSTNirspec_cal(Instrument):
         self.bad_pixels *= new_badpix
         return new_badpix
 
-    def compute_coordinates_arrays(self, save_utils=False,center_with_targname=True,from_other_filename =None,targname=None):
+    def compute_coordinates_arrays(self, save_utils=False, center_with_targname=True, from_other_filename =None, targname=None):
         """ Determine the relative coordinates in the focal plane relative to the target.
         Compute the coordinates {wavelen, delta_ra, delta_dec, area} for each pixel in a 2D image
 
@@ -1876,8 +1898,8 @@ def untangle_dq(arr, verbose=True):
 
 
 def set_nans(arr, n):
-    """
-
+    """ Set the first and last n non-NaN values of an array to NaN.
+    (TODO document why this is useful ???)
 
     Parameters
     ----------
@@ -1886,6 +1908,7 @@ def set_nans(arr, n):
 
     Returns
     -------
+    modified copy of arr
 
     """
     # Create a copy of the input array
@@ -1908,14 +1931,31 @@ def set_nans(arr, n):
     return arr_copy
 
 
-def crop_trace_edges(im, N_pix,trace_id_map=None):
+def crop_trace_edges(im, N_pix, trace_id_map=None):
+    """ ???
+    TODO document
+
+    Parameters
+    ----------
+    im : ndarray
+        Image
+    N_pix : int
+        Number of pixels to crop?
+
+    trace_id_map
+
+    Returns
+    -------
+    im_out : ndarray
+        ???
+    """
     if trace_id_map is None:
         trace_id_map = np.zeros(im.shape)
     im_out = np.zeros(im.shape) + np.nan
     unique_trace_ids = np.unique(trace_id_map[np.where(np.isfinite(trace_id_map))])
     for trace_id in unique_trace_ids:
         where_trace = np.where(trace_id_map==trace_id)
-        row_id_min,row_id_max = np.min(where_trace[0]),np.max(where_trace[0])
+        row_id_min, row_id_max = np.min(where_trace[0]), np.max(where_trace[0])
         tmp_im = copy(im[row_id_min:row_id_max,:])
         tmp_im[np.where(trace_id_map[row_id_min:row_id_max,:]!=trace_id)] = np.nan
         new_slice = set_nans(tmp_im.T, N_pix).T
@@ -1926,6 +1966,20 @@ def crop_trace_edges(im, N_pix,trace_id_map=None):
 
 
 def _task_normrows(paras, plot=False):
+    """ Worker function for normalizing rows, for use in parallelized computations
+
+    Parameters
+    ----------
+    paras : tuple
+        im_rows, im_wvs_rows, noise_rows, badpix_rows, x_nodes, star_model, threshold, star_sub_mode,regularization,reg_mean_map,reg_std_map
+    plot : bool
+        Make and display a plot?
+
+    Returns
+    -------
+    new_im_rows, new_noise_rows, new_badpix_rows, res,paras_out
+
+    """
     im_rows, im_wvs_rows, noise_rows, badpix_rows, x_nodes, star_model, threshold, star_sub_mode,regularization,reg_mean_map,reg_std_map = paras
 
     new_im_rows = np.array(copy(im_rows), '<f4')  # .byteswap().newbyteorder()
@@ -2152,6 +2206,17 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
 
 
 def _task_normslice_2dspline(paras):
+    """ Worker function for normalizing slices via 2d spline
+
+    Parameters
+    ----------
+    paras : tuple containing many values
+        im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map
+
+    Returns
+    -------
+
+    """
     im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map = paras
 
     new_im = np.zeros(im.shape)+np.nan#np.array(copy(im), '<f4')  # .byteswap().newbyteorder()
@@ -2217,6 +2282,33 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
                               threshold=10, use_set_nans=False,
                               N_wvs_nodes=20, wv_nodes=None, delta_ifuy=0.05, ifuy_nodes=None,
                               reg_mean_map=None, reg_std_map=None, wv_ref = None):
+    """ Normalize sliaces using a 2D spline
+
+    Parameters
+    ----------
+    image
+    im_wvs
+    im_ifuy
+    noise
+    badpixs
+    trace_id_map
+    star_model
+    mypool
+    threshold
+    use_set_nans
+    N_wvs_nodes
+    wv_nodes
+    delta_ifuy
+    ifuy_nodes
+    reg_mean_map
+    reg_std_map
+    wv_ref
+
+    Returns
+    -------
+    new_image, new_noise, new_badpixs, new_res, new_spline_paras
+
+    """
 
     if noise is None:
         noise = np.ones(image.shape)
@@ -2413,12 +2505,40 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
 
 
 def where_point_source(dataobj, radec_as, rad_as):
+    """Which pixels in a point cloud are within some given radius of a given location?
+
+    Parameters
+    ----------
+    dataobj : data object
+        Point cloud data object
+    radec_as : tuple of floats
+        RA, Dec coordinates of interest
+    rad_as : float
+        Radius in arcseconds
+
+    Returns
+    -------
+
+    """
     ra, dec = radec_as
     dist2pointsource_as = np.sqrt((dataobj.dra_as_array - ra) ** 2 + (dataobj.ddec_as_array - dec) ** 2)
     return np.where(dist2pointsource_as < rad_as)
 
 
 def PCA_detec(im, im_err, im_badpixs, N_KL=5):
+    """
+
+    Parameters
+    ----------
+    im
+    im_err
+    im_badpixs
+    N_KL
+
+    Returns
+    -------
+
+    """
     im_cp = im * im_badpixs / im_err
 
     new_im = im_cp[np.where(np.nansum(np.isfinite(im_cp), axis=1) > im.shape[1] // 2)[0], :]
@@ -2451,6 +2571,21 @@ def PCA_detec(im, im_err, im_badpixs, N_KL=5):
 
 
 def PCA_wvs_axis(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
+    """
+
+    Parameters
+    ----------
+    wavelengths
+    im
+    im_err
+    im_badpixs
+    bin_size
+    N_KL
+
+    Returns
+    -------
+
+    """
     ny, nx = im.shape
 
     new_wvs = np.arange(np.nanmin(wavelengths*im_badpixs), np.nanmax(wavelengths*im_badpixs), bin_size)
@@ -3172,6 +3307,20 @@ def rprint(string):
 
 
 def _build_cube_task(inputs):
+    """ Worker function for creating a cube slice, for one single wavelength.
+    Called from build_cube(); not intended to be called directly by users.
+
+    Parameters
+    ----------
+    inputs : tuple containing many parameters
+        X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min
+
+    Returns
+    -------
+    outs : list of lists
+        Complex nested bunch of stuff... TODO figure out and document
+
+    """
     X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inputs
 
     psf_interp = _interp_psf(psf_interp_paras)
@@ -3204,9 +3353,38 @@ def _build_cube_task(inputs):
     return outs
 
 
-def build_cube(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
+def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
                     linear_interp=True, mppool=None, aper_radius=0.5,
-                    debug_init=None,debug_end=None,N_pix_min=None):
+                    debug_init=None, debug_end=None, N_pix_min=None):
+    """ Build a datacube, based on the forward modeling processed results
+
+    Parameters
+    ----------
+    combdataobj
+    psfs
+    psfX
+    psfY
+    ra_vec
+    dec_vec
+    out_filename
+    linear_interp : bool
+        Use linear interpolation (TODO document what is being interpolated ?)
+    mppool : multiprocessing.Pool or None
+        if a multiprocessing Pool is supplied, the calculation will use that pool to run in parallel.
+        Otherwise it will run in serial on a single process.
+    aper_radius : float
+        Aperture radius
+    debug_init : int or None
+        Minimum wavelength image to limit the calculation. Optional, for debugging.
+    debug_end : int or None
+        Maximum wavelength image to limit the calculation. Optional, for debugging.
+    N_pix_min
+
+    Returns
+    -------
+    flux_cube, fluxerr_cube, ra_grid, dec_grid
+
+    """
     if "regwvs" not in combdataobj.coords:
         raise Exception("This data object needs to be interpolated on regular wavelength grid. See dataobj.compute_interpdata_regwvs")
         
@@ -3302,6 +3480,25 @@ def build_cube(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
 
 
 def cube_matchedfilter(flux_cube,fluxerr_cube,wv_sampling,ra_grid, dec_grid,planet_f, rv=0,out_filename=None,outlier_threshold=None):
+    """
+
+    Parameters
+    ----------
+    flux_cube
+    fluxerr_cube
+    wv_sampling
+    ra_grid
+    dec_grid
+    planet_f
+    rv
+    out_filename
+    outlier_threshold
+
+    Returns
+    -------
+    snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
+
+    """
     comp_spec = planet_f(wv_sampling * (1 - rv / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
     comp_spec = comp_spec * (wv_sampling * u.um) ** 2 / const.c  # from  Flambda to Fnu
     comp_spec = comp_spec.to(u.MJy).value
@@ -3348,6 +3545,25 @@ def cube_matchedfilter(flux_cube,fluxerr_cube,wv_sampling,ra_grid, dec_grid,plan
 
 def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=None, spec_R_sampling=None,spline2d=False,
                       masking_radius = None, masking_ifu_location=None,interpolation=None):
+    """ Get continuum normalized spectrum ?
+
+    Parameters
+    ----------
+    dataobj_list
+    out_filename
+    load_utils
+    mppool
+    spec_R_sampling
+    spline2d
+    masking_radius
+    masking_ifu_location
+    interpolation
+
+    Returns
+    -------
+    new_wavelengths, combined_fluxes, combined_errors
+
+    """
     if interpolation is None:
         interpolation = "linear"
     if 1 and load_utils and len(glob(out_filename)):
