@@ -69,6 +69,23 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
     intended to be used with breads for IFU high contrast
 
     Currently only tested on NIRSpec IFU data
+
+    For each input file, before doing any reduction, the expected output filename
+    is inferred, and it checks whether that output file already exists.
+    If so, then it is NOT reduced again by default.
+    Set the overwrite flag to True to re-reduce files
+
+    Parameters
+    ----------
+    uncal_files : list of strings
+        Filenames of uncal files to reduce
+    output_dir : string
+        Directory path for where to put the output files
+    overwrite : bool
+        Re-reduce and overwrite outputs, if these data were already reduced before?
+        Default is to SKIP re-reducing anything already reduced.
+    maximum_cores : string
+        Passed to JWST pipeline functions that use multiprocessing, such as ramp fit
     """
     from jwst.pipeline import Detector1Pipeline
 
@@ -209,7 +226,43 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
                             save_plots=False,
                             filename_suffix="_webbpsf",
                             overwrite=False,
-                           targetname=None):
+                            targetname=None):
+    """
+
+
+    Parameters
+    ----------
+    cal_files : list of strings
+        Filenames of stage 2 reduced Cal files to process
+    utils_dir
+    crds_dir
+    init_centroid : tuple of floats
+        Starting guess for centroid location
+    wv_sampling
+        Wavelength sampling
+    N_wvs_nodes
+        Number of wavelength nodes
+    mask_charge_transfer_radius
+    IWA : float
+        Inner working angle
+    OWA : float
+        Outer working angle
+    debug_init
+    debug_end
+    numthreads
+    save_plots
+    filename_suffix
+    overwrite
+    targetname : str
+
+    Returns
+    -------
+
+    Creates output files:
+      [X]_fitpsf_[filename_suffix].fits
+      [X]_poly2d_centroid_[filename_suffix].txt
+
+    """
     mypool = mp.Pool(processes=numthreads)
 
     if not os.path.exists(utils_dir):
@@ -463,7 +516,7 @@ def fm_column_background(nonlin_paras, cubeobj, nodes=20,
 def fm_charge_transfer(nonlin_paras, cubeobj, charge_transfer_mask=None, nodes=40, fix_parameters=None,
                        return_where_finite=False,
                        regularization=None, badpixfraction=0.75, M_spline=None, spline_reg_std=1.0):
-    """
+    """ Forward model charge transfer ("bleeding") within the detector, particularly for bright/saturated sources
 
     Parameters
     ----------

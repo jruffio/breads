@@ -415,6 +415,16 @@ class JWSTNirspec_cal(Instrument):
         return wavelen_array, dra_as_array, ddec_as_array, area2d
 
     def reload_coordinates_arrays(self, load_filename=None):
+        """ Reload coordinates arrays
+
+        This updates the attributes .dra_as_array, .ddec_as_array, .area2d
+        and .coords
+
+        Parameters
+        ----------
+        load_filename : str or None
+            Filename to load coordiantes from. If not set, will use a default filena,e.
+        """
         if load_filename is None:
             load_filename = self.default_filenames["compute_coordinates_arrays"]
         if len(glob(load_filename)) ==0:
@@ -433,6 +443,10 @@ class JWSTNirspec_cal(Instrument):
         return wavelen_array, dra_as_array, ddec_as_array, area2d
 
     def set_coords2ifu(self):
+        """ Set coordinate frame to IFU
+        This is similar to the jwst pipeline 'ifualign' frame, with
+        delta position in arcseconds in the IFU instrument axes frame
+        """
         ifuX, ifuY = self.getifucoords()
         self.dra_as_array, self.ddec_as_array = ifuX, ifuY
         if "regwvs" in self.coords:
@@ -442,6 +456,10 @@ class JWSTNirspec_cal(Instrument):
         return ifuX, ifuY
 
     def set_coords2sky(self):
+        """ Set coordinate frame to sky
+        This is similar to the jwst pipeline 'skyalign' frame, with
+        delta position in arcseconds relative to the sky in ICRS RA, Dec coords.
+        """
         dra_as_array, ddec_as_array = self.getskycoords()
         self.dra_as_array, self.ddec_as_array = dra_as_array, ddec_as_array
         if "regwvs" in self.coords:
@@ -548,7 +566,8 @@ class JWSTNirspec_cal(Instrument):
 
         Parameters
         ----------
-        wv_sampling
+        wv_sampling : np.array of floats
+            Wavelength array
         image_mask : str or None
             image mask to use in webbpsf calculations. Default is None since we generally do not wish the edges of the
             IFU aperture in the simulated PSF
@@ -563,6 +582,16 @@ class JWSTNirspec_cal(Instrument):
 
         Returns
         -------
+        wpsfs
+        wpsfs_header
+        wepsfs
+        wv_sampling
+        webbpsf_X
+        webbpsf_Y
+        oversample : int
+            Oversampling parameter used in calculation
+        pixelscale : float
+            Pixel scale used in calculation
 
         """
 
@@ -1552,13 +1581,14 @@ class JWSTNirspec_cal(Instrument):
         self.ifuy_nodes = ifuy_nodes
         return subtracted_im,star_model,spline_paras0,wv_nodes,ifuy_nodes
 
-    def compute_interpdata_regwvs(self, save_utils=False,wv_sampling=None,replace_data=None):
+    def compute_interpdata_regwvs(self, save_utils=False, wv_sampling=None, replace_data=None):
         """Interpolate onto a regular wavelength sampling.
 
         Parameters
         ----------
         replace_data
-        save_utils
+        save_utils : bool
+            Save data to the utils directory, or not
         wv_sampling
 
         Returns
@@ -1772,7 +1802,22 @@ class JWSTNirspec_cal(Instrument):
 
 
 def _get_wpsf_task(paras):
-    """ Run WebbPSF for a single wavelength. Utility function for compute_webbpsf_model."""
+    """ Run WebbPSF for a single wavelength. Utility function for compute_webbpsf_model.
+
+    Arguments
+    ---------
+    paras : tuple containing all arguments (TODO why is this set up this way?!?)
+        Must contain nrs, center_wv, wpsf_oversample, opmode, parallelize
+
+    Returns
+    --------
+    webbpsfim :  ndarray cube
+        the OVERSAMP extension only from the computed PSF
+    smoothed_im : ndarray cube
+        The OVERSAMP extension, after smoothing by a Gaussian kernel based on the oversampling
+
+    #TODO this should be updated to use OVERDIST probably!! Instead of the smoothing here. TBD.
+    """
     nrs, center_wv, wpsf_oversample, opmode, parallelize = paras
     if opmode=='FIXEDSLIT':
         if not parallelize:
@@ -2801,37 +2846,39 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
            ann_width=None, padding=None, sector_area=None, RDI_folder_suffix=None,
            linear_interp=True, rotate_psf=0.0, flipx=False, psf_spaxel_area=None,
            debug_init=None,debug_end=None,save_combined_boolean=False):
-    """
-    Fit a model PSF (psfs, psfX, psfY) to a combined dataset (dataobj_list).
-
-    Args:
-        dataobj_list:
-        psfs:
-        psfX:
-        psfY:
-        out_filename:
-        IWA:
-        OWA:
-        mppool:
-        init_centroid:
-        fit_cen:
-        fit_angle:
-        ann_width:
-        padding:
-        sector_area:
-        RDI_folder_suffix:
-        linear_interp:
-        rotate_psf:
-        flipx:
-        psf_spaxel_area:
-
-    Returns:
+    """Fit a model PSF (psfs, psfX, psfY) to a combined dataset (dataobj_list).
 
     Parameters
     ----------
-    debug_end
+    combdataobj : JWSTNirspec_multiple_cals object
+        Combined dataset from multiple cal files
+    psfs
+    psfX
+    psfY
+    out_filename
+    IWA : float
+        Inner Working Angle
+    OWA : float
+        Outer Working Angle
+    mppool
+    init_centroid
+    fit_cen
+    fit_angle
+    ann_width
+    padding
+    sector_area
+    RDI_folder_suffix : string or None
+       String to use in folder name
+    linear_interp
+    rotate_psf
+    flipx
+    psf_spaxel_area
     debug_init
-    combdataobj
+    debug_end
+    save_combined_boolean
+
+    Returns
+    -------
 
     """
     if RDI_folder_suffix is None:
@@ -3117,6 +3164,9 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
 
 
 def rprint(string):
+    """Print a line of text, using a carriage return to overprint the current line
+    (rather than printing a new line)
+    """
     sys.stdout.write('\r'+str(string))
     sys.stdout.flush()
 
