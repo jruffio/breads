@@ -3161,12 +3161,12 @@ def _fit_wpsf_task(paras, plot=False):
         a0 = np.nansum(Z * m0 / Zerr ** 2) / np.nansum(m0 ** 2 / Zerr ** 2)
         initial_simplex = np.concatenate([p0[None, :], p0[None, :] + np.diag(simplex_init_steps)], axis=0)
 
-        chi20 = mycostfunc(p0, X, Y, Z, Zerr, webbpsf_interp)
+        chi20 = _fitpsf_costfunc(p0, X, Y, Z, Zerr, webbpsf_interp)
         # Define the initial parameter values for the fit
         # Fit the data to the function
         try:
             if fit_cen:
-                out = minimize(mycostfunc, p0, args=(X, Y, Z, Zerr, webbpsf_interp), method="Nelder-Mead", bounds=None,
+                out = minimize(_fitpsf_costfunc, p0, args=(X, Y, Z, Zerr, webbpsf_interp), method="Nelder-Mead", bounds=None,
                                options={"xatol": np.inf, "fatol": chi20 * 1e-12, "maxiter": 5e3,
                                         "initial_simplex": initial_simplex, "disp": False})
                 if fit_angle:
@@ -3268,7 +3268,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
            init_centroid=None, fit_cen=True, fit_angle = False,
            ann_width=None, padding=None, sector_area=None, RDI_folder_suffix=None,
            linear_interp=True, rotate_psf=0.0, flipx=False, psf_spaxel_area=None,
-           debug_init=None,debug_end=None,save_combined_boolean=False):
+           debug_init=None, debug_end=None, save_combined_boolean=False):
     """Fit a model PSF (psfs, psfX, psfY) to a combined dataset (dataobj_list).
 
     Parameters
