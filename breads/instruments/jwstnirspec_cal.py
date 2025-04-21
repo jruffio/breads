@@ -78,7 +78,7 @@ class JWSTNirspec_cal(Instrument):
         else:
             self.read_data_file(filename, crds_dir=crds_dir, utils_dir=utils_dir, save_utils=save_utils,
                                 load_utils=load_utils,
-                                preproc_task_list=preproc_task_list,wv_ref=wv_ref)
+                                preproc_task_list=preproc_task_list, wv_ref=wv_ref)
 
     def read_data_file(self, filename, crds_dir=None, utils_dir=None, save_utils=True,load_utils=True,
                        preproc_task_list=None,wv_ref=None):
@@ -133,10 +133,10 @@ class JWSTNirspec_cal(Instrument):
         self.bad_pixels[np.where(untangle_dq(dq, verbose=self.verbose)[0, :, :])] = np.nan
         self.bad_pixels[np.where(np.isnan(self.data))] = np.nan
 
-        if self.opmode == "FIXEDSLIT":# and "S200A1" in self.priheader["FXD_SLIT"].strip():#self.priheader["DETECTOR"].strip() == "NRS2":
+        if self.opmode == "FIXEDSLIT":  # and "S200A1" in self.priheader["FXD_SLIT"].strip():#self.priheader["DETECTOR"].strip() == "NRS2":
             self.bad_pixels[np.where(self.wavelengths>5.125)] = np.nan
 
-        #Removing any data with zero noise
+        # Removing any data with zero noise
         where_zero_noise = np.where(self.noise == 0)
         self.noise[where_zero_noise] = np.nan
         self.bad_pixels[where_zero_noise] = np.nan
@@ -231,6 +231,7 @@ class JWSTNirspec_cal(Instrument):
 
     def compute_med_filt_badpix(self, save_utils=False, window_size=50, mad_threshold=50, crop_Npix_from_trace_edges=0):
         """ Quick bad pixel identification.
+
         The data is first high-pass filtered row by row with a median filter with a window size of 50 (window_size)
         pixels. The median absolute deviation (MAP) is then calculated row by row, and any pixel deviating by more than
         50x the MAP are identified as bad.
@@ -712,6 +713,7 @@ class JWSTNirspec_cal(Instrument):
         y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[1], endpoint=True)
         webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
 
+        # TODO header needs fixing! Should save and include the actual webbpsf FITS header in the output.
         wpsfs_header = {"PIXELSCL": pixelscale, "im_mask": image_mask,
                         "oversamp": oversample, "DATE-BEG": self.priheader["DATE-BEG"]}
         if save_utils:
@@ -1899,7 +1901,7 @@ def untangle_dq(arr, verbose=True):
 
 def set_nans(arr, n):
     """ Set the first and last n non-NaN values of an array to NaN.
-    (TODO document why this is useful ???)
+    (TODO document why this is useful, or in what use case this function gets called???)
 
     Parameters
     ----------
@@ -2206,7 +2208,7 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
 
 
 def _task_normslice_2dspline(paras):
-    """ Worker function for normalizing slices via 2d spline
+    """ Worker function for normalizing slices via 2d spline, for use in parallelized calculations
 
     Parameters
     ----------
@@ -2526,14 +2528,15 @@ def where_point_source(dataobj, radec_as, rad_as):
 
 
 def PCA_detec(im, im_err, im_badpixs, N_KL=5):
-    """
+    """ Detect (something??) using Princople Component Analyses
 
     Parameters
     ----------
     im
     im_err
     im_badpixs
-    N_KL
+    N_KL : int
+        Number of KL modes
 
     Returns
     -------
@@ -2571,7 +2574,7 @@ def PCA_detec(im, im_err, im_badpixs, N_KL=5):
 
 
 def PCA_wvs_axis(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
-    """
+    """Perform PCA along the wavelength axis
 
     Parameters
     ----------
@@ -2580,7 +2583,8 @@ def PCA_wvs_axis(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
     im_err
     im_badpixs
     bin_size
-    N_KL
+    N_KL : int
+        Number of KL modes
 
     Returns
     -------
@@ -2629,8 +2633,8 @@ def PCA_wvs_axis(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
 
 
 def combine_spectrum(wavelengths, fluxes, errors, bin_size):
-    """
-    Combines the spectrum by combining the flux values in each bin using a weighted mean.
+    """ Combines the spectrum by combining the flux values in each bin using a weighted mean.
+
     Calculates and returns the new combined flux errors.
 
     :param wavelengths: 1D array of wavelengths.
@@ -2708,7 +2712,25 @@ def combine_spectrum(wavelengths, fluxes, errors, bin_size):
     return new_wavelengths, combined_fluxes, combined_errors
 
 
-def combine_spectrum_1dspline(wavelengths, fluxes, errors, bin_size,oversampling=10):
+def combine_spectrum_1dspline(wavelengths, fluxes, errors, bin_size, oversampling=10):
+    """Combine a spectrum using a 1d epline
+
+    Parameters
+    ----------
+    wavelengths
+    fluxes
+    errors
+    bin_size
+    oversampling
+
+    Returns
+    -------
+    hd_wvs
+    splev(hd_wvs, spl)
+    err_func(hd_wvs)
+    spl
+
+    """
     new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(wavelengths, fluxes, errors, bin_size)
     star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
     err_func = interp1d(new_wavelengths, combined_errors, kind="linear", bounds_error=False, fill_value=1)
@@ -2739,6 +2761,21 @@ def combine_spectrum_1dspline(wavelengths, fluxes, errors, bin_size,oversampling
 
 # Define the function to fit
 def mycostfunc(paras, _x, _y, data, error, _webbpsf_interp):
+    """ Cost function. For what?? TODO TBD document more
+
+    Parameters
+    ----------
+    paras
+    _x
+    _y
+    data
+    error
+    _webbpsf_interp
+
+    Returns
+    -------
+
+    """
     if len(paras) == 2:
         xc, yc = paras
         th = 0
@@ -2754,6 +2791,18 @@ def mycostfunc(paras, _x, _y, data, error, _webbpsf_interp):
 
 
 def filter_big_triangles(X,Y, max_edge_length):
+    """ Create a triangulation of X, Y points, and filter based on edge length
+
+    Parameters
+    ----------
+    X
+    Y
+    max_edge_length
+
+    Returns
+    -------
+
+    """
     points = np.array([X,Y]).T
     # Create triangulation
     triangulation = tri.Triangulation(points[:, 0], points[:, 1])
@@ -2773,6 +2822,21 @@ def filter_big_triangles(X,Y, max_edge_length):
 
 
 def _fit_wpsf_task(paras, plot=False):
+    """ Worker function for fitting a PSF model, for use in parallelized computations
+
+    Parameters
+    ----------
+    paras : tuple containing many things
+        Ugh, this contains either 16 or 19 different parameters crammed into a tuple.
+
+    plot : bool
+        Make and save plots?
+
+    Returns
+    -------
+
+    """
+
     if len(paras) == 16:
         linear_interp, wepsf, wifuX, wifuY, east2V2_deg,flipx, _X, _Y, _Z, _Zerr, _Zbad, IWA, OWA, fit_cen, fit_angle, init_paras = paras
         ann_width, padding, sector_area = None, 0.0, None
@@ -2962,6 +3026,22 @@ def _fit_wpsf_task(paras, plot=False):
 
 
 def _interp_psf(paras):
+    """ Interpolate PSF
+
+    Parameters
+    ----------
+    paras : tuple
+        Contains the following:
+        linear_interp, wepsf, wifuX, wifuY, wv_id, east2V2_deg
+
+
+    Returns
+    -------
+    webbpsf_interp : Interpolator object
+        a scipy.interpolate Interpolator object for interpolating a PSF onto
+        specified coordinates.
+
+    """
     linear_interp, wepsf, wifuX, wifuY, wv_id, east2V2_deg = paras
     wX, wY, wZ = wifuX.ravel(), wifuY.ravel(), wepsf.flatten()
     wX, wY = rotate_coordinates(wX, wY, -east2V2_deg, flipx=True)
@@ -3198,6 +3278,29 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
 
 def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, dec_vec, planet_f, out_filename=None,
                      linear_interp=True, mppool=None, aper_radius=0.5, rv=0):
+    """ Matched filter, baed on bb (black body?)
+
+    Parameters
+    ----------
+    fitpsf_filename
+    dataobj_list
+    psfs
+    psfX
+    psfY
+    ra_vec
+    dec_vec
+    planet_f
+    out_filename
+    linear_interp
+    mppool
+    aper_radius
+    rv
+
+    Returns
+    -------
+    snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
+
+    """
     print("Make sure interpdata_regwvs was already done ")
     dataobj0 = dataobj_list[0]
     wv_sampling = dataobj0.wv_sampling
@@ -3479,8 +3582,9 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
     return flux_cube, fluxerr_cube, ra_grid, dec_grid
 
 
-def cube_matchedfilter(flux_cube,fluxerr_cube,wv_sampling,ra_grid, dec_grid,planet_f, rv=0,out_filename=None,outlier_threshold=None):
-    """
+def cube_matchedfilter(flux_cube, fluxerr_cube, wv_sampling, ra_grid, dec_grid, planet_f, rv=0,
+                       out_filename=None, outlier_threshold=None):
+    """ Apply matched filter to a datacube
 
     Parameters
     ----------

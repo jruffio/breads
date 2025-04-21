@@ -304,7 +304,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         print(filename)
     print("N files: {0}".format(len(cal_files)))
 
-    # Definie the filename of the output file saved by fitpsf
+    # Define the filename of the output file saved by fitpsf
     splitbasename = os.path.basename(cal_files[0]).split("_")
     fitpsf_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[
         3] + "_fitpsf" + filename_suffix + ".fits")
@@ -334,6 +334,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         if detector not in filename:
             raise Exception("The files in cal_files should all be for the same detector")
 
+        # Define a series of processing tasks to be performed on each input file.
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
         preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
@@ -346,11 +347,14 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
                                                               "mppool": mypool}, True, True])
         preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, True])
 
+        # Load that file. (TODO: Does this invoke the preproc_task_list?)
         dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
         regwvs_dataobj_list.append(dataobj.reload_interpdata_regwvs())
 
+    # Combine all input files into a joint dataset
     regwvs_combdataobj = JWSTNirspec_multiple_cals(regwvs_dataobj_list)
+
     if mask_charge_transfer_radius is not None:
         regwvs_combdataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
 
@@ -400,6 +404,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
     poly_p_dec = np.polyfit(x2fit[wherefinite], y2fit[wherefinite], deg=2)
     print("Dec correction " + detector, poly_p_dec)
 
+    # Save centroids to a text file
     np.savetxt(poly2d_centroid_filename, [poly_p_ra, poly_p_dec], delimiter=' ')
 
     if save_plots:
@@ -911,6 +916,9 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, mod
 
     return cleaned_rate_files
 
+###########################################################################
+# Host Star PSF Subtraction 
+
 
 def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_offset=(0, 0), wv_nodes=None,
                                         mask_charge_transfer_radius=None, mppool=None,
@@ -1055,6 +1063,10 @@ def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None,
         dataobj_list.append(dataobj)
 
     return dataobj_list
+
+
+###########################################################################
+# Regular Wavelength Grids
 
 
 def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_radius=None, use_starsub=False,recompute=False,starsub_dir='starsub1d'):
