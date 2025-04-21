@@ -42,7 +42,7 @@ from breads.utils import get_spline_model
 #   run_noise_clean
 #   run_stage2
 
-def find_files_to_process(input_dir, filetype='uncal.fits', exp_numbers=None):
+def find_files_to_process(input_dir, filetype='uncal.fits', exp_numbers=None, verbose=True):
     """ Utility function to find files of a given type
 
     Parameters
@@ -56,6 +56,8 @@ def find_files_to_process(input_dir, filetype='uncal.fits', exp_numbers=None):
     exp_numbers :  list or ndarray of ints
         Optional list of exposure numers. The list of files will be filtered to contiain
         only this subset of exposure numbers.
+    verbose : bool
+        Be more verbose in outputs
 
     Returns
     -------
@@ -63,14 +65,14 @@ def find_files_to_process(input_dir, filetype='uncal.fits', exp_numbers=None):
         List of filenames found in input_dir matching the filetype (and exp_numbers, if provided)
     """
 
-    if filetype.startswith('jw'):
-        files = glob(os.path.join(input_dir, filetype))
-    else:
-        files = glob(os.path.join(input_dir, "jw*_" + filetype))
+    search_pattern = filetype if filetype.startswith('jw') else  "jw*_" + filetype
+    files = glob(os.path.join(input_dir, search_pattern))
     files.sort()
-    for file in files:
-        print(file)
-    print('Found ' + str(len(files)) + ' input files to process')
+    if verbose:
+        print(f"Searching in {input_dir} for files matching {search_pattern}")
+        print('\tFound ' + str(len(files)) + ' input files to process')
+        for file in files:
+            print("\t" + os.path.basename(file))
 
     if exp_numbers is not None:
         # Use fnmatch to filter only the wanted exposure numbers
@@ -115,13 +117,13 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
     rate_files = []
 
     for i, file in enumerate(uncal_files):
-        print(f"Processing file {i + 1} of {len(uncal_files)}.")
+        print(f"Stage 1 Processing file {i + 1} of {len(uncal_files)}.")
 
         outname = os.path.join(output_dir, os.path.basename(file).replace('uncal.fits', 'rate.fits'))
         rate_files.append(outname)
 
         if os.path.exists(outname) and not overwrite:
-            print(f"Output file {outname} already exists in output dir;\n\tskipping {file}.")
+            print(f"\tStage 1 Output file {os.path.basename(outname)} already exists in output dir;\n\tskipping {os.path.basename(file)}.")
             continue
 
         det1 = Detector1Pipeline()  # Instantiate the pipeline
@@ -148,10 +150,10 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
 
         # Print out the time benchmark
         time1 = time.perf_counter()
-        print(f"Runtime so far: {time1 - time0:0.4f} seconds")
+        print(f"\tStage 1 Runtime so far: {time1 - time0:0.4f} seconds")
 
     time1 = time.perf_counter()
-    print(f"Total Runtime: {time1 - time0:0.4f} seconds")
+    print(f"Stage 1 Total Runtime: {time1 - time0:0.4f} seconds")
     return rate_files
 
 
@@ -183,27 +185,23 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
 
         # Start a timer to keep track of runtime
     time0 = time.perf_counter()
-    print(time0)
 
     cal_files = []
 
     for fid, rate_file in enumerate(rate_files):
-        print(fid, rate_file)
+        print(f"Stage 2 Processing file {fid + 1} of {len(rate_files)}.")
 
         # Setting up steps and running the Spec2 portion of the pipeline.
 
         outname = os.path.join(output_dir, os.path.basename(rate_file).replace('rate.fits', 'cal.fits'))
         cal_files.append(outname)
         if os.path.exists(outname) and not overwrite:
-            print(f"Output file {outname} already exists;\n\tskipping {rate_file}.")
+            print(f"\tStage 2 Output file {os.path.basename(outname)} already exists in output dir;\n\tskipping {os.path.basename(rate_file)}.")
             continue
 
         spec2 = Spec2Pipeline()
 
-        if TA:
-            pathloss_skip = True
-        else:
-            pathloss_skip = False
+        pathloss_skip = TA  # For target acq images, skip the pathloss step, otherwise don't skip it.
 
         step_parameters = {
             # spec2.assign_wcs.skip = False
@@ -213,7 +211,7 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
             # # spec2.srctype.source_type = 'POINT'
             # spec2.flat_field.skip = False
             # spec2.pathloss.skip = False
-            'pathloss':{'skip':pathloss_skip},
+            'pathloss': {'skip': pathloss_skip},
             # spec2.photom.skip = False
             'cube_build': {'skip': skip_cubes},  # We do not want or need interpolated cubes
             'extract_1d': {'skip': True},
@@ -228,10 +226,10 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
 
         # Print out the time benchmark
         time1 = time.perf_counter()
-        print(f"Runtime so far: {time1 - time0:0.4f} seconds")
+        print(f"\tStage 2 Runtime so far: {time1 - time0:0.4f} seconds")
 
     time1 = time.perf_counter()
-    print(f"Total Runtime: {time1 - time0:0.4f} seconds")
+    print(f"Stage 2 Total Runtime: {time1 - time0:0.4f} seconds")
     return cal_files
 
 
@@ -894,19 +892,18 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, mod
 
     # Start a timer to keep track of runtime
     time0 = time.perf_counter()
-    print(time0)
 
     cleaned_rate_files = []
 
     for fid, rate_file in enumerate(rate_files):
 
+        print(f"Noise Clean: Processing file {fid + 1} of {len(rate_files)}: {os.path.basename(rate_file)}")
         outname = os.path.join(clean_dir, os.path.basename(rate_file))
         cleaned_rate_files.append(outname)
         if os.path.exists(outname) and not overwrite:
-            print(f"Output file {outname} already exists in the cleaned output directory; skipping {rate_file}.")
+            print(f"\tOutput file {os.path.basename(outname)} already exists in the cleaned output directory; skipping {os.path.basename(rate_file)}.")
             continue
 
-        print(f"Processing file {fid + 1} of {len(rate_files)}: {rate_file}")
 
         forward_model_noise_clean(rate_file, stage2_dir, clean_dir, crds_dir,
                                   N_nodes=N_nodes,
@@ -914,9 +911,9 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, mod
                                   coords_offset=coords_offset)
         # Print out the time benchmark
         time1 = time.perf_counter()
-        print(f"Runtime so far: {time1 - time0:0.4f} seconds\n")
+        print(f"\tNoise Clean Runtime so far: {time1 - time0:0.4f} seconds\n")
     time1 = time.perf_counter()
-    print(f"Total Runtime: {time1 - time0:0.4f} seconds")
+    print(f"Noise Clean Total Runtime: {time1 - time0:0.4f} seconds")
 
     return cleaned_rate_files
 

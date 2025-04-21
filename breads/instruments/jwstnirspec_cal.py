@@ -380,8 +380,8 @@ class JWSTNirspec_cal(Instrument):
             dec_array = np.zeros(self.data.shape) + np.nan
             wavelen_array = np.zeros(self.data.shape) + np.nan
 
-            for i in range(len(wcses)):
-                print(f"Computing coords for slice {i}")
+            print(f"Computing coords for {len(wcses)} slices...")
+            for i in tqdm(range(len(wcses)), total=len(wcses), ncols=100):
 
                 # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
                 xmin = max(int(np.round(wcses[i].bounding_box.intervals[0][0])), 0)
@@ -660,9 +660,11 @@ class JWSTNirspec_cal(Instrument):
         # nrs.options["source_offset_x"] = source_offset_y
         if not parallelize:
             # wv_sampling = wv_sampling[0:10]
+            if self.verbose:
+                print(f"\tPerforming serial calculation of PSF at {nwavelen} wavelengths.")
+
             outarr_not_created = True
-            for wv_id, wv in enumerate(wv_sampling):
-                print(wv_id, wv, nwavelen)
+            for wv_id, wv in tqdm(enumerate(wv_sampling), total=nwavelen, ncols=100):
                 paras = nrs, wv, oversample, self.opmode, parallelize
                 out = _get_wpsf_task(paras)
                 if outarr_not_created:
@@ -672,9 +674,9 @@ class JWSTNirspec_cal(Instrument):
                 wpsfs[wv_id, :, :] = out[0]
                 wepsfs[wv_id, :, :] = out[1]
         else: # Parallelized version
-            #raise Exception("Parallelized version of compute_webbpsf_model does not work, run with parallelize = False.")
-            print('Parallel compute_webbpsf_model testing...')
-            
+            if self.verbose:
+                print(f"\tPerforming parallelized calculation of PSF at {nwavelen} wavelengths.")
+
             #we must prepare the nrs.pupilopd object to get pickled
             import tempfile
             fp = tempfile.NamedTemporaryFile()
@@ -2072,8 +2074,7 @@ def untangle_dq(arr, verbose=True):
 
     """
     if verbose:
-        print("Unpacking data quality bitmasks")
-        print("DQ array is of type", arr.dtype)
+        print("\tUnpacking data quality bitmasks. DQ array is of type", arr.dtype)
     # Assume arr is your input numpy array of shape (ny, nx)
     ny, nx = arr.shape
 
@@ -2545,6 +2546,7 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
     badpixs_nodes_mask[where2mask] = np.nan
 
     if (mypool is None) or (parallel_flag == False):
+        print("\tPerforming serial normalize_slices_2dspline...")
         for id,trace_id in enumerate(unique_trace_ids):
             trace_mask = trace_id_map == trace_id
             where_in_trace = np.where(trace_mask)
@@ -2565,6 +2567,7 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
             new_res[row_id_min:row_id_max,:] = partial_new_res
             new_spline_paras[id,:,:] = partial_new_spline_paras
     else:
+        print("\tPerforming parallelized normalize_slices_2dspline...")
         row_indices_list = []
         image_list = []
         wvs_list = []
@@ -3334,16 +3337,16 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
         debug_init = 0
     if debug_end is None:
         debug_end = np.size(wv_sampling)
-    print(debug_init, debug_end)
+    print("fitpsf wavelength indices:", debug_init, debug_end)
 
     wpsf_angle_offset = 0
     bestfit_coords_defined = False
     if  mppool is None:
+        print(f"\tPerforming serial PSF fit at {debug_end - debug_init} wavelengths.")
 
         for wv_id, wv in tqdm(enumerate(wv_sampling), total=len(wv_sampling), ncols=100):
             if not (wv_id >= debug_init and wv_id < debug_end):
                 continue
-            print(wv_id, wv, np.size(wv_sampling))
             paras = linear_interp, psfs[wv_id], psfX[wv_id], psfY[wv_id], rotate_psf - wpsf_angle_offset,flipx, \
                 all_interp_ra[:, wv_id], all_interp_dec[:, wv_id], all_interp_flux[:, wv_id], all_interp_err[:,wv_id], all_interp_badpix[:, wv_id], \
                 IWA, OWA, fit_cen, fit_angle, init_paras, ann_width, padding, sector_area
@@ -3378,7 +3381,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
                                       itertools.repeat(sector_area))),
                                         total=debug_end-debug_init, ncols=100)]
 
-        for out_id,out in tqdm(enumerate(output_lists), total=len(output_lists), ncols=100)):
+        for out_id,out in tqdm(enumerate(output_lists), total=len(output_lists), ncols=100):
             if not bestfit_coords_defined:
                 bestfit_coords = np.zeros((out[0].shape[0],np.size(wv_sampling), 5)) + np.nan  # flux_init, flux,ra,dec,angle
                 bestfit_coords_defined=True
