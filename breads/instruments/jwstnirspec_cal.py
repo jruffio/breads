@@ -492,6 +492,22 @@ class JWSTNirspec_cal(Instrument):
         return dra_as_array, ddec_as_array
 
     def convert_MJy_per_sr_to_MJy(self, data_in_MJy_per_sr=None, save_utils=None, load_utils=None):
+        """
+
+        Parameters
+        ----------
+        data_in_MJy_per_sr : ndarray, or None
+            Optional dta to convert. If provided, this will be converted.
+            If not provided, the self.data, self.noise, and self.data_unit attributes will be updated.
+        save_utils : None, unused
+            Unused, but present for API compatibility
+        load_utils : None, unused
+            Unused, but present for API compatibility
+
+        Returns
+        -------
+
+        """
         if data_in_MJy_per_sr is not None:
             arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
             return data_in_MJy_per_sr*(self.area2d*arcsec2_to_sr)
@@ -518,6 +534,10 @@ class JWSTNirspec_cal(Instrument):
         ----------
         coords_offset: List
             (offset ra, offset dec) in arcsec
+        save_utils : bool
+            Unused, but needed for some reason for API compatibility when this gets called somewhere???
+        load_utils : bool
+            ditto??
 
         Returns
         -------
@@ -545,11 +565,14 @@ class JWSTNirspec_cal(Instrument):
 
         Parameters
         ----------
-        load_filename
+        load_filename : str
+            Optional filename to load. If not provided, a default filename will be used.
 
         Returns
         -------
+        wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
 
+        Also sets a whole bunch of object attributes.
         """
         if load_filename is None:
             load_filename = self.default_filenames["compute_webbpsf_model"]
@@ -689,22 +712,6 @@ class JWSTNirspec_cal(Instrument):
             print('')
             print('done.')
             
-            
-            #old code below
-            
-            # output_lists = mppool.map(_get_wpsf_task, zip(itertools.repeat(nrs),
-            #                                               wv_sampling,
-            #                                               itertools.repeat(oversample)))
-            #
-            # outarr_not_created = True
-            # for wv_id, (wv,out) in enumerate(zip(wv_sampling,output_lists)):
-            #     if outarr_not_created:
-            #         wpsfs = np.zeros((nwavelen,out[0].shape[0],out[0].shape[1]))
-            #         wepsfs = np.zeros((nwavelen,out[0].shape[0],out[0].shape[1]))
-            #         outarr_not_created=False
-            #     wpsfs[wv_id,:,:] = out[0]
-            #     wepsfs[wv_id,:,:] = out[1
-
         wepsfs *= oversample ** 2
 
         halffov_x = pixelscale / oversample * wpsfs.shape[2] / 2.0
@@ -1012,7 +1019,18 @@ class JWSTNirspec_cal(Instrument):
             self.ddec_as_array -= dec_offset
         return ra_offset, dec_offset
 
-    def compute_charge_bleeding_mask(self, save_utils=False,threshold2mask=0.15):
+    def compute_charge_bleeding_mask(self, save_utils=False, threshold2mask=0.15):
+        """ Compute charge bleeding mask
+
+        Parameters
+        ----------
+        save_utils
+        threshold2mask
+
+        Returns
+        -------
+
+        """
         if self.verbose:
             print(f"Computing charge bleeding mask. Will save to {0}".format(self.default_filenames['compute_charge_bleeding_mask']))
         ifuX, ifuY = self.getifucoords()
@@ -1034,6 +1052,20 @@ class JWSTNirspec_cal(Instrument):
         return bar_mask
 
     def reload_charge_bleeding_mask(self, load_filename=None):
+        """ Reload charge bleeding mask
+
+        Parameters
+        ----------
+        load_filename : str or None
+            Filename to load mask data from, or leave None to use default filename
+
+        Returns
+        -------
+        bar_mask : ndarray
+
+        Also modifies self.badpixels, by multiplying that times the bar_mask
+
+        """
         if load_filename is None:
             load_filename = self.default_filenames["compute_charge_bleeding_mask"]
         if len(glob(load_filename)) ==0:
@@ -1047,7 +1079,27 @@ class JWSTNirspec_cal(Instrument):
         return bar_mask
 
     def compute_starspectrum_contnorm(self,  save_utils=False,im=None, im_wvs=None, err=None, mppool=None,
-                                      spec_R_sampling=None, threshold_badpix=10,x_nodes=None,N_nodes=40,iterative=True):
+                                      spec_R_sampling=None, threshold_badpix=10, x_nodes=None, N_nodes=40, iterative=True):
+        """ Compute star spectrum nurmalized by the continuum
+
+        Parameters
+        ----------
+        save_utils
+        im
+        im_wvs
+        err
+        mppool
+        spec_R_sampling
+        threshold_badpix
+        x_nodes
+        N_nodes
+        iterative
+
+        Returns
+        -------
+        new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,x_nodes
+
+        """
         if im is None:
             im = self.data
         if im_wvs is None:
@@ -1128,6 +1180,20 @@ class JWSTNirspec_cal(Instrument):
         return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,x_nodes
 
     def reload_starspectrum_contnorm(self, load_filename=None):
+        """ Reload star spectrum normalized by continuum
+
+        Parameters
+        ----------
+        load_filename : str or None
+            Filename to load spectrum data from, or leave None to use default filename
+
+        Returns
+        -------
+        new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,x_nodes
+
+        Also modifies self.x_nodes and self.star_func
+
+        """
         if load_filename is None:
             load_filename = self.default_filenames["compute_starspectrum_contnorm"]
         if len(glob(load_filename)) ==0:
@@ -1152,6 +1218,29 @@ class JWSTNirspec_cal(Instrument):
                                                spec_R_sampling=None, threshold_badpix=10,
                                                wv_nodes=None,N_wvs_nodes=20,ifuy_nodes=None,delta_ifuy=0.05,
                                                apply_new_bad_pixels = False, iterative = True,independent_trace = True):
+        """ Compute star spectrum continuum normalized by 2d spline
+
+        Parameters
+        ----------
+        save_utils
+        im
+        im_wvs
+        err
+        mppool
+        spec_R_sampling
+        threshold_badpix
+        wv_nodes
+        N_wvs_nodes
+        ifuy_nodes
+        delta_ifuy
+        apply_new_bad_pixels
+        iterative
+        independent_trace
+
+        Returns
+        -------
+
+        """
         if im is None:
             im = self.data
         if im_wvs is None:
@@ -1301,7 +1390,22 @@ class JWSTNirspec_cal(Instrument):
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
         return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes,ifuy_nodes
 
-    def reload_starspectrum_contnorm_2dspline(self, load_filename=None,apply_new_bad_pixels = False):
+    def reload_starspectrum_contnorm_2dspline(self, load_filename=None, apply_new_bad_pixels = False):
+        """ Reload star spectrum continuum normalized by 2d spline
+
+        Parameters
+        ----------
+        load_filename : str or None
+            Filename to load spectrum data from, or leave None to use default filename
+        apply_new_bad_pixels : bool
+            If set, multiply self.badpixels times the NEW_BADPIX extension of the spectrum
+
+
+        Returns
+        -------
+        new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes,ifuy_nodes
+
+        """
         if load_filename is None:
             load_filename = self.default_filenames["compute_starspectrum_contnorm_2dspline"]
         if len(glob(load_filename)) ==0:
@@ -1329,6 +1433,23 @@ class JWSTNirspec_cal(Instrument):
 
     def compute_starsubtraction(self,  save_utils=False, im=None, im_wvs=None, err=None, threshold_badpix=10,
                                 mppool=None,starsub_dir="starsub1d",load_starspectrum_contnorm = None):
+        """ Compute Star Subctraction
+
+        Parameters
+        ----------
+        save_utils
+        im
+        im_wvs
+        err
+        threshold_badpix
+        mppool
+        starsub_dir
+        load_starspectrum_contnorm
+
+        Returns
+        -------
+        subtracted_im, star_model, spline_paras0, self.x_nodes
+        """
         if self.verbose:
             print(f"Computing star subtraction.")
 
@@ -1411,10 +1532,24 @@ class JWSTNirspec_cal(Instrument):
                 hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
                 hdulist_sc.writeto(os.path.join(self.utils_dir, starsub_dir, os.path.basename(self.filename)), overwrite=True)
                 hdulist_sc.close()
-        return subtracted_im,star_model,spline_paras0,self.x_nodes
+        return subtracted_im, star_model, spline_paras0, self.x_nodes
 
 
     def reload_starsubtraction(self, load_filename=None):
+        """ Reload Star Subtraction
+
+        Parameters
+        ----------
+        load_filename : str or None
+            Filename to load PSF subtracted data from, or leave None to use default filename
+
+        Returns
+        -------
+        subtracted_im, star_model, spline_paras0, x_nodes
+
+        Also modifies self.bad_pixels
+
+        """
         if load_filename is None:
             load_filename = self.default_filenames["compute_starsubtraction"]
         if len(glob(load_filename)) ==0:
@@ -1429,11 +1564,30 @@ class JWSTNirspec_cal(Instrument):
         hdulist.close()
 
         self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
-        return subtracted_im,star_model,spline_paras0,x_nodes
+        return subtracted_im, star_model, spline_paras0, x_nodes
 
 
     def compute_starsubtraction_2dspline(self,  save_utils=False, im=None, im_wvs=None, err=None, threshold_badpix=10,
                                 mppool=None,starsub_dir="starsub2d", iterative = True,independent_trace = True):
+        """ Compute Star Subtraction with 2D Spline
+
+        Parameters
+        ----------
+        save_utils
+        im
+        im_wvs
+        err
+        threshold_badpix
+        mppool
+        starsub_dir
+        iterative
+        independent_trace
+
+        Returns
+        -------
+        subtracted_im, star_model, spline_paras0, self.wv_nodes, self.ifuy_nodes
+
+        """
 
         if self.verbose:
             print(f"Computing star subtraction 2d spline.")
@@ -1582,10 +1736,22 @@ class JWSTNirspec_cal(Instrument):
                 hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
                 hdulist_sc.writeto(os.path.join(self.utils_dir,starsub_dir, os.path.basename(self.filename)), overwrite=True)
                 hdulist_sc.close()
-        return subtracted_im,star_model,spline_paras0,self.wv_nodes,self.ifuy_nodes
+        return subtracted_im, star_model, spline_paras0, self.wv_nodes, self.ifuy_nodes
 
 
     def reload_starsubtraction_2dspline(self, load_filename=None):
+        """ Reload Star Subtractoin with 2D spline
+
+        Parameters
+        ----------
+        load_filename : str or None
+            Filename to load PSF subtracted data from, or leave None to use default filename
+
+        Returns
+        -------
+        subtracted_im, star_model, spline_paras0, wv_nodes, ifuy_nodes
+
+        """
         if load_filename is None:
             load_filename = self.default_filenames["compute_starsubtraction_2dspline"]
         if len(glob(load_filename)) ==0:
@@ -1603,7 +1769,7 @@ class JWSTNirspec_cal(Instrument):
         self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
         self.wv_nodes = wv_nodes
         self.ifuy_nodes = ifuy_nodes
-        return subtracted_im,star_model,spline_paras0,wv_nodes,ifuy_nodes
+        return subtracted_im, star_model, spline_paras0, wv_nodes, ifuy_nodes
 
     def compute_interpdata_regwvs(self, save_utils=False, wv_sampling=None, replace_data=None):
         """Interpolate onto a regular wavelength sampling.
@@ -1617,6 +1783,7 @@ class JWSTNirspec_cal(Instrument):
 
         Returns
         -------
+        regwvs_dataobj
 
         """
         if "regwvs" in self.coords:
@@ -1698,6 +1865,16 @@ class JWSTNirspec_cal(Instrument):
         return regwvs_dataobj
 
     def reload_interpdata_regwvs(self, load_filename=None):
+        """ Reload interpolated data onto regular wavelengths
+
+        Parameters
+        ----------
+        load_filename
+
+        Returns
+        -------
+
+        """
         if "regwvs" in self.coords:
             raise Exception("This data object is already interpolated. Won't interpolate again.")
 
@@ -1727,6 +1904,20 @@ class JWSTNirspec_cal(Instrument):
         return regwvs_dataobj
 
     def mask_interp_elements_too_far_from_bin_edges(self, dwv_threshold):
+        """ Mask interpolated elements too far from the edge bins
+
+        Parameters
+        ----------
+        dwv_threshold
+
+        Returns
+        -------
+        mask : ndarray
+            Mask of which pixels are masked
+
+        Also modifies self.bad_pixels
+
+        """
         if "regwvs" not in self.coords:
             raise Exception("'regwvs' in self.coords. This data object needs to be interpolated first.")
         dist_to_bin_edges = np.nanmin(np.abs(self.leftnright_wavelengths-self.wavelengths),axis=0)
@@ -1822,6 +2013,7 @@ class JWSTNirspec_cal(Instrument):
         return wv_sampling
 
     def where_point_source(self, radec_as, rad_as):
+        # TODO what is the purpose of this, this just looks like unnecessary duplication code?!?
         return where_point_source(self, radec_as, rad_as)
 
 
@@ -2430,6 +2622,7 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
 
     Returns
     -------
+    bestfit_paras, psfsub_model_im, psfsub_sc_im
 
     """
     wv_min, wv_max = np.nanmin(sc_im_wvs), np.nanmax(sc_im_wvs)
@@ -2540,6 +2733,7 @@ def PCA_detec(im, im_err, im_badpixs, N_KL=5):
 
     Returns
     -------
+    kls
 
     """
     im_cp = im * im_badpixs / im_err
@@ -2588,6 +2782,7 @@ def PCA_wvs_axis(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
 
     Returns
     -------
+    new_wvs, kls
 
     """
     ny, nx = im.shape
@@ -2760,17 +2955,27 @@ def combine_spectrum_1dspline(wavelengths, fluxes, errors, bin_size, oversamplin
 
 
 # Define the function to fit
-def mycostfunc(paras, _x, _y, data, error, _webbpsf_interp):
-    """ Cost function. For what?? TODO TBD document more
+def _fitpsf_costfunc(paras, _x, _y, data, error, _webbpsf_interp):
+    """ Cost function used in PSF fitting
 
     Parameters
     ----------
-    paras
-    _x
-    _y
-    data
-    error
-    _webbpsf_interp
+    paras : tuple of floats
+        Parameters for registering and aligning the PSF to the data.
+        either (Xc, Yc) with 2 elements, or (Xc, Yc, Theta) with 3 elements.
+        If only 2 elements, then Theta is set to 0
+        Xc and Yc are the center location relative to the _x and _y parameters.
+        Theta is a rotation angle for rotating the PSF to align.
+    _x : ndarray
+        X coordinates
+    _y : ndarray
+        Y coordinates
+    data : ndarray
+        Observed/measured PSF data to be fit
+    error : ndarray
+        Uncertainty in observed data to be fit
+    _webbpsf_interp : interpolator object
+        PSF interpolator object, used to obtain the shifted and aligned PSF
 
     Returns
     -------
@@ -3133,9 +3338,9 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
 
     wpsf_angle_offset = 0
     bestfit_coords_defined = False
-    if 0 or mppool is None:
+    if  mppool is None:
 
-        for wv_id, wv in enumerate(wv_sampling):
+        for wv_id, wv in tqdm(enumerate(wv_sampling), total=len(wv_sampling), ncols=100):
             if not (wv_id >= debug_init and wv_id < debug_end):
                 continue
             print(wv_id, wv, np.size(wv_sampling))
@@ -3173,8 +3378,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
                                       itertools.repeat(sector_area))),
                                         total=debug_end-debug_init, ncols=100)]
 
-        for out_id,out in enumerate(output_lists):
-            print(out_id, len(output_lists))
+        for out_id,out in tqdm(enumerate(output_lists), total=len(output_lists), ncols=100)):
             if not bestfit_coords_defined:
                 bestfit_coords = np.zeros((out[0].shape[0],np.size(wv_sampling), 5)) + np.nan  # flux_init, flux,ra,dec,angle
                 bestfit_coords_defined=True
@@ -3506,7 +3710,7 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
     all_interp_err = combdataobj.noise
     all_interp_badpix = combdataobj.bad_pixels
 
-    if hasattr(combdataobj,"filelist"):
+    if hasattr(combdataobj, "filelist"):
         N_dithers = len(combdataobj.filelist)
     else:
         N_dithers = 1

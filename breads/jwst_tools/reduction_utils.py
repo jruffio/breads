@@ -320,8 +320,12 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
                                 np.nanmedian(hdulist_sc["WAVELENGTH"].data) / 300)
     hdulist_sc.close()
 
+    # If the output centroid file already exists, from a prior run of this function, then
+    # just reload those results and return them, without doing any additional calculation,
+    # unless overwrite is set.
     if not overwrite:
         if len(glob(poly2d_centroid_filename)) == 1:
+            print("Found centroid results from prior calculation. Loading and returning those.")
             output = np.loadtxt(poly2d_centroid_filename, delimiter=' ')
             poly_p_ra, poly_p_dec = output[0], output[1]
             print("RA correction " + detector, poly_p_ra)
