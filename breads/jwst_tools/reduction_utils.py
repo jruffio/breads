@@ -27,6 +27,7 @@ from breads.instruments.jwstnirspec_cal import filter_big_triangles
 from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_cals
 from breads.fit import fitfm
 from breads.utils import get_spline_model
+import breads.jwst_tools.plotting
 
 
 ###########################################################################
@@ -80,11 +81,35 @@ def find_files_to_process(input_dir, filetype='uncal.fits', exp_numbers=None, ve
 
     return files
 
+def check_instrument_grating(uncal_files):
+    """ Read the GRATING keyword for a list of uncal files, and verify that all have the same GRATING
+    value. This is useful because forward modeling should be done for only one grating at a time, but
+    some JWST observations may use multiple gratings in different activities within the observation
+
+    Parameters
+    ----------
+    uncal_files : list of str
+        filenames
+
+    Returns
+    -------
+    grating : str
+        GRATING keyword value
+    """
+
+    gratings = [fits.getheader(f)['GRATING'] for f in uncal_files]
+    gratings = set(gratings)
+    if len(gratings) > 1:
+        raise RuntimeError(f"The specified list of files contains multiple different GRATING values: {gratings}. "
+                            "Adjust your input file selection criteria to select files all with the same spectral"
+                            "grating value.")
+    else:
+        return list(gratings)[0]
 
 ###########################################################################
 # Functions for invoking the pipeline
 
-def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
+def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all", save_plots=True):
     """ Run pipeline stage 1, with some customizations for reductions
     intended to be used with breads for IFU high contrast
 
@@ -154,10 +179,16 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
 
     time1 = time.perf_counter()
     print(f"Stage 1 Total Runtime: {time1 - time0:0.4f} seconds")
-    return rate_files
+    if save_plots:
+        breads.jwst_tools.plotting.plot_2d_image_set(rate_files,
+                                                     output_dir = output_dir,
+                                                     suptitle="Stage 1 pipeline reduction results",
+                                                     plot_label = 'stage1')
+
+        return rate_files
 
 
-def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False):
+def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False, save_plots=True):
     """ Run pipeline stage 2, with some customizations for reductions
     intended to be used with breads for IFU high contrast
 
@@ -230,6 +261,12 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
 
     time1 = time.perf_counter()
     print(f"Stage 2 Total Runtime: {time1 - time0:0.4f} seconds")
+    if save_plots:
+        breads.jwst_tools.plotting.plot_2d_image_set(cal_files,
+                                                     output_dir = output_dir,
+                                                     suptitle="Stage 2 pipeline reduction results",
+                                                     plot_label = 'stage2')
+
     return cal_files
 
 
@@ -862,15 +899,15 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     return new_rate_file
 
 
-def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
-                    utils_dir=None, coords_offset=(0, 0), overwrite=False):
+def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
+                    utils_dir=None, coords_offset=(0, 0), overwrite=False, save_plots=True):
     """Invoke forward model noise removal for a list of rate files
 
     Parameters
     ----------
     rate_files
     stage2_dir
-    clean_dir
+    output_dir
     crds_dir
     N_nodes
     model_charge_transfer
@@ -883,8 +920,8 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, mod
 
     """
     # We need to check that the desired output directories exist, and if not create them
-    if not os.path.exists(clean_dir):
-        os.makedirs(clean_dir)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     # Start a timer to keep track of runtime
     time0 = time.perf_counter()
@@ -894,14 +931,14 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, mod
     for fid, rate_file in enumerate(rate_files):
 
         print(f"Noise Clean: Processing file {fid + 1} of {len(rate_files)}: {os.path.basename(rate_file)}")
-        outname = os.path.join(clean_dir, os.path.basename(rate_file))
+        outname = os.path.join(output_dir, os.path.basename(rate_file))
         cleaned_rate_files.append(outname)
         if os.path.exists(outname) and not overwrite:
             print(f"\tOutput file {os.path.basename(outname)} already exists in the cleaned output directory; skipping {os.path.basename(rate_file)}.")
             continue
 
 
-        forward_model_noise_clean(rate_file, stage2_dir, clean_dir, crds_dir,
+        forward_model_noise_clean(rate_file, stage2_dir, output_dir, crds_dir,
                                   N_nodes=N_nodes,
                                   model_charge_transfer=model_charge_transfer, utils_dir=utils_dir,
                                   coords_offset=coords_offset)
@@ -910,6 +947,12 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, mod
         print(f"\tNoise Clean Runtime so far: {time1 - time0:0.4f} seconds\n")
     time1 = time.perf_counter()
     print(f"Noise Clean Total Runtime: {time1 - time0:0.4f} seconds")
+
+    if save_plots:
+        breads.jwst_tools.plotting.plot_2d_image_sets_side_by_side(rate_files, cleaned_rate_files,
+                                                                   output_dir=output_dir,
+                                                                   suptitle="Noise Cleaining results. Left = Before, Right = After.",
+                                                                   plot_label='noiseclean')
 
     return cleaned_rate_files
 
