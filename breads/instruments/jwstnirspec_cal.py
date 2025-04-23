@@ -2889,7 +2889,9 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             all_interp_psfsub[:, wv_id] = all_interp_flux[:, wv_id] - out[1]
 
     else:
-        output_lists = mppool.map(_fit_wpsf_task,
+        print(f"\tPerforming parallelized PSF fit at {debug_end - debug_init} wavelengths.")
+
+        output_lists = [o for o in tqdm(mppool.imap(_fit_wpsf_task,
                                   zip(itertools.repeat(linear_interp),
                                       psfs, psfX, psfY,
                                       itertools.repeat(rotate_psf - wpsf_angle_offset),
@@ -2906,7 +2908,8 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
                                       itertools.repeat(init_paras),
                                       itertools.repeat(ann_width),
                                       itertools.repeat(padding),
-                                      itertools.repeat(sector_area)))
+                                      itertools.repeat(sector_area))),
+                                        total=debug_end-debug_init, ncols=100)]
 
         for out_id,out in enumerate(output_lists):
             print(out_id, len(output_lists))
