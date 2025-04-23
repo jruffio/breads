@@ -3210,7 +3210,6 @@ def build_cube(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
         inputs.append([X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg,
                        psf_interp_paras,
                        wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min])
-    print() 
 
     #step 2 map _build_cube_task over input list 
     if parallel_flag:
@@ -3221,9 +3220,8 @@ def build_cube(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
         print('starting serial _build_cube_task...')
         outputs = []
         # Iterate calculation serially, also showing a progress bar of percentage completion
-        for inp in tqdm(inputs, total=len(inputs), dynamic_ncols=True):
+        for inp in tqdm(inputs, total=len(inputs), ncols=100):
             outputs.append(_build_cube_task(inp))
-    print()
     
     #step 3 iterate over outputs and save values
     for j, inp in enumerate(inputs):
@@ -3234,7 +3232,6 @@ def build_cube(combdataobj,psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
             ra_id, dec_id, flux, err = o
             flux_cube[wv_id, dec_id, ra_id] = flux
             fluxerr_cube[wv_id, dec_id, ra_id] = err
-    print()
 
     if out_filename is not None:
         if debug_init != 0 or debug_end != np.size(wv_sampling):
