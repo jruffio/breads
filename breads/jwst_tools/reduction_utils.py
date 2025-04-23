@@ -310,7 +310,6 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         3] + "_poly2d_centroid" + filename_suffix + ".txt")
 
     hdulist_sc = fits.open(cal_files[0])
-    grating = hdulist_sc[0].header["GRATING"].strip()
     detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
     if wv_sampling is None:
         wv_sampling = np.arange(np.nanmin(hdulist_sc["WAVELENGTH"].data),
@@ -387,9 +386,6 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
 
     with fits.open(fitpsf_filename) as hdulist:
         bestfit_coords = hdulist[0].data
-        wpsf_angle_offset = hdulist[0].header["INIT_ANG"]
-        wpsf_ra_offset = hdulist[0].header["INIT_RA"]
-        wpsf_dec_offset = hdulist[0].header["INIT_DEC"]
 
     x2fit = wv_sampling - np.nanmedian(wv_sampling)
     y2fit = bestfit_coords[0, :, 2]

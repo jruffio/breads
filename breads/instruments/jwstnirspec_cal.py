@@ -699,7 +699,8 @@ class JWSTNirspec_cal(Instrument):
                 mppool = Pool()
                 
             print('starting parallel _get_wpsf_task ...')
-            pool_out = mppool.map(_get_wpsf_task,paras_list)
+            # Iterate, and display progress bar
+            pool_out = [ o for o in tqdm(mppool.imap(_get_wpsf_task, paras_list), total=nwavelen, ncols=100)]
             print('')
             mppool.close()
                       
@@ -3460,11 +3461,11 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             bu = hdulist_sc[1].header["BUNIT"].strip()
             if du == 'MJy'    and bu == 'MJy':
                 pass
-            if du == 'MJy/sr' and bu == 'MJy/sr':
+            elif du == 'MJy/sr' and bu == 'MJy/sr':
                 pass
-            if du == 'MJy/sr' and bu == 'MJy':
+            elif du == 'MJy/sr' and bu == 'MJy':
                 new_model *= (new_area2d*arcsec2_to_sr)
-            if du == 'MJy'    and bu == 'MJy/sr':
+            elif du == 'MJy'    and bu == 'MJy/sr':
                 new_model /= (new_area2d*arcsec2_to_sr)
 
             tmp_sub = hdulist_sc["SCI"].data - new_model
