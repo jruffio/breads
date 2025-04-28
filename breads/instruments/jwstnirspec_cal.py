@@ -676,7 +676,6 @@ class JWSTNirspec_cal(Instrument):
         else: # Parallelized version
             if self.verbose:
                 print(f"\tPerforming parallelized calculation of PSF at {nwavelen} wavelengths.")
-
             #we must prepare the nrs.pupilopd object to get pickled
             import tempfile
             fp = tempfile.NamedTemporaryFile()
@@ -684,7 +683,7 @@ class JWSTNirspec_cal(Instrument):
             print('Writing pupilopd tempfile : {}'.format(temp_filename))
             nrs.pupilopd.writeto(temp_filename)  # save that FITS to disk
             nrs.pupilopd = temp_filename         # the object is now a pickle-able string
-            
+
             print('preparing parameter list...')
             paras_list = []
             for wv_id, wv in enumerate(wv_sampling):
@@ -692,29 +691,29 @@ class JWSTNirspec_cal(Instrument):
                 paras = nrs, wv, oversample, self.opmode, parallelize
                 paras_list.append(paras)
             print('')
-                
+
             if mppool is None:
                 print('no pool supplied, creating one with {} threads'.format(os.cpu_count()))
                 from multiprocess import Pool
                 mppool = Pool()
-                
+
             print('starting parallel _get_wpsf_task ...')
             # Iterate, and display progress bar
             pool_out = [ o for o in tqdm(mppool.imap(_get_wpsf_task, paras_list), total=nwavelen, ncols=100)]
             print('')
             mppool.close()
-                      
-            print('collating pool outputs...')    
+
+            print('collating pool outputs...')
             out = pool_out[0]
             wpsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
             wepsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
             for ind,out in enumerate(pool_out):
                 rprint(ind)
                 wpsfs[ind, :, :] = out[0]
-                wepsfs[ind, :, :] = out[1]  
+                wepsfs[ind, :, :] = out[1]
             print('')
             print('done.')
-            
+
         wepsfs *= oversample ** 2
 
         halffov_x = pixelscale / oversample * wpsfs.shape[2] / 2.0
@@ -2048,7 +2047,7 @@ def _get_wpsf_task(paras):
         kernel = np.ones((wpsf_oversample, wpsf_oversample))
     else:
         raise Exception('OPMODE unknown')
-        
+
     ext = 'OVERSAMP'
     slicepsf_wv0 = nrs.calc_psf(monochromatic=center_wv * 1e-6,  # Wavelength, in **METERS**
                                 fov_arcsec=6,  # angular size to simulate PSF over
@@ -2938,7 +2937,7 @@ def combine_spectrum_1dspline(wavelengths, fluxes, errors, bin_size, oversamplin
     tmp_std = np.nanstd(tmp)
     where_outliers = np.where(np.abs(tmp) > (5 * tmp_std))
     fluxes[where_outliers] = np.nan
-    
+
     # Remove NaN values from the input arrays
     nan_mask = np.logical_or(np.isnan(wavelengths), np.isnan(fluxes))
     where_mask = np.where(~nan_mask)
@@ -3636,28 +3635,28 @@ def _build_cube_task(inputs):
 
     psf_interp = _interp_psf(psf_interp_paras)
 
-    outs = [] 
+    outs = []
     for ra_id, ra in enumerate(ra_vec):
         for dec_id, dec in enumerate(dec_vec):
 
             R = np.sqrt((X - ra) ** 2 + (Y - dec) ** 2)
             Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
             where_finite = np.where(np.isfinite(Zbp) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
-        
+
             if np.size(where_finite[0]) < N_pix_min:
                 outs.append([ra_id, dec_id, np.nan, np.nan]) #changed from continue
             else:
                 X_fin = X[where_finite]
                 Y_fin = Y[where_finite]
                 Z_fin = Z[where_finite]
-            
+
                 Zerr_fin = Zerr[where_finite]
                 M = psf_interp(X_fin - ra, Y_fin - dec)
-            
+
                 deno = np.nansum(M ** 2 / Zerr_fin ** 2)
                 mfflux = np.nansum(M * Z_fin / Zerr_fin ** 2) / deno
                 mffluxerr = 1 / np.sqrt(deno)
-            
+
                 res = Z_fin - mfflux * M
                 noise_factor = np.nanstd(res / Zerr_fin)
                 outs.append([ra_id, dec_id, mfflux, mffluxerr * noise_factor])
@@ -3698,14 +3697,14 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
     """
     if "regwvs" not in combdataobj.coords:
         raise Exception("This data object needs to be interpolated on regular wavelength grid. See dataobj.compute_interpdata_regwvs")
-        
+
     if mppool is not None:
         print('Setting parallel_flag = True')
         parallel_flag = True
     else:
         print('Setting parallel_flag = False')
         parallel_flag = False
-    
+
     wv_sampling = combdataobj.wv_sampling
     east2V2_deg = combdataobj.east2V2_deg
     all_interp_ra = combdataobj.dra_as_array
@@ -3733,14 +3732,14 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
 
     if N_pix_min is None:
         N_pix_min = (np.pi * aper_radius ** 2 / 0.01 * N_dithers) / 4
-        
+
     #step 1 prepare list of inputs
     inputs = []
     for wv_id, wv in enumerate(wv_sampling):
         if not (wv_id >= debug_init and wv_id < debug_end):
             continue
         rprint("prepping build_cube inputs... id: {} wave: {}".format(wv_id,wv))
-        
+
         psf_interp_paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
 
         X = all_interp_ra[:, wv_id]
@@ -3748,12 +3747,12 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
         Z = all_interp_flux[:, wv_id]
         Zerr = all_interp_err[:, wv_id]
         Zbp = all_interp_badpix[:, wv_id]
-        
+
         inputs.append([X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg,
                        psf_interp_paras,
                        wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min])
 
-    #step 2 map _build_cube_task over input list 
+    #step 2 map _build_cube_task over input list
     if parallel_flag:
         print('starting parallel _build_cube_task...')
         # Iterate calculation in parallel, showing a progress bar of percentage completion
@@ -3764,7 +3763,7 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
         # Iterate calculation serially, also showing a progress bar of percentage completion
         for inp in tqdm(inputs, total=len(inputs), ncols=100):
             outputs.append(_build_cube_task(inp))
-    
+
     #step 3 iterate over outputs and save values
     for j, inp in enumerate(inputs):
         X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inp
