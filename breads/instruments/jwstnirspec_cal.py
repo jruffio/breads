@@ -329,7 +329,7 @@ class JWSTNirspec_cal(Instrument):
 
         """
         from stdatamodels.jwst import datamodels
-        import jwst.datamodels, jwst.assign_wcs
+        import jwst.assign_wcs
         from jwst.photom.photom import DataSet
         from gwcs import wcstools
         if self.verbose:
@@ -459,7 +459,7 @@ class JWSTNirspec_cal(Instrument):
             area2d = hdulist['AREA2D'].data
             try:
                 self.trace_id_map = hdulist['TRACE_ID_MAP'].data
-            except:
+            except KeyError:
                 print("Old reduction of coordinates. Could not find hdulist['TRACE_ID_MAP'].data. Please reprocess.")
         self.dra_as_array, self.ddec_as_array, self.area2d = dra_as_array, ddec_as_array, area2d
         self.coords = "sky"
@@ -625,6 +625,8 @@ class JWSTNirspec_cal(Instrument):
             Use multiprocessing to parallelize operations?
         save_utils : bool
             Save in the utils directory
+        mppool : multiprocessing.Pool
+            Pool instance for use in parallelized computations.
 
         Returns
         -------
@@ -1013,7 +1015,6 @@ class JWSTNirspec_cal(Instrument):
         hdulist = pyfits.open(load_filename)
         ra_offset = hdulist[0].header["RA_CEN"]
         dec_offset = hdulist[0].header["DEC_CEN"]
-        hdulist[0].header["ANGLE"]
         hdulist.close()
 
         if apply_offset:
@@ -1120,7 +1121,6 @@ class JWSTNirspec_cal(Instrument):
             reg_mean_map0 = np.zeros((self.data.shape[0], np.size(x_nodes)))
             reg_std_map0 = np.zeros((self.data.shape[0], np.size(x_nodes)))
             for rowid, row in enumerate(self.data):
-                self.wavelengths[rowid, :]
                 row_bp = self.bad_pixels[rowid, :]
                 if np.nansum(np.isfinite(row * row_bp)) == 0:
                     continue
@@ -1898,7 +1898,7 @@ class JWSTNirspec_cal(Instrument):
             regwvs_dataobj.area2d = hdulist['INTERP_AREA2D'].data
             try:
                 regwvs_dataobj.leftnright_wavelengths = hdulist['INTERP_LEFTNRIGHT'].data
-            except:
+            except KeyError:
                 pass
 
         regwvs_dataobj.wv_sampling = np.nanmedian(regwvs_dataobj.wavelengths,axis=0)
@@ -1991,7 +1991,8 @@ class JWSTNirspec_cal(Instrument):
             Multiprocessing pool to parallelize the code. If None (default), no parallelization is applied.
             E.g. mppool = mp.Pool(processes=10) # 10 is the number processes
 
-        Return:
+        Returns
+        -------
             Broadened spectrum
 
         """
@@ -3345,7 +3346,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
         print(f"\tPerforming serial PSF fit at {debug_end - debug_init} wavelengths.")
 
         for wv_id, wv in tqdm(enumerate(wv_sampling), total=len(wv_sampling), ncols=100):
-            if not (wv_id >= debug_init and wv_id < debug_end):
+            if not (debug_init <= wv_id < debug_end):
                 continue
             paras = linear_interp, psfs[wv_id], psfX[wv_id], psfY[wv_id], rotate_psf - wpsf_angle_offset,flipx, \
                 all_interp_ra[:, wv_id], all_interp_dec[:, wv_id], all_interp_flux[:, wv_id], all_interp_err[:,wv_id], all_interp_badpix[:, wv_id], \
@@ -3401,7 +3402,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
 
-        if save_combined_boolean == True:
+        if save_combined_boolean:
             combined_fname = out_filename.replace(".fits",'_combined.fits')
             valid_rows = []
             for _i_ in range(all_interp_wvs.shape[0]):
@@ -3546,7 +3547,7 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
     debug_end = np.size(wv_sampling)
     if 0 or mppool is None:
         for wv_id, wv in enumerate(wv_sampling):
-            if not (wv_id > debug_init and wv_id < debug_end):
+            if not (debug_init < wv_id < debug_end):
                 psf_interp_list.append(0)
                 continue
             print(wv_id, wv, np.size(wv_sampling))
@@ -3572,7 +3573,7 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
             sampled_psf = np.zeros(all_interp_flux.shape) + np.nan
             for wv_id, wv in enumerate(wv_sampling):
                 # print(wv)
-                if not (wv_id > debug_init and wv_id < debug_end):
+                if not (debug_init < wv_id < debug_end):
                     continue
                 X = all_interp_ra[:, wv_id]
                 Y = all_interp_dec[:, wv_id]
@@ -3736,7 +3737,7 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
     #step 1 prepare list of inputs
     inputs = []
     for wv_id, wv in enumerate(wv_sampling):
-        if not (wv_id >= debug_init and wv_id < debug_end):
+        if not (debug_init <= wv_id < debug_end):
             continue
         rprint("prepping build_cube inputs... id: {} wave: {}".format(wv_id,wv))
 
