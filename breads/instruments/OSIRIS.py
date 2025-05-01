@@ -1,20 +1,23 @@
-from matplotlib.pyplot import axis
-import matplotlib.pyplot as plt
 from breads.instruments.instrument import Instrument
 import breads.utils as utils
+import multiprocessing as mp
+from copy import copy
+from itertools import repeat
 from warnings import warn
+
 import astropy.io.fits as pyfits
+import astropy.units as u
 import numpy as np
+import pandas as pd
 import ctypes
 from astropy.coordinates import SkyCoord, EarthLocation
-import astropy.units as u
 from astropy.time import Time
-from copy import copy, deepcopy
-from breads.utils import broaden
+
+import breads.utils as utils
 from breads.calibration import SkyCalibration
-import multiprocessing as mp
-from itertools import repeat
-import pandas as pd
+from breads.instruments.instrument import Instrument
+from breads.utils import broaden
+
 
 class OSIRIS(Instrument):
     def __init__(self, filename=None, skip_baryrv=False):
@@ -83,13 +86,14 @@ class OSIRIS(Instrument):
         self.bad_pixels[nz-trim:] = np.nan
 
     def remove_bad_pixels(self, chunks=20, mypool=None, med_spec=None, nan_mask_boxsize=3, w=5, \
-        num_threads = 16, wid_mov=None,threshold=3):
-        if med_spec == "transmission" or med_spec == "pair subtraction":
-            img_mean = np.nanmean(self.data, axis=0)
-            x, y = np.unravel_index(np.nanargmax(img_mean), img_mean.shape)
-            med_spec = np.nanmedian(self.data[:,x-w:x+w, y-w:y+w], axis=(1,2))
-        elif med_spec == "default":
-            med_spec = None
+        num_threads = 16, wid_mov=None,threshold=3, mask_bleeding=False):
+        if type(med_spec)==str:
+            if med_spec == "transmission" or med_spec == "pair subtraction":
+                img_mean = np.nanmean(self.data, axis=0)
+                x, y = np.unravel_index(np.nanargmax(img_mean), img_mean.shape)
+                med_spec = np.nanmedian(self.data[:,x-w:x+w, y-w:y+w], axis=(1,2))
+            elif med_spec == "default":
+                med_spec = None
         new_badpixcube, new_cube, res = \
             utils.findbadpix(self.data, self.noise, self.bad_pixels, chunks, mypool, med_spec, nan_mask_boxsize,threshold=threshold)
         self.bad_pixels = new_badpixcube
@@ -111,7 +115,8 @@ class OSIRIS(Instrument):
                 for j in range(nx):
                     self.continuum[:, i, j] = output[(i*nx+j)]
             
-        utils.mask_bleeding(self)
+        if mask_bleeding:
+            utils.mask_bleeding(self)
         utils.clean_nans(self.data)
         return res
 
@@ -236,7 +241,7 @@ def return_64x19(cube):
         ny, nx = cube.shape
     onesmask = np.ones((64, 19))
     if (ny != 64 or nx != 19):
-        mask = copy(cube).astype(np.float)
+        mask = copy(cube).astype(float)
         mask[np.where(mask == 0)] = np.nan
         mask[np.where(np.isfinite(mask))] = 1
         if np.size(cube.shape) == 3:

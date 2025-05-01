@@ -1,27 +1,9 @@
 import numpy as np
-
-from scipy.interpolate import InterpolatedUnivariateSpline
-from astropy import constants as const
 import scipy.ndimage as ndi
+from astropy import constants as const
 from scipy.interpolate import interp1d
 
-from breads.utils import get_spline_model, scale_psg
-
-def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
-    """
-    2d gaussian model. Documentation to be completed. Also faint of t
-    """
-    A, xA, yA, w, bkg = p
-    ny, nx = shape
-    if xhdgrid is None or yhdgrid is None:
-        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * nx).astype(np.float) / hdfactor,
-                                       np.arange(hdfactor * ny).astype(np.float) / hdfactor)
-    else:
-        hdfactor = xhdgrid.shape[0] // ny
-    gaussA_hd = A / (2 * np.pi * w ** 2) * np.exp(
-        -0.5 * ((xA - xhdgrid) ** 2 + (yA - yhdgrid) ** 2) / w ** 2)
-    gaussA = np.nanmean(np.reshape(gaussA_hd, (ny, hdfactor, nx, hdfactor)), axis=(1, 3))
-    return gaussA + bkg
+from breads.utils import get_spline_model, scale_psg, pixgauss2d
 
 
 

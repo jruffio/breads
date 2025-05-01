@@ -1,9 +1,0 @@
-astropy>=4
-photutils
-matplotlib
-numpy
-pip
-py
-scipy
-emcee
-PyAstronomy

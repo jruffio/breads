@@ -1,15 +1,14 @@
-from breads.instruments.instrument import Instrument
-import breads.utils as utils
-from warnings import warn
-import astropy.io.fits as pyfits
-import numpy as np
-import ctypes
-from astropy.coordinates import SkyCoord, EarthLocation
-import astropy.units as u
-from astropy.time import Time
+import warnings
 from copy import copy
 from copy import deepcopy
-from  scipy.interpolate import interp1d
+from warnings import warn
+
+import astropy.io.fits as pyfits
+import numpy as np
+from scipy.interpolate import interp1d
+
+from breads.instruments.instrument import Instrument
+from breads.utils import broaden
 from breads.utils import findbadpix
 from breads.utils import broaden
 import warnings

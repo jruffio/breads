@@ -1,0 +1,214 @@
+import astropy.units as u
+import numpy as np
+from PyAstronomy import pyasl
+from astropy import constants as const
+from scipy.interpolate import interp1d
+
+from breads.utils import get_spline_model
+
+
+
+# pos: (x,y) or fiber, position of the companion
+def hc_atmgrid_2dsplinefm_jwst_nirspec_cal(nonlin_paras, dataobj, ifuy_array=None,atm_grid=None, atm_grid_wvs=None,star_func=None,
+                                         wv_nodes=None,N_wvs_nodes=20,ifuy_nodes=None,delta_ifuy=0.05,
+                                         badpixfraction=0.75,fix_parameters=None,return_extra_outputs=False,
+                                         reg_mean_map=None,reg_std_map=None,wv_ref=None,dist2pl_max=0.15):
+
+    """
+    For high-contrast companions (planet + speckles).
+    Description todo
+
+    Args:
+        nonlin_paras: Non-linear parameters of the model, which are first the parameters defining the atmopsheric grid
+            (atm_grid). The following parameters are the spin (vsini), the radial velocity, and the position (if loc is
+            not defined) of the planet in the FOV.
+                [atm paras ....,vsini,rv,y,x] for 3d cubes (e.g. OSIRIS)
+                [atm paras ....,vsini,rv,y] for 2d (e.g. KPIC, y being fiber)
+                [atm paras ....,vsini,rv] for 1d spectra
+        dataobj: Data object.
+            Must inherit breads.instruments.instrument.Instrument.
+        atm_grid: Planet atmospheric model grid as a scipy.interpolate.RegularGridInterpolator object. Make sure the
+            wavelength coverage of the grid is just right and not too big as it will slow down the spin broadening.
+        atm_grid_wvs: Wavelength sampling on which atm_grid is defined. Wavelength needs to be uniformly sampled.
+        star_func: interpolator object to model the stellar spectrum by continuum normalization to fit the speckle noise in each row of the detector.
+        radius_as: Each pixel with coordinates that are within radius_as of the assumed companion location will be
+            included in the fit. Must be expressed in arcsecond.
+            Default is 0.2 arcsecond
+        nodes: If int, number of nodes equally distributed. If list, custom locations of nodes [x1,x2,..].
+            To model discontinous functions, use a list of list [[x1,...],[xn,...]]. Expressed in pixel coordinates.
+        badpixfraction: Max fraction of bad pixels in data.
+        fix_parameters: List. Use to fix the value of some non-linear parameters. The values equal to None are being
+                    fitted for, other elements will be fixed to the value specified.
+
+    Returns:
+        d: Data as a 1d vector with bad pixels removed (no nans)
+        M: Linear model as a matrix of shape (Nd,Np) with bad pixels removed (no nans). Nd is the size of the data
+            vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
+        s: Noise vector (standard deviation) as a 1d vector matching d.
+    """
+    extra_outputs = {}
+    # print(nonlin_paras)
+    if fix_parameters is not None:
+        _nonlin_paras = np.array(fix_parameters)
+        _nonlin_paras[np.where(np.array(fix_parameters)==None)] = nonlin_paras
+    else:
+        _nonlin_paras = nonlin_paras
+
+    Natmparas = len(atm_grid.values.shape)-1
+    atm_paras = [p for p in _nonlin_paras[0:Natmparas]]
+    other_nonlin_paras = _nonlin_paras[Natmparas::]
+
+    data = dataobj.data
+    ny, nx = data.shape
+    noise = dataobj.noise
+    bad_pixels = dataobj.bad_pixels
+    ra_array = dataobj.dra_as_array
+    dec_array = dataobj.ddec_as_array
+    wvs = dataobj.wavelengths
+    pixarea = dataobj.area2d
+    trace_id_map = dataobj.trace_id_map
+
+    if wv_nodes is None:
+        wv_nodes = np.linspace(np.nanmin(dataobj.wavelengths), np.nanmax(dataobj.wavelengths), N_wvs_nodes, endpoint=True)
+
+    if ifuy_nodes is None:
+        ifuy_min, ifuy_max = np.nanmin(ifuy_array), np.nanmax(ifuy_array)
+        ifuy_min, ifuy_max = np.floor(ifuy_min * 10) / 10, np.ceil(ifuy_max * 10) / 10
+        ifuy_nodes = np.arange(ifuy_min, ifuy_max + 0.1, delta_ifuy)
+
+    vsini,rv = other_nonlin_paras[0:2]
+    # Defining the position of companion
+    comp_dra_as,comp_ddec_as = other_nonlin_paras[2],other_nonlin_paras[3]
+    dist2pl_array = np.sqrt((ra_array-comp_dra_as)**2+(dec_array-comp_ddec_as)**2)
+
+    # Number of linear parameters
+    Nmax_traces = np.size(np.unique(trace_id_map[np.where(np.isfinite(trace_id_map))]))
+    N_traces = np.min([Nmax_traces, np.ceil(dist2pl_max * 2 / 0.10)])
+    N_nodes =  np.size(ifuy_nodes) * np.size(wv_nodes) * N_traces
+    N_linpara = N_nodes + 1
+    # print(N_linpara)
+
+    planet_model = atm_grid(atm_paras)[0]
+    if np.sum(planet_model)==0 or np.size(atm_grid_wvs) != np.size(planet_model):
+        print('##!!##')
+        return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
+    else:
+        if vsini != 0:
+            spinbroad_model = pyasl.fastRotBroad(atm_grid_wvs, planet_model, 0.1, vsini)
+        else:
+            spinbroad_model = planet_model
+        planet_f = interp1d(atm_grid_wvs,spinbroad_model, bounds_error=False, fill_value=np.nan)
+
+        comp_spec = planet_f(wvs* (1 - (rv - dataobj.bary_RV) / const.c.to('km/s').value))*(u.W/u.m**2/u.um)
+        comp_spec = comp_spec*pixarea/dataobj.webbpsf_spaxel_area # normalized to peak flux
+        comp_spec = comp_spec*(wvs*u.um)**2/const.c #from  Flambda to Fnu
+        comp_spec = comp_spec.to(u.MJy).value
+
+
+    map_to_select_trace = (dist2pl_array<dist2pl_max)*np.isfinite(trace_id_map)*np.isfinite(data)*\
+                          np.isfinite(bad_pixels)*(noise!=0)*np.isfinite(comp_spec)
+    unique_trace_ids = np.unique(trace_id_map[np.where(map_to_select_trace)]).astype(int)
+    # import matplotlib.pyplot as plt
+    # print(unique_trace_ids)
+    # plt.imshow((dist2pl_array<dist2pl_max),origin="lower")
+    # plt.show()
+    map_of_valid_traces = np.full(trace_id_map.shape, False)
+    for trace_id in unique_trace_ids:
+        where_in_trace = np.where(trace_id_map==trace_id)
+        map_of_valid_traces[where_in_trace] = True
+
+    valid_pix_map = map_of_valid_traces*\
+                    (dist2pl_array<3*dist2pl_max)*np.isfinite(trace_id_map)*np.isfinite(data)*\
+                    np.isfinite(bad_pixels)*(noise!=0)*np.isfinite(comp_spec)
+    # plt.imshow(valid_pix_map,origin="lower")
+    # plt.show()
+    where_finite = np.where(valid_pix_map)
+    Nd = np.size(where_finite[0])
+
+    d = data[where_finite]
+    s = noise[where_finite]
+    w = wvs[where_finite]
+    x = ra_array[where_finite]
+    y = dec_array[where_finite]
+    ifuy = ifuy_array[where_finite]
+    trace_ids = trace_id_map[where_finite]
+    if return_extra_outputs:
+        extra_outputs["wvs"] = w
+        extra_outputs["ras"] = x
+        extra_outputs["decs"] = y
+        extra_outputs["ifuy"] = ifuy
+        row_ids_im = np.tile(np.arange(ny)[:,None],(1,nx))
+        extra_outputs["rows"] = row_ids_im[where_finite]
+        extra_outputs["traces_ids"] = trace_id_map[where_finite]
+    comp_spec = comp_spec[where_finite]
+
+    if np.size(where_finite[0]) <= (1-badpixfraction) * (nx*2) or vsini < 0:
+        # don't bother to do a fit if there are too many bad pixels
+        print('______' )
+        return np.array([]), np.array([]).reshape(0,N_linpara), np.array([])
+    else:
+
+        # print(unique_trace_ids)
+        # M_spline_ifuy = get_spline_model(ifuy_nodes, ifuy, spline_degree=3)
+        M_spline_ifuy = get_spline_model(ifuy_nodes, ifuy / w * wv_ref, spline_degree=3)
+        M_spline_wvs = get_spline_model(wv_nodes, w, spline_degree=3)
+        M_spline_ifuy_repeated = np.repeat(M_spline_ifuy, np.size(wv_nodes), axis=1)
+        M_spline_wvs_tiled = np.tile(M_spline_wvs, (1, np.size(ifuy_nodes)))
+        M_speckles = M_spline_ifuy_repeated * M_spline_wvs_tiled
+
+        M_speckles = M_speckles*star_func(w)[:,None]
+
+        s_reg = np.array([np.nan])
+        d_reg = np.array([np.nan])
+        wvs_reg = np.array([np.nan])
+        ifuy_reg = np.array([np.nan])
+        trace_id_reg = np.array([np.nan])
+
+        M_partial_speckles_list = []
+        ifuy_nodes_grid,wv_nodes_grid = np.meshgrid(ifuy_nodes,wv_nodes,indexing="ij")
+        wvs_reg_speckles = np.ravel(wv_nodes_grid)
+        ifuy_reg_speckles = np.ravel(ifuy_nodes_grid)
+        for trace_id in unique_trace_ids:
+            where_in_trace = np.where(trace_ids == trace_id)
+            partial_M_speckles = np.zeros(M_speckles.shape)
+            partial_M_speckles[where_in_trace[0],:] = M_speckles[where_in_trace[0],:]
+            # nonvalid_speckles_paras = np.where(np.nansum(partial_M_speckles > (np.nanmax(partial_M_speckles) * 0.005), axis=0) == 0)
+            # partial_M_speckles[:,nonvalid_speckles_paras[0]] = 0
+            # M_partial_speckles_list.append(partial_M_speckles)
+            #
+            # s_reg_speckles = np.ravel(reg_std_map[trace_id])
+            # d_reg_speckles = np.ravel(reg_mean_map[trace_id])
+            # s_reg = np.concatenate([s_reg, s_reg_speckles])
+            # d_reg = np.concatenate([d_reg, d_reg_speckles])
+            # wvs_reg = np.concatenate([wvs_reg, wvs_reg_speckles])
+            # ifuy_reg = np.concatenate([ifuy_reg, ifuy_reg_speckles])
+            # trace_id_reg  = np.concatenate([trace_id_reg, np.full(np.size(s_reg_speckles),trace_id)])
+            valid_speckles_paras = np.where(np.nansum(partial_M_speckles > (np.nanmax(partial_M_speckles) * 0.005), axis=0) != 0)
+            partial_M_speckles = partial_M_speckles[:, valid_speckles_paras[0]]
+            M_partial_speckles_list.append(partial_M_speckles)
+
+            s_reg_speckles = np.ravel(reg_std_map[trace_id])
+            d_reg_speckles = np.ravel(reg_mean_map[trace_id])
+            s_reg = np.concatenate([s_reg, s_reg_speckles[valid_speckles_paras[0]]])
+            d_reg = np.concatenate([d_reg, d_reg_speckles[valid_speckles_paras[0]]])
+            wvs_reg = np.concatenate([wvs_reg, wvs_reg_speckles[valid_speckles_paras[0]]])
+            ifuy_reg = np.concatenate([ifuy_reg, ifuy_reg_speckles[valid_speckles_paras[0]]])
+            trace_id_reg  = np.concatenate([trace_id_reg, np.full(np.size(valid_speckles_paras[0]),trace_id)])
+        extra_outputs["regularization"] = (d_reg,s_reg)
+
+        comp_model = dataobj.webbpsf_interp((x - comp_dra_as) * dataobj.webbpsf_wv0 / w,
+                                            (y - comp_ddec_as) * dataobj.webbpsf_wv0 / w) * comp_spec
+
+        # combine planet model with speckle model
+        M = np.concatenate([comp_model[:, None],]+M_partial_speckles_list, axis=1)
+
+        if return_extra_outputs:
+            extra_outputs["regularization_wvs"] = wvs_reg
+            extra_outputs["regularization_ifuy"] = ifuy_reg
+            extra_outputs["regularization_trace_id"] = trace_id_reg
+            extra_outputs["where_finite"] = where_finite
+
+        if len(extra_outputs) >= 1:
+            return d, M, s,extra_outputs
+        else:
+            return d, M, s

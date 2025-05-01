@@ -1,28 +1,12 @@
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.interpolate import InterpolatedUnivariateSpline
-from astropy import constants as const
-from scipy.optimize.linesearch import line_search_armijo
-from copy import deepcopy
-from breads.utils import get_spline_model
 from copy import copy
+
+import matplotlib.pyplot as plt
+import numpy as np
+from astropy import constants as const
 from scipy.optimize import lsq_linear
 
-def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
-    """
-    2d gaussian model. Documentation to be completed. Also faint of t
-    """
-    A, xA, yA, sigx, sigy, bkg = p
-    ny, nx = shape
-    if xhdgrid is None or yhdgrid is None:
-        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * nx).astype(np.float) / hdfactor,
-                                       np.arange(hdfactor * ny).astype(np.float) / hdfactor)
-    else:
-        hdfactor = xhdgrid.shape[0] // ny
-    gaussA_hd = A / (2 * np.pi * sigx * sigy) * np.exp(
-        -0.5 * ((xA - xhdgrid) ** 2 / (sigx ** 2) + (yA - yhdgrid) ** 2 / (sigy ** 2)))
-    gaussA = np.nanmean(np.reshape(gaussA_hd, (ny, hdfactor, nx, hdfactor)), axis=(1, 3))
-    return gaussA + bkg
+from breads.utils import get_spline_model, pixgauss2d
+
 
 def set_nodes(cont_stamp, noise_stamp, wavelengths, nodes, optimize_nodes, p, wid_mov=None, knot_margin=1e-4):
     data_f = np.divide(np.nanmedian(cont_stamp, axis=(1,2)), np.nanmedian(noise_stamp, axis=(1,2)))

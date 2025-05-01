@@ -1,16 +1,17 @@
-import numpy as np
+import multiprocessing as mp
+from copy import deepcopy
+from itertools import repeat
+from warnings import warn
+
+import astropy.io.fits as pyfits
 import astropy.units as u
+import numpy as np
+from photutils.aperture import EllipticalAperture, aperture_photometry
+from scipy.optimize import curve_fit, lsq_linear, minimize
+
 import breads.utils as utils
 from breads.instruments.instrument import Instrument
-from scipy.optimize import curve_fit, lsq_linear, minimize
-from copy import deepcopy
-import multiprocessing as mp
-from itertools import repeat
-import sys # for printing in mp, and error prints
-from warnings import warn
-import astropy.constants as const
-from photutils.aperture import EllipticalAperture, aperture_photometry
-import astropy.io.fits as pyfits
+
 
 #############################
 # OH line calibration code
@@ -192,10 +193,7 @@ class SkyCalibration:
                                         header=pyfits.Header(cards={"TYPE": "RV"})))                         
         hdulist.append(pyfits.ImageHDU(data=fit_values[:, :, 2],
                                         header=pyfits.Header(cards={"TYPE": "R"})))                 
-        try:
-            hdulist.writeto(calib_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(calib_filename, clobber=True)
+        hdulist.writeto(calib_filename, overwrite=True)
         hdulist.close()
 
 #############################
@@ -351,10 +349,7 @@ class TelluricCalibration:
                                         header=pyfits.Header(cards={"TYPE": "Sigma X"})))
         hdulist.append(pyfits.ImageHDU(data=self.sig_ys,
                                         header=pyfits.Header(cards={"TYPE": "Sigma Y"})))                                   
-        try:
-            hdulist.writeto(calib_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(calib_filename, clobber=True)
+        hdulist.writeto(calib_filename, overwrite=True)
         hdulist.close()
 
 def extract_star_spectrum(data: Instrument, calib_filename="./star_spectrum_file.fits",
