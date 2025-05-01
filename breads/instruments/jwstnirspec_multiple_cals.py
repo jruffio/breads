@@ -2,16 +2,20 @@ from breads.instruments.jwstnirspec_cal import JWSTNirspec_cal
 from warnings import warn
 import numpy as np
 from copy import copy
-class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
-    def __init__(self, dataobj_list=None,verbose=True):
-        """JWST NIRSpec 2D calibrated data.
-        test
 
+class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
+    def __init__(self, dataobj_list=None, verbose=True):
+        """JWST NIRSpec 2D calibrated data, combined from multiple files
+
+        This class is used to merge point cloud data from multiple images,
+        typically from a series of spatially dithered exposures on a target.
 
         Parameters
         ----------
-        dataobj_list
-        verbose
+        dataobj_list : list of JWSTNirspec_cal objects
+            Datasets to combine
+        verbose : bool
+            Be more verbose in text output?
         """
         super().__init__(verbose=verbose)
 
@@ -19,34 +23,17 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
             warning_text = "No data object provided provided. " + \
                            "Please manually add data or use JWSTNirspec_multiple_cals.combine_dataobj_list()"
             warn(warning_text)
+            # TODO consider making this an Exception error rather than just a warning?
+            # Is there a compelling use case to allow manually adding data after initializing the class?
         else:
             self.combine_dataobj_list(dataobj_list)
 
-        # self.default_filenames = {}
-        # self.default_filenames["compute_med_filt_badpix"] = \
-        #         os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_roughbadpix.fits"))
-        # self.default_filenames["compute_coordinates_arrays"] = \
-        #         os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_relcoords.fits"))
-        # splitbasename = os.path.basename(filename).split("_")
-        # self.default_filenames["compute_webbpsf_model"] = \
-        #         os.path.join(utils_dir, splitbasename[0]+"_"+splitbasename[1]+"_"+splitbasename[3]+"_webbpsf.fits")
-        # self.default_filenames["compute_quick_webbpsf_model"] = \
-        #         os.path.join(utils_dir, splitbasename[0]+"_"+splitbasename[1]+"_"+splitbasename[3]+"_quick_webbpsf.fits")
-        # self.default_filenames["compute_new_coords_from_webbPSFfit"] = \
-        #         os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_newcen_wpsf.fits"))
-        # self.default_filenames["compute_charge_bleeding_mask"] = \
-        #         os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_barmask.fits"))
-        # self.default_filenames["compute_starspectrum_contnorm"] = \
-        #         os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_starspec_contnorm.fits"))
-        # self.default_filenames["compute_starspectrum_contnorm_2dspline"] = \
-        #         os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_starspec_2dcontnorm.fits"))
-        # self.default_filenames["compute_starsubtraction"] = \
-        #         os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_starsub.fits"))
-        # self.default_filenames["compute_starsubtraction_2dspline"] = \
-        #         os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_2dstarsub.fits"))
-        # self.default_filenames["compute_interpdata_regwvs"] = \
-        #         os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_regwvs.fits"))
+
     def combine_dataobj_list(self, dataobj_list):
+        """ Combine the data from multiple data objects
+
+        This concatenates the values from many attributes into a single overall combined dataset
+        """
         self.ins_type = dataobj_list[0].ins_type
         self.coords = dataobj_list[0].coords
         self.R = dataobj_list[0].R
