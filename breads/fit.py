@@ -180,7 +180,7 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,b
     return lnprob
 
 
-def combined_log_prob(nonlin_paras, dataobjlist,fm_funclist, fm_paraslist, nonlin_lnprior_func=None,bounds=None):
+def combined_log_prob(nonlin_paras, dataobjlist,fm_funclist, fm_paraslist, nonlin_lnprior_func=None, bounds=None):
     '''
     For use when you have multiple data objects and want to combine the log-likelihoods for MCMC sampling
 
@@ -194,7 +194,7 @@ def combined_log_prob(nonlin_paras, dataobjlist,fm_funclist, fm_paraslist, nonli
     '''
     combined_lnprob = 0
     for i, dataobj in enumerate(dataobjlist):
-        lnprob=log_prob(nonlin_paras = nonlin_paras, dataobj=dataobj, fm_func=fm_funclist[i], fm_paras= fm_paraslist[i],nonlin_lnprior_func=None,bounds=None)
+        lnprob=log_prob(nonlin_paras = nonlin_paras, dataobj=dataobj, fm_func=fm_funclist[i], fm_paras= fm_paraslist[i], nonlin_lnprior_func=nonlin_lnprior_func, bounds=None)
         combined_lnprob += lnprob
     return combined_lnprob
 

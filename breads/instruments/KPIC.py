@@ -13,6 +13,7 @@ from  scipy.interpolate import interp1d
 from breads.utils import findbadpix
 from breads.utils import broaden
 import warnings
+import os
 
 class KPIC(Instrument):
     def __init__(self, spec=None, trace=None, wvs=None, err=None, badpix=None,baryrv=None,orders=None,combine_mode="planet",fiber_goal_list = None):
@@ -297,3 +298,61 @@ def get_fib_labels(header):
 #         return np.array([0,1,2,3])
 #     else:
 #         return np.array(sf_id_list)[np.array(sf_num_list,dtype=np.float).argsort()]
+
+def prep_data_object(date, file_numbers, fiber_list, datadir, trace_filename, wvs_filename, orders, bkgdsub=True):
+    """
+    Prepares a KPIC data object per fiber, returning a dictionary keyed by fiber number (0–3).
+    Only fibers with associated files are included.
+    """
+    fiber_dataobjs = {}
+
+    fiber_list = np.array(fiber_list)
+    file_numbers = np.array(file_numbers)
+
+    for fiber in range(4):
+        indices = np.where(fiber_list == fiber)[0]
+        if len(indices) == 0:
+            continue
+
+        print(f"Fiber {fiber} has {len(indices)} files")
+        filelist = []
+        for idx in indices:
+            filenum = file_numbers[idx]
+            filename = f"nspec{date}_{filenum:04d}_{'bkgdsub' if bkgdsub else 'nodsub'}_spectra.fits"
+            filepath = os.path.join(datadir, filename)
+            filelist.append(filepath)
+
+        fiber_goal_list = [fiber] * len(filelist)
+        dataobj = KPIC(filelist, trace_filename, wvs_filename, combine_mode="companion", fiber_goal_list=fiber_goal_list)
+        dataobj = dataobj.selec_order(orders)
+        fiber_dataobjs[fiber] = dataobj
+
+    return fiber_dataobjs
+
+def prep_host_object(date, file_numbers, fiber_list, datadir, trace_filename, wvs_filename, orders, bkgdsub = True):
+    """
+    Prepares a data object for the given file numbers and fiber.
+    """
+    filelist = []
+    for filenum in file_numbers:
+        if bkgdsub:
+            filelist.append(os.path.join(datadir, f"nspec{date}_{filenum:04d}_bkgdsub_spectra.fits"))
+        else:
+            filelist.append(os.path.join(datadir, f"nspec{date}_{filenum:04d}_nodsub_spectra.fits"))
+    
+    dataobj = KPIC(filelist, trace_filename, wvs_filename, combine_mode="star", fiber_goal_list=fiber_list)
+    return dataobj.selec_order(orders)
+
+def prep_A0_object(date, file_numbers, fiber_list, datadir, trace_filename, wvs_filename, orders, bkgdsub = True):
+    """
+    Prepares a data object for the given file numbers and fiber.
+    """
+    filelist = []
+    for filenum in file_numbers:
+        if bkgdsub:
+            filelist.append(os.path.join(datadir, f"nspec{date}_{filenum:04d}_bkgdsub_spectra.fits"))
+        else:
+            filelist.append(os.path.join(datadir, f"nspec{date}_{filenum:04d}_nodsub_spectra.fits"))
+    
+    dataobj = KPIC(filelist, trace_filename, wvs_filename, combine_mode="star", fiber_goal_list=fiber_list)
+    return dataobj.selec_order(orders)

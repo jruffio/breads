@@ -223,7 +223,7 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
     res = np.zeros(cube.shape) + np.nan
 
     x = np.arange(nz)
-    x_knots = x[np.linspace(0,nz-1,chunks+1,endpoint=True).astype(np.int)]
+    x_knots = x[np.linspace(0,nz-1,chunks+1,endpoint=True).astype(int)]
     M_spline = get_spline_model(x_knots,x,spline_degree=3)
 
     N_valid_pix = ny*nx
@@ -327,7 +327,7 @@ def broaden(wvs,spectrum,R,mppool=None,kernel=None):
     """
     if mppool is None:
         # Each wavelength processed sequentially
-        return _task_broaden((np.arange(np.size(spectrum)).astype(np.int),wvs,spectrum,R,kernel))
+        return _task_broaden((np.arange(np.size(spectrum)).astype(int),wvs,spectrum,R,kernel))
     else:
         conv_spectrum = np.zeros(spectrum.shape)
 
@@ -336,8 +336,8 @@ def broaden(wvs,spectrum,R,mppool=None,kernel=None):
         N_chunks = np.size(spectrum)//chunk_size
         indices_list = []
         for k in range(N_chunks-1):
-            indices_list.append(np.arange(k*chunk_size,(k+1)*chunk_size).astype(np.int))
-        indices_list.append(np.arange((N_chunks-1)*chunk_size,np.size(spectrum)).astype(np.int))
+            indices_list.append(np.arange(k*chunk_size,(k+1)*chunk_size).astype(int))
+        indices_list.append(np.arange((N_chunks-1)*chunk_size,np.size(spectrum)).astype(int))
         # Start parallelization
         outputs_list = mppool.map(_task_broaden, zip(indices_list,
                                                                itertools.repeat(wvs),
@@ -627,3 +627,13 @@ def propagate_coordinates_at_epoch(targetname, date, verbose=True):
         print(f"Coordinates at {date}:  {host_coord_at_date.icrs.to_string('hmsdms')}")
 
     return host_coord_at_date
+
+def nonlin_lnprior_func(nonlin_paras, nonlin_paras_mins,nonlin_paras_maxs):
+    """basic function to limit prior ranges for emcee
+
+    If the prior is outside of the range defined by nonlin_paras_mins and nonlin_paras_max, the prior is -infinity
+    """
+    for p, _min, _max in zip(nonlin_paras, nonlin_paras_mins, nonlin_paras_maxs):
+        if p > _max or p < _min:
+            return -np.inf
+    return 0

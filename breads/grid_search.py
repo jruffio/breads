@@ -24,27 +24,35 @@ def process_chunk(args):
     Process for grid_search()
     """
     nonlin_paras_list, dataobj, fm_func, fm_paras, bounds = args
+    out_chunk = None  # define up front for safety
 
     for k, nonlin_paras in enumerate(zip(*nonlin_paras_list)):
         try:
-        # if 1:
-            log_prob,log_prob_H0,rchi2,linparas,linparas_err = fitfm(nonlin_paras,dataobj,fm_func,fm_paras,bounds=bounds)
+            log_prob, log_prob_H0, rchi2, linparas, linparas_err = fitfm(
+                nonlin_paras, dataobj, fm_func, fm_paras, bounds=bounds
+            )
             N_linpara = np.size(linparas)
-            if k == 0:
-                out_chunk = np.zeros((np.size(nonlin_paras_list[0]),1+1+1+2*N_linpara))+np.nan
-            out_chunk[k,0] = log_prob
-            out_chunk[k,1] = log_prob_H0
-            out_chunk[k,2] = rchi2
-            out_chunk[k,3:(N_linpara+3)] = linparas
-            out_chunk[k,(N_linpara+3):(2*N_linpara+3)] = linparas_err
+            if out_chunk is None:
+                # First successful run, initialize output array
+                out_chunk = np.full((np.size(nonlin_paras_list[0]), 3 + 2 * N_linpara), np.nan)
+
+            out_chunk[k, 0] = log_prob
+            out_chunk[k, 1] = log_prob_H0
+            out_chunk[k, 2] = rchi2
+            out_chunk[k, 3 : 3 + N_linpara] = linparas
+            out_chunk[k, 3 + N_linpara : 3 + 2 * N_linpara] = linparas_err
+
         except Exception as e:
-            print(nonlin_paras,e)
-    try:
-    # if 1:
-        return out_chunk
-    except Exception as e:
-        print(nonlin_paras,e)
+            print(f"[process_chunk] Error for nonlin_paras {nonlin_paras}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    if out_chunk is None:
+        print("[process_chunk] All fits failed for this chunk.")
         return None
+
+    return out_chunk
+
 
 
 def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None):
@@ -119,6 +127,9 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None):
         mypool.close()
         mypool.join()
 
+        if outarr_not_created:
+            raise RuntimeError("All process_chunk calls returned None. Check for errors in fitfm or the input data.")
+        
     N_linpara = int((out.shape[-1]-3)/2)
     out = np.moveaxis(out, -1, 0)
     log_prob = out[0]
