@@ -187,8 +187,7 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all", sa
 
         return rate_files
 
-
-def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False, save_plots=True):
+def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False, nsclean_skip=False, save_plots=True):
     """ Run pipeline stage 2, with some customizations for reductions
     intended to be used with breads for IFU high contrast
 
@@ -242,7 +241,8 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
             # # spec2.srctype.source_type = 'POINT'
             # spec2.flat_field.skip = False
             # spec2.pathloss.skip = False
-            'pathloss': {'skip': pathloss_skip},
+            'pathloss':{'skip':pathloss_skip},
+            'nsclean':{'skip':nsclean_skip},
             # spec2.photom.skip = False
             'cube_build': {'skip': skip_cubes},  # We do not want or need interpolated cubes
             'extract_1d': {'skip': True},
