@@ -316,7 +316,7 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,b
 
 
 def combined_log_prob(nonlin_paras, dataobjlist,fm_funclist, fm_paraslist, nonlin_lnprior_func=None, bounds=None):
-    '''
+    """
     For use when you have multiple data objects and want to combine the log-likelihoods for MCMC sampling
 
     Parameters
