@@ -27,6 +27,7 @@ from breads.instruments.jwstnirspec_cal import filter_big_triangles
 from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_cals
 from breads.fit import fitfm
 from breads.utils import get_spline_model
+import breads.jwst_tools.plotting
 
 
 ###########################################################################
@@ -42,33 +43,94 @@ from breads.utils import get_spline_model
 #   run_noise_clean
 #   run_stage2
 
-def find_files_to_process(input_dir, filetype='uncal.fits',exp_numbers=None):
-    """ Utility function to find files of a given type """
+def find_files_to_process(input_dir, filetype='uncal.fits', exp_numbers=None, verbose=True):
+    """ Utility function to find files of a given type
 
-    if "jw0" in filetype:
-        files = glob(os.path.join(input_dir, filetype))
-    else:
-        files = glob(os.path.join(input_dir, "jw0*_" + filetype))
+    Parameters
+    ----------
+    input_dir : str
+        Input directory to search for files
+    filetype : str
+        Filename match pattern. Either a simple ending string like 'uncal.fits' or a more
+        complex regular expression search pattern. This will be used to search the
+        input directory for all FITS files matching this pattern.
+    exp_numbers :  list or ndarray of ints
+        Optional list of exposure numers. The list of files will be filtered to contiain
+        only this subset of exposure numbers.
+    verbose : bool
+        Be more verbose in outputs
+
+    Returns
+    -------
+    files : list of str
+        List of filenames found in input_dir matching the filetype (and exp_numbers, if provided)
+    """
+
+    search_pattern = filetype if filetype.startswith('jw') else  "jw*_" + filetype
+    files = glob(os.path.join(input_dir, search_pattern))
     files.sort()
-    for file in files:
-        print(file)
-    print('Found ' + str(len(files)) + ' input files to process')
+    if verbose:
+        print(f"Searching in {input_dir} for files matching {search_pattern}")
+        print('\tFound ' + str(len(files)) + ' input files to process')
+        for file in files:
+            print("\t" + os.path.basename(file))
 
     if exp_numbers is not None:
         # Use fnmatch to filter only the wanted exposure numbers
-        files = [f for f in files if any(fnmatch.fnmatch(os.path.basename(f), "jw0*_*_{0:05d}_*".format(num)) for num in exp_numbers)]
+        files = [f for f in files if any(fnmatch.fnmatch(os.path.basename(f), "jw*_*_{0:05d}_*".format(num)) for num in exp_numbers)]
 
     return files
 
+def check_instrument_grating(uncal_files):
+    """ Read the GRATING keyword for a list of uncal files, and verify that all have the same GRATING
+    value. This is useful because forward modeling should be done for only one grating at a time, but
+    some JWST observations may use multiple gratings in different activities within the observation
+
+    Parameters
+    ----------
+    uncal_files : list of str
+        filenames
+
+    Returns
+    -------
+    grating : str
+        GRATING keyword value
+    """
+
+    gratings = [fits.getheader(f)['GRATING'] for f in uncal_files]
+    gratings = set(gratings)
+    if len(gratings) > 1:
+        raise RuntimeError(f"The specified list of files contains multiple different GRATING values: {gratings}. "
+                            "Adjust your input file selection criteria to select files all with the same spectral"
+                            "grating value.")
+    else:
+        return list(gratings)[0]
 
 ###########################################################################
 # Functions for invoking the pipeline
 
-def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
+def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all", save_plots=True):
     """ Run pipeline stage 1, with some customizations for reductions
     intended to be used with breads for IFU high contrast
 
     Currently only tested on NIRSpec IFU data
+
+    For each input file, before doing any reduction, the expected output filename
+    is inferred, and it checks whether that output file already exists.
+    If so, then it is NOT reduced again by default.
+    Set the overwrite flag to True to re-reduce files
+
+    Parameters
+    ----------
+    uncal_files : list of strings
+        Filenames of uncal files to reduce
+    output_dir : string
+        Directory path for where to put the output files
+    overwrite : bool
+        Re-reduce and overwrite outputs, if these data were already reduced before?
+        Default is to SKIP re-reducing anything already reduced.
+    maximum_cores : string
+        Passed to JWST pipeline functions that use multiprocessing, such as ramp fit
     """
     from jwst.pipeline import Detector1Pipeline
 
@@ -80,13 +142,13 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
     rate_files = []
 
     for i, file in enumerate(uncal_files):
-        print(f"Processing file {i + 1} of {len(uncal_files)}.")
+        print(f"Stage 1 Processing file {i + 1} of {len(uncal_files)}.")
 
         outname = os.path.join(output_dir, os.path.basename(file).replace('uncal.fits', 'rate.fits'))
         rate_files.append(outname)
 
         if os.path.exists(outname) and not overwrite:
-            print(f"Output file {outname} already exists in output dir;\n\tskipping {file}.")
+            print(f"\tStage 1 Output file {os.path.basename(outname)} already exists in output dir;\n\tskipping {os.path.basename(file)}.")
             continue
 
         det1 = Detector1Pipeline()  # Instantiate the pipeline
@@ -113,19 +175,37 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all"):
 
         # Print out the time benchmark
         time1 = time.perf_counter()
-        print(f"Runtime so far: {time1 - time0:0.4f} seconds")
+        print(f"\tStage 1 Runtime so far: {time1 - time0:0.4f} seconds")
 
     time1 = time.perf_counter()
-    print(f"Total Runtime: {time1 - time0:0.4f} seconds")
-    return rate_files
+    print(f"Stage 1 Total Runtime: {time1 - time0:0.4f} seconds")
+    if save_plots:
+        breads.jwst_tools.plotting.plot_2d_image_set(rate_files,
+                                                     output_dir = output_dir,
+                                                     suptitle="Stage 1 pipeline reduction results",
+                                                     plot_label = 'stage1')
 
+        return rate_files
 
-def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False, nsclean_skip=False):
+def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False, nsclean_skip=False, save_plots=True):
     """ Run pipeline stage 2, with some customizations for reductions
     intended to be used with breads for IFU high contrast
 
     Currently only tested on NIRSpec IFU data
 
+
+    Parameters
+    ----------
+    rate_files
+    output_dir
+    skip_cubes
+    overwrite
+    TA
+
+    Returns
+    -------
+    cal_files : list of str
+        List of cal filenames produced by stage 2
     """
     from jwst.pipeline import Spec2Pipeline
 
@@ -135,27 +215,23 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
 
         # Start a timer to keep track of runtime
     time0 = time.perf_counter()
-    print(time0)
 
     cal_files = []
 
     for fid, rate_file in enumerate(rate_files):
-        print(fid, rate_file)
+        print(f"Stage 2 Processing file {fid + 1} of {len(rate_files)}.")
 
         # Setting up steps and running the Spec2 portion of the pipeline.
 
         outname = os.path.join(output_dir, os.path.basename(rate_file).replace('rate.fits', 'cal.fits'))
         cal_files.append(outname)
         if os.path.exists(outname) and not overwrite:
-            print(f"Output file {outname} already exists;\n\tskipping {rate_file}.")
+            print(f"\tStage 2 Output file {os.path.basename(outname)} already exists in output dir;\n\tskipping {os.path.basename(rate_file)}.")
             continue
 
         spec2 = Spec2Pipeline()
 
-        if TA:
-            pathloss_skip = True
-        else:
-            pathloss_skip = False
+        pathloss_skip = TA  # For target acq images, skip the pathloss step, otherwise don't skip it.
 
         step_parameters = {
             # spec2.assign_wcs.skip = False
@@ -181,10 +257,16 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
 
         # Print out the time benchmark
         time1 = time.perf_counter()
-        print(f"Runtime so far: {time1 - time0:0.4f} seconds")
+        print(f"\tStage 2 Runtime so far: {time1 - time0:0.4f} seconds")
 
     time1 = time.perf_counter()
-    print(f"Total Runtime: {time1 - time0:0.4f} seconds")
+    print(f"Stage 2 Total Runtime: {time1 - time0:0.4f} seconds")
+    if save_plots:
+        breads.jwst_tools.plotting.plot_2d_image_set(cal_files,
+                                                     output_dir = output_dir,
+                                                     suptitle="Stage 2 pipeline reduction results",
+                                                     plot_label = 'stage2')
+
     return cal_files
 
 
@@ -210,7 +292,43 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
                             save_plots=False,
                             filename_suffix="_webbpsf",
                             overwrite=False,
-                           targetname=None):
+                            targetname=None):
+    """
+
+
+    Parameters
+    ----------
+    cal_files : list of strings
+        Filenames of stage 2 reduced Cal files to process
+    utils_dir
+    crds_dir
+    init_centroid : tuple of floats
+        Starting guess for centroid location
+    wv_sampling
+        Wavelength sampling
+    N_wvs_nodes
+        Number of wavelength nodes
+    mask_charge_transfer_radius
+    IWA : float
+        Inner working angle
+    OWA : float
+        Outer working angle
+    debug_init
+    debug_end
+    numthreads
+    save_plots
+    filename_suffix
+    overwrite
+    targetname : str
+
+    Returns
+    -------
+
+    Creates output files:
+      [X]_fitpsf_[filename_suffix].fits
+      [X]_poly2d_centroid_[filename_suffix].txt
+
+    """
     mypool = mp.Pool(processes=numthreads)
 
     if not os.path.exists(utils_dir):
@@ -221,7 +339,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         print(filename)
     print("N files: {0}".format(len(cal_files)))
 
-    # Definie the filename of the output file saved by fitpsf
+    # Define the filename of the output file saved by fitpsf
     splitbasename = os.path.basename(cal_files[0]).split("_")
     fitpsf_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[
         3] + "_fitpsf" + filename_suffix + ".fits")
@@ -229,7 +347,6 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         3] + "_poly2d_centroid" + filename_suffix + ".txt")
 
     hdulist_sc = fits.open(cal_files[0])
-    grating = hdulist_sc[0].header["GRATING"].strip()
     detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
     if wv_sampling is None:
         wv_sampling = np.arange(np.nanmin(hdulist_sc["WAVELENGTH"].data),
@@ -237,8 +354,12 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
                                 np.nanmedian(hdulist_sc["WAVELENGTH"].data) / 300)
     hdulist_sc.close()
 
+    # If the output centroid file already exists, from a prior run of this function, then
+    # just reload those results and return them, without doing any additional calculation,
+    # unless overwrite is set.
     if not overwrite:
         if len(glob(poly2d_centroid_filename)) == 1:
+            print("Found centroid results from prior calculation. Loading and returning those.")
             output = np.loadtxt(poly2d_centroid_filename, delimiter=' ')
             poly_p_ra, poly_p_dec = output[0], output[1]
             print("RA correction " + detector, poly_p_ra)
@@ -251,6 +372,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         if detector not in filename:
             raise Exception("The files in cal_files should all be for the same detector")
 
+        # Define a series of processing tasks to be performed on each input file.
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
         preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
@@ -263,11 +385,14 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
                                                               "mppool": mypool}, True, True])
         preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, True])
 
+        # Load that file. (TODO: Does this invoke the preproc_task_list?)
         dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
         regwvs_dataobj_list.append(dataobj.reload_interpdata_regwvs())
 
+    # Combine all input files into a joint dataset
     regwvs_combdataobj = JWSTNirspec_multiple_cals(regwvs_dataobj_list)
+
     if mask_charge_transfer_radius is not None:
         regwvs_combdataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
 
@@ -298,9 +423,6 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
 
     with fits.open(fitpsf_filename) as hdulist:
         bestfit_coords = hdulist[0].data
-        wpsf_angle_offset = hdulist[0].header["INIT_ANG"]
-        wpsf_ra_offset = hdulist[0].header["INIT_RA"]
-        wpsf_dec_offset = hdulist[0].header["INIT_DEC"]
 
     x2fit = wv_sampling - np.nanmedian(wv_sampling)
     y2fit = bestfit_coords[0, :, 2]
@@ -317,6 +439,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
     poly_p_dec = np.polyfit(x2fit[wherefinite], y2fit[wherefinite], deg=2)
     print("Dec correction " + detector, poly_p_dec)
 
+    # Save centroids to a text file
     np.savetxt(poly2d_centroid_filename, [poly_p_ra, poly_p_dec], delimiter=' ')
 
     if save_plots:
@@ -464,7 +587,7 @@ def fm_column_background(nonlin_paras, cubeobj, nodes=20,
 def fm_charge_transfer(nonlin_paras, cubeobj, charge_transfer_mask=None, nodes=40, fix_parameters=None,
                        return_where_finite=False,
                        regularization=None, badpixfraction=0.75, M_spline=None, spline_reg_std=1.0):
-    """
+    """ Forward model charge transfer ("bleeding") within the detector, particularly for bright/saturated sources
 
     Parameters
     ----------
@@ -776,15 +899,15 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     return new_rate_file
 
 
-def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
-                    utils_dir=None, coords_offset=(0, 0), overwrite=False):
+def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
+                    utils_dir=None, coords_offset=(0, 0), overwrite=False, save_plots=True):
     """Invoke forward model noise removal for a list of rate files
 
     Parameters
     ----------
     rate_files
     stage2_dir
-    clean_dir
+    output_dir
     crds_dir
     N_nodes
     model_charge_transfer
@@ -797,36 +920,44 @@ def run_noise_clean(rate_files, stage2_dir, clean_dir, crds_dir, N_nodes=40, mod
 
     """
     # We need to check that the desired output directories exist, and if not create them
-    if not os.path.exists(clean_dir):
-        os.makedirs(clean_dir)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     # Start a timer to keep track of runtime
     time0 = time.perf_counter()
-    print(time0)
 
     cleaned_rate_files = []
 
     for fid, rate_file in enumerate(rate_files):
 
-        outname = os.path.join(clean_dir, os.path.basename(rate_file))
+        print(f"Noise Clean: Processing file {fid + 1} of {len(rate_files)}: {os.path.basename(rate_file)}")
+        outname = os.path.join(output_dir, os.path.basename(rate_file))
         cleaned_rate_files.append(outname)
         if os.path.exists(outname) and not overwrite:
-            print(f"Output file {outname} already exists in the cleaned output directory; skipping {rate_file}.")
+            print(f"\tOutput file {os.path.basename(outname)} already exists in the cleaned output directory; skipping {os.path.basename(rate_file)}.")
             continue
 
-        print(f"Processing file {fid + 1} of {len(rate_files)}: {rate_file}")
 
-        forward_model_noise_clean(rate_file, stage2_dir, clean_dir, crds_dir,
+        forward_model_noise_clean(rate_file, stage2_dir, output_dir, crds_dir,
                                   N_nodes=N_nodes,
                                   model_charge_transfer=model_charge_transfer, utils_dir=utils_dir,
                                   coords_offset=coords_offset)
         # Print out the time benchmark
         time1 = time.perf_counter()
-        print(f"Runtime so far: {time1 - time0:0.4f} seconds\n")
+        print(f"\tNoise Clean Runtime so far: {time1 - time0:0.4f} seconds\n")
     time1 = time.perf_counter()
-    print(f"Total Runtime: {time1 - time0:0.4f} seconds")
+    print(f"Noise Clean Total Runtime: {time1 - time0:0.4f} seconds")
+
+    if save_plots:
+        breads.jwst_tools.plotting.plot_2d_image_sets_side_by_side(rate_files, cleaned_rate_files,
+                                                                   output_dir=output_dir,
+                                                                   suptitle="Noise Cleaining results. Left = Before, Right = After.",
+                                                                   plot_label='noiseclean')
 
     return cleaned_rate_files
+
+###########################################################################
+# Host Star PSF Subtraction 
 
 
 def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_offset=(0, 0), wv_nodes=None,
@@ -974,6 +1105,10 @@ def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None,
     return dataobj_list
 
 
+###########################################################################
+# Regular Wavelength Grids
+
+
 def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_radius=None, use_starsub=False,recompute=False,starsub_dir='starsub1d'):
     """
 
@@ -1046,10 +1181,7 @@ def save_combined_regwvs(regwvs_combdataobj, out_filename):
     hdulist.append(fits.ImageHDU(data=regwvs_combdataobj.wavelengths, name='WAVE'))
     hdulist.append(fits.ImageHDU(data=regwvs_combdataobj.wv_sampling, name='WV_SAMPLING'))
     hdulist.append(fits.ImageHDU(data=regwvs_combdataobj.bad_pixels, name='BADPIX'))
-    try:
-        hdulist.writeto(out_filename, overwrite=True)
-    except TypeError:
-        hdulist.writeto(out_filename, clobber=True)
+    hdulist.writeto(out_filename, overwrite=True)
     hdulist.close()
 
 

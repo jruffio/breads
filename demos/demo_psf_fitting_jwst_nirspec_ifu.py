@@ -242,10 +242,7 @@ if __name__ == "__main__":
         hdulist = fits.HDUList()
         hdulist.append(fits.PrimaryHDU(data=flux2save_wvs))
         hdulist.append(fits.ImageHDU(data=flux2save))
-        try:
-            hdulist.writeto(out_filename.replace(".png", ".fits"), overwrite=True)
-        except TypeError:
-            hdulist.writeto(out_filename.replace(".png", ".fits"), clobber=True)
+        hdulist.writeto(out_filename.replace(".png", ".fits"), overwrite=True)
         hdulist.close()
 
         with fits.open(out_filename.replace(".png", ".fits")) as hdulist:

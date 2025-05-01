@@ -22,7 +22,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0 = True,bounds = Non
         computeH0: If true (default), compute the probability of the model removing the first element of the linear
             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
             non-linear parameters
-        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+        bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
             e.g. ([0,0,...], [np.inf,np.inf,...]) default no bounds.
             Each numpy array must have shape (N_linear_parameters,).
@@ -296,7 +296,7 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,b
         computeH0: If true (default), compute the probability of the model removing the first element of the linear
             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
             non-linear parameters
-        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+        bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
             e.g. ([0,0,...], [np.inf,np.inf,...]). default no bounds.
             Each numpy array must have shape (N_linear_parameters,).
@@ -315,18 +315,23 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,b
     return lnprob
 
 
-def combined_log_prob(nonlin_paras, dataobjlist,fm_funclist, fm_paraslist, nonlin_lnprior_func=None,bounds=None):
-    '''
-    For use when you have multiple data objects and want to combine the log-likelihoods for MCMC sampling
+def combined_log_prob(nonlin_paras, dataobjlist, fm_funclist, fm_paraslist, nonlin_lnprior_func=None, bounds=None):
+    """ For use when you have multiple data objects and want to combine the log-likelihoods for MCMC sampling
 
-    Args:
-        nonlin_paras: [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
-            parameters depends on the forward model defined.
-        dataobjlist: A list of data objects to combine
-        fm_funclist: A list of fm_func for each data object
-        fm_paraslist: A list of fm_paras to use as arguments for it's respective fm_func
-        nonlin_lnprior_func: A function to compute priors, if None, defaults to zero priors
-    '''
+    Parameters
+    ----------
+    nonlin_paras : list of floats
+        [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
+        parameters depends on the forward model defined.
+    dataobjlist: A list of data objects to combine
+    fm_funclist: A list of fm_func for each data object
+    fm_paraslist: A list of fm_paras to use as arguments for it's respective fm_func
+    nonlin_lnprior_func: A function to compute priors, if None, defaults to zero priors
+
+    Returns
+    -------
+
+    """
     combined_lnprob = 0
     for i, dataobj in enumerate(dataobjlist):
         lnprob=log_prob(nonlin_paras = nonlin_paras, dataobj=dataobj, fm_func=fm_funclist[i], fm_paras= fm_paraslist[i],nonlin_lnprior_func=None,bounds=None)
@@ -334,8 +339,7 @@ def combined_log_prob(nonlin_paras, dataobjlist,fm_funclist, fm_paraslist, nonli
     return combined_lnprob
 
 def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,bounds=None,scale_noise=True):
-    """
-   Returns the negative of the log_prob() for minimization routines.
+    """ Returns the negative of the log_prob() for minimization routines.
 
     Args:
         nonlin_paras: [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
@@ -346,7 +350,7 @@ def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,
         computeH0: If true (default), compute the probability of the model removing the first element of the linear
             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
             non-linear parameters
-        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+        bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
             e.g. ([0,0,...], [np.inf,np.inf,...]) default no bounds.
             Each numpy array must have shape (N_linear_parameters,).

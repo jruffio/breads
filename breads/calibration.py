@@ -193,10 +193,7 @@ class SkyCalibration:
                                         header=pyfits.Header(cards={"TYPE": "RV"})))                         
         hdulist.append(pyfits.ImageHDU(data=fit_values[:, :, 2],
                                         header=pyfits.Header(cards={"TYPE": "R"})))                 
-        try:
-            hdulist.writeto(calib_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(calib_filename, clobber=True)
+        hdulist.writeto(calib_filename, overwrite=True)
         hdulist.close()
 
 #############################
@@ -352,10 +349,7 @@ class TelluricCalibration:
                                         header=pyfits.Header(cards={"TYPE": "Sigma X"})))
         hdulist.append(pyfits.ImageHDU(data=self.sig_ys,
                                         header=pyfits.Header(cards={"TYPE": "Sigma Y"})))                                   
-        try:
-            hdulist.writeto(calib_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(calib_filename, clobber=True)
+        hdulist.writeto(calib_filename, overwrite=True)
         hdulist.close()
 
 def extract_star_spectrum(data: Instrument, calib_filename="./star_spectrum_file.fits",
