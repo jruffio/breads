@@ -13,10 +13,13 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
     ----------
     comp_name : str
         Name of a companion. Used only for plot label.
+        Can be a list of names.
     comp_sep : astropy.units.Quantity
         Separation of companion, in arcseconds or equivalent unit
+        Can be a list of separations.
     comp_pa : astropy.units.Quantity
         PA of companion, in degrees or equivalent unit
+        Can be a list of PAs.
     v3pa : float
         JWST observatory V3 PA value to use when creating the figure
     center_on : str
@@ -31,10 +34,22 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
     None
     """
     # Disclaimer: Written in a bit of a rush; code could be cleaned up some still...
+    if not isinstance(comp_name, list):
+        comp_name_list = [comp_name]
+    else:
+        comp_name_list = comp_name
+    if not isinstance(comp_sep, list):
+        comp_sep_list = [comp_sep]
+    else:
+        comp_sep_list = comp_sep
+    if not isinstance(comp_pa, list):
+        comp_pa_list = [comp_pa]
+    else:
+        comp_pa_list = comp_pa
 
-    comp_rel_pa = v3pa - comp_pa.to_value(u.deg)
+    comp_rel_pa = v3pa - comp_pa_list[0].to_value(u.deg)
     comp_rel_pa_rad = np.deg2rad(comp_rel_pa)
-    comp_sep_as = comp_sep.to_value(u.arcsec)
+    comp_sep_as = comp_sep_list[0].to_value(u.arcsec)
 
     # Setup figure using siaf
     plt.figure()
@@ -95,14 +110,15 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
     plt.text(v2star - np.sin(np.deg2rad(v3pa - 90)) * arrowlen, v3star + np.cos(np.deg2rad(v3pa - 90)) * arrowlen,
              '   E', color='red')
 
-    comp_rel_pa = v3pa - comp_pa.to_value(u.deg)
-    comp_rel_pa_rad = np.deg2rad(comp_rel_pa)
-    plt.plot([v2star - np.sin(comp_rel_pa_rad) * comp_sep.to_value(u.arcsec)],
-             [v3star + np.cos(comp_rel_pa_rad) * comp_sep.to_value(u.arcsec)],
-             color='blue', lw=1, marker='s')
-    plt.text(v2star - np.sin(comp_rel_pa_rad) * (comp_sep.to_value(u.arcsec) + 0.5),
-             v3star + np.cos(comp_rel_pa_rad) * (comp_sep.to_value(u.arcsec) + 0.5),
-             comp_name, color='blue')
+    for _comp_pa,_comp_sep,_comp_name in zip(comp_pa_list,comp_sep_list,comp_name_list):
+        comp_rel_pa = v3pa - _comp_pa.to_value(u.deg)
+        comp_rel_pa_rad = np.deg2rad(comp_rel_pa)
+        plt.plot([v2star - np.sin(comp_rel_pa_rad) * _comp_sep.to_value(u.arcsec)],
+                 [v3star + np.cos(comp_rel_pa_rad) * _comp_sep.to_value(u.arcsec)],
+                 color='blue', lw=1, marker='s')
+        plt.text(v2star - np.sin(comp_rel_pa_rad) * (_comp_sep.to_value(u.arcsec) + 0.5),
+                 v3star + np.cos(comp_rel_pa_rad) * (_comp_sep.to_value(u.arcsec) + 0.5),
+                 _comp_name, color='blue')
 
     if nirspec_aperture == 'ifu':
         slice_V3IdlYAngle = nrs_siaf.apertures['NRS_IFU_SLICE00'].V3IdlYAngle
@@ -121,4 +137,4 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
         plt.text(xtel+0.5, ytel+0.5, f"{aplabel}", rotation=slice_V3IdlYAngle-90, fontsize=8, color='green',
                 horizontalalignment='center', verticalalignment='center')
 
-    plt.title(f'{comp_name} at V3PA={v3pa} for NRS {nirspec_aperture.upper()}')
+    plt.title(f'V3PA={v3pa} for NRS {nirspec_aperture.upper()}')
