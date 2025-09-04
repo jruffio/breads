@@ -13,6 +13,9 @@ import math
 from BayesicFitting import Fitter
 from BayesicFitting import SplinesModel
 
+import matplotlib
+from scipy.signal import find_peaks
+
 def use_find_files_to_process(input_dir, filetype='uncal.fits'):
     from breads.jwst_tools.reduction_utils import find_files_to_process
     return find_files_to_process(input_dir, filetype=filetype)
@@ -45,7 +48,7 @@ def select_band_coor(band, crds_path):
     elif band == '34C':
         hdu = fits.open(os.path.join(crds_path, "references/jwst/miri/34C/jwst_mirifulong_long_coor.fits"))
     else:
-        raise ValueError('band must be 12A, 12B, 12C, 34A, 34B, 34C')
+        raise ValueError(f'band must be 12A, 12B, 12C, 34A, 34B, 34C, not {band}')
     return hdu
 
 def colonne_median_max(mat):
@@ -271,7 +274,7 @@ def plot_starsub_fit(uncal_dir, utils_dir, target_name, list_bands=None):
 
     return 1
 
-def oddEvenCorrectionImage(hdu, crds_path):
+def oddEvenCorrectionImage(hdu, crds_path, plot=False):
     data = hdu["SCI"].data
     nbLine0, nbColumn0 = data.shape
     prim_hdr = hdu[0].header
@@ -310,7 +313,7 @@ def oddEvenCorrectionImage(hdu, crds_path):
             if len(slice_data)>0:
                 slice_yy = yy[beta_crop==bet]
                 slice_xx = xx[beta_crop==bet]
-                flux_corr = oddEvenCorrection_prop(slice_data, slice_xx, slice_yy, plot=False)
+                flux_corr = oddEvenCorrection_prop(slice_data, slice_xx, slice_yy, plot=plot)
                 for f, x, y in zip(flux_corr, slice_xx, slice_yy):
                     flux_corr_2D[y, x + col_min] = f
 
@@ -387,6 +390,8 @@ def oddEvenCorrection_prop(flux, xpix, ypix, plot=False):
 
     # get a unique list of the x values
     xlines = list(set(xpix))
+    print(xpix)
+    print(ypix)
     if plot:
         plt.figure("Odd-Even Correction")
 
@@ -397,6 +402,7 @@ def oddEvenCorrection_prop(flux, xpix, ypix, plot=False):
 
     for k in xlines:
         q = np.where(xpix == k)
+        print(len(q[0]))
         if len(q[0]) < 10: continue
         fq = flux[q]
         yq = ypix[q]
@@ -406,7 +412,14 @@ def oddEvenCorrection_prop(flux, xpix, ypix, plot=False):
         dfq = (fc[:-1] - fc[1:]) / 2
         dfq = np.where(yq[1:] % 2 == 0, -dfq, dfq)
 
+        clip = sigma_clip(dfq, sigma=3, maxiters=5)
+        where_valid = np.where(~clip.mask)
+        dfq = dfq[where_valid]
+        plt.plot(dfq)
+        plt.show()
+
         yc = 0.5 * (yq[1:] + yq[:-1])
+        yc = yc[where_valid]
         cor = np.append(cor, dfq)
         ycr = np.append(ycr, yc)
 
@@ -447,10 +460,110 @@ def oddEvenCorrection_prop(flux, xpix, ypix, plot=False):
         fc += 1
         flux[q] = flux[q]*fc
 
-        if plot:
+        '''if plot:
             plt.title("flat odd even coef")
             plt.plot(yq, flux[q]/flux_old[q])
             print(np.nanpercentile(flux[q]/flux_old[q], 75))
-            plt.show()
+            plt.show()'''
 
     return flux
+
+def beta_slice_ID(channel, band):
+    crds_path = os.getenv('CUSTOM_CRDS_PATH')
+    hdu = select_band_coor(band, crds_path)
+    beta = hdu["beta"].data
+    beta_c = np.copy(beta)
+
+    if channel == 1 or channel == 4:
+        col_min, col_max = 10, 500
+        beta_c[:, 500:] = np.nan
+
+    else:
+        col_min, col_max = 500, 1020
+        beta_c[:, :500] = np.nan
+
+    row = beta[500, col_min:col_max]
+    beta_values = np.unique(row)
+
+    beta_slice_num = np.zeros_like(beta) + np.nan
+
+    for i, value in enumerate(beta_values):
+        beta_slice_num[beta_c == value] = channel * 100 + i
+
+    beta_slice_num[:10, :] = np.nan
+    beta_slice_num[-10:, :] = np.nan
+    beta_slice_num[:, :10] = np.nan
+
+
+    return beta_slice_num
+
+def beta_masking_slice(channel, band, liste_ID):
+    beta_slice_num = beta_slice_ID(channel, band)
+    mask = np.ones_like(beta_slice_num)
+
+    if len(liste_ID) > 0:
+        for ID in liste_ID:
+            mask[beta_slice_num == ID] = 0
+    return mask
+
+def beta_masking_slice_col(channel, band, liste_col_ID):
+    beta_slice_num = beta_slice_ID(channel, band)
+    mask = np.ones_like(beta_slice_num)
+
+    if len(liste_col_ID) > 0:
+        for col_ID in liste_col_ID:
+            ID = np.nanmax(beta_slice_num[:, col_ID])
+            print(f"Slice ID: {ID}")
+            mask[beta_slice_num == ID] = 0
+
+    return mask
+
+def find_N_brightest_slices(data, channel, band, N_slices, plot=False):
+    data_copy = data.copy()
+    if channel == 1 or channel == 4:
+        data_copy[:, 500:] = np.nan
+    else:
+        data_copy[:, :500] = np.nan
+
+    medianes = np.nanmedian(data_copy, axis=0)  # Calculer la médiane de chaque colonne
+
+    # Trouver les pics
+    peaks, _ = find_peaks(medianes)
+
+    # Extraire les hauteurs des pics
+    peak_heights = medianes[peaks]
+
+    # Trouver les indices des 4 plus hauts pics
+    topN_indices = np.argsort(peak_heights)[-N_slices:]  # Les 4 plus grands
+    topN_peaks_values = peak_heights[topN_indices]
+
+    topN_indices = []
+
+    for i in range(N_slices):
+        topN_indices.append(np.where(medianes == topN_peaks_values[i])[0])
+
+    print(topN_indices, len(peaks))
+    if plot:
+        plt.plot(medianes)
+        plt.scatter(topN_indices, medianes[topN_indices])
+        plt.show()
+
+    return topN_indices
+
+def beta_masking_inverse_slice(data, channel, band, N_slices=4):
+    beta_slice_num = beta_slice_ID(channel, band)
+    liste_col_ID = find_N_brightest_slices(data, channel, band, N_slices)
+
+    mask = np.zeros_like(beta_slice_num)
+    if channel == 1 or channel == 4:
+        mask[:, 500:] = 1
+    elif channel == 2 or channel == 3:
+        mask[:, :500] = 1
+
+    if len(liste_col_ID) > 0:
+        for col_ID in liste_col_ID:
+            ID = np.nanmax(beta_slice_num[:, col_ID])
+            print(f"Slice ID: {ID}")
+            mask[beta_slice_num == ID] = 1
+
+    return mask

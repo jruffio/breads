@@ -13,6 +13,7 @@ from scipy.ndimage import gaussian_filter
 from breads.jwst_tools.PositiveEtalonModel import PositiveEtalonModel
 from breads.jwst_tools.PositiveEtalonCosModel import PositiveEtalonCosModel
 from breads.jwst_tools.flat_miri_utils import find_brightest_cols_two_channels, select_band_coor
+from breads.jwst_tools.flat_miri_utils import beta_masking_inverse_slice
 from BayesicFitting import SplinesModel
 from BayesicFitting import LevenbergMarquardtFitter
 
@@ -21,6 +22,20 @@ from breads.jwst_tools.flat_miri_utils import select_band_coor
 
 from multiprocessing import Pool
 
+
+def unravel_phase(wnum, D):
+    dD = np.diff(D)
+    plt.plot(wnum[:-1], dD)
+    plt.plot(wnum, 2/wnum)
+    plt.show()
+    for i, diff in enumerate(dD):
+        if np.abs(diff) > 2/wnum[i] :
+            print("phase jump")
+            if diff > 0:
+                D[i] -= 2/wnum[i]
+            elif diff < 0:
+                D[i] += 2/wnum[i]
+    return D
 
 
 def micron_to_wavenumber(wave):
@@ -39,8 +54,8 @@ def retrieve_data(filename):
 def get_optimal_number_nodes(band):
     if band == '1A':
         N_continuum = 50
-        N_D = 100
-        N_finesse = 100
+        N_D = 15
+        N_finesse = 20
     elif band == '2A':
         N_continuum = 80
         N_D = 20
@@ -52,7 +67,7 @@ def get_optimal_number_nodes(band):
 
 def get_first_guess(band):
     if band == '1A':
-        freq = np.arange(3.2, 3.8, 0.005)/10
+        freq = np.arange(3.35, 3.55, 0.0005)/10
     elif band == '2A':
         freq = np.arange(3.2, 3.8, 0.005)/10
     else:
@@ -60,18 +75,25 @@ def get_first_guess(band):
 
     return freq
 
-def masking_infinite(wave, data, err, col_id, rmin, rmax):
+def masking_infinite(wave, data, err, col_id):
     flat = np.zeros_like(wave[:, col_id]) + 1
     D_est = np.zeros_like(wave[:, col_id]) + np.nan
     continuum = np.zeros_like(wave[:, col_id]) + np.nan
-    lamb = wave[rmin:rmax, col_id]
+
+    y_rows = np.arange(2, 1022, 1)
+    where_even = np.where(y_rows % 2 == 0)[0]
+
+    lamb = wave[2:1022, col_id]
+    #lamb = lamb[where_even]
     where_finite = np.where(np.isfinite(lamb))[0]
     lamb = lamb[where_finite]
 
-    flux = data[rmin:rmax, col_id]
+    flux = data[2:1022, col_id]
+    #flux = flux[where_even]
     flux = flux[where_finite]
 
-    err_c = err[rmin:rmax, col_id]
+    err_c = err[2:1022, col_id]
+    #err_c = err_c[where_even]
     err_c = err_c[where_finite]
 
     return flat, D_est, continuum, lamb, flux, err_c
@@ -84,6 +106,9 @@ def identify_badpix(wnum, flux, err, plot=False):
 
     wnum = wnum[np.isfinite(flux)]
     flux = flux[np.isfinite(flux)]
+
+    plt.plot(wnum, flux)
+    plt.show()
 
     for i in range(2):
         pars = [np.nanmean(flux)] + [0.] * (N_nodes_continuum + 1)  # 12 pars for continuum splines
@@ -306,13 +331,12 @@ def fit_FP_bayesian(data, wave, err, dq, col_id, alpha, snr_thresh, plot=False, 
     return flat, D_est
 
 def fit_FP_bayesian_drift(data, wave, err, band, col_id, snr_thresh, plot=False, plot_model=True, spectrum=None, N_continuum=50, N_D=15, N_finesse=10, mask_star_lines=True):
-    rmin = 2
-    rmax = 1022
+
     test = False
     if test:
         return "test"
 
-    flat, D_est, continuum, lamb, flux, err_c = masking_infinite(wave, data, err, col_id, rmin, rmax)
+    flat, D_est, continuum, lamb, flux, err_c = masking_infinite(wave, data, err, col_id)
 
     SNR_mean = np.nanmedian(flux/err_c)
 
@@ -393,6 +417,10 @@ def fit_FP_bayesian_drift(data, wave, err, band, col_id, snr_thresh, plot=False,
             plt.legend()
             plt.show()
 
+            plt.title("Best D")
+            plt.plot(wnum, unravel_phase(wnum, D.result(wnum, param_crop_D)))
+            plt.show()
+
             plt.title("Best finesse")
             F = SplinesModel(nrknots=N_nodes_finesse, xrange=wnum)
             plt.plot(wnum, F.result(wnum, param_finesse_crop), label=f"# nodes: {N_nodes_finesse}")
@@ -434,10 +462,8 @@ def fit_FP_bayesian_drift(data, wave, err, band, col_id, snr_thresh, plot=False,
     return flat, D_est, continuum
 
 def fit_FP_bayesian_cos(data, wave, err, band, col_id, snr_thresh, plot=False, spectrum=None, N_continuum=50, N_D=15, N_finesse=10, mask_star_lines=True):
-    rmin = 2
-    rmax = 1022
 
-    flat, D_est, continuum, lamb, flux, err_c = masking_infinite(wave, data, err, col_id, rmin, rmax)
+    flat, D_est, continuum, lamb, flux, err_c = masking_infinite(wave, data, err, col_id)
 
     SNR_mean = np.nanmedian(flux/err_c)
 
@@ -594,7 +620,7 @@ def get_flat(uncaldir, targetname, bands=None, snr_thresh=20, spectrum=None, N_c
         input_path = os.path.join(uncaldir, targetname, band, 'stage1')
         save_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/miri_flat', band)
         save_path_continuum = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/miri_flat_continuum', band)
-        fileslist = find_files_to_process(input_path, filetype='corr_rate.fits')
+        fileslist = find_files_to_process(input_path, filetype='rate.fits')
 
         for file in fileslist:
             first_band = band[0]+band[2]
@@ -625,6 +651,60 @@ def get_flat(uncaldir, targetname, bands=None, snr_thresh=20, spectrum=None, N_c
 
             fits.writeto(save_filename, flat, overwrite=True)
             fits.writeto(save_continuum_name, continuum, overwrite=True)
+
+def get_flat_brightest_slices(uncaldir, targetname, list_bands=None, snr_thresh=20, spectrum=None, N_continuum=None, N_D=None, N_finesse=None, mask_star_lines=True):
+
+    crds_path = os.getenv('CUSTOM_CRDS_PATH')
+
+    if list_bands is None:
+        bands = ['12A', '12B', '12C', '34A', '34B', '34C']
+
+    for band in list_bands:
+        input_path = os.path.join(uncaldir, targetname, band, 'stage1')
+        save_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/miri_flat', band)
+        save_path_continuum = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/miri_flat_continuum', band)
+        fileslist = find_files_to_process(input_path, filetype='rate.fits')
+
+        for file in fileslist:
+            first_band = band[0]+band[2]
+            second_band = band[1]+band[2]
+            data_science, DQ_science, err_science = retrieve_data(file)
+            prim_header = fits.open(file)[0].header
+
+            coor_file = select_band_coor(band, crds_path)
+            wave = coor_file['LAMBDA'].data  # Loading the wavelength map in micron
+            filename = os.path.basename(file)
+            save_filename = os.path.join(save_path, filename.replace('rate.fits', 'fit_flat.fits'))
+            save_continuum_name = os.path.join(save_path_continuum, filename.replace('rate.fits', 'fit_continuum.fits'))
+            flat = np.zeros_like(data_science) + 1
+            D = np.zeros_like(data_science) + np.nan
+            continuum = np.zeros_like(data_science) + np.nan
+
+            data_science *= beta_masking_inverse_slice(data_science, int(band[0]), band, N_slices=4)
+            data_science *= beta_masking_inverse_slice(data_science, int(band[1]), band, N_slices=4)
+
+            for col_id in range(5, 500):
+                print(col_id)
+                try:
+                    flat[:, col_id], D[:, col_id], continuum[:, col_id] = fit_FP_bayesian_drift(data_science, wave, err_science, first_band, col_id, snr_thresh, plot=False, spectrum=spectrum, N_continuum=N_continuum, N_D=N_D, N_finesse=N_finesse, mask_star_lines=mask_star_lines)
+                except Exception as e:
+                    print(e)
+
+            for col_id in range(500, 1020):
+                print(col_id)
+                try:
+                    flat[:, col_id], D[:, col_id], continuum[:, col_id] = fit_FP_bayesian_drift(data_science, wave, err_science, second_band, col_id, snr_thresh, plot=False, spectrum=spectrum, N_continuum=N_continuum, N_D=N_D, N_finesse=N_finesse, mask_star_lines=mask_star_lines)
+                except Exception as e:
+                    print(e)
+
+            primary_hdu = fits.PrimaryHDU()
+            primary_hdu.header = prim_header
+            hdu1 = fits.ImageHDU(data=flat, name='FLAT_EXTENDED')
+            hdu2 = fits.ImageHDU(data=flat, name='FLAT')
+
+            # Combiner tous les HDU dans un HDUList
+            hdul = fits.HDUList([primary_hdu, hdu1, hdu2])
+            hdul.writeto(save_filename, overwrite=True)
 
 def get_flat_multiprocess(uncaldir, targetname, bands=None, snr_thresh=20): #TODO
     crds_path = os.getenv('CUSTOM_CRDS_PATH')
@@ -710,11 +790,11 @@ def tes_peak_flat(uncaldir, crds_path, targetname, bands = ['12A'], snr_thresh=2
     if bands is None:
         bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
-    plot_psd = True
+    plot_psd = False
 
     for band in bands:
         input_path = os.path.join(uncaldir, targetname, band, 'stage1')
-        fileslist = find_files_to_process(input_path, filetype='jw04829001001_07101_00001_mirifushort_odd_even_corr_rate.fits')
+        fileslist = find_files_to_process(input_path, filetype='jw04829001001_07101_00001_mirifushort_rate.fits')
 
         for file in fileslist:
             first_band = band[0]+band[2]
@@ -728,7 +808,7 @@ def tes_peak_flat(uncaldir, crds_path, targetname, bands = ['12A'], snr_thresh=2
 
             col_id_1, col_id_2 = find_brightest_cols_two_channels(data_science)
             print(col_id_1)
-            for col_id in range(col_id_1-1, col_id_1+2):
+            for col_id in range(col_id_1-2, col_id_1+2):
                 flat[:, col_id], D[:, col_id], continuum[:, col_id] = fit_FP_bayesian_drift(data_science, wave, err_science, first_band, col_id, snr_thresh, plot=False, spectrum=spectrum, N_continuum=N_continuum, N_D=N_D, N_finesse=N_finesse, mask_star_lines=mask_star_lines)
                 print(np.sum(err_science[:, col_id]**2))
                 if plot_psd:
@@ -744,8 +824,10 @@ def tes_peak_flat(uncaldir, crds_path, targetname, bands = ['12A'], snr_thresh=2
             #flat[:, col_id_2], D[:, col_id_2] = fit_FP_bayesian_drift(data_science, wave, err_science, second_band, col_id_2, snr_thresh, plot=False, spectrum=spectrum, N_continuum=N_continuum, N_D=N_D, N_finesse=N_finesse, mask_star_lines=mask_star_lines)
 
 
-uncaldir = "/Users/abidot/Desktop/miri_data_4829_test/"
-crds_dir = '/Users/abidot/Desktop/CRDS_file/'
-targetname = 'HD 218396'
+#uncaldir = "/Users/abidot/Desktop/miri_data_4829_test/"
+#crds_dir = '/Users/abidot/Desktop/CRDS_file/'
+#targetname = 'HD 218396'
 
 #tes_peak_flat(uncaldir, crds_dir, targetname)
+
+#os.environ['CUSTOM_CRDS_PATH'] = '/Users/abidot/Desktop/CRDS_file/'

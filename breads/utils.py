@@ -17,7 +17,7 @@ from scipy.signal import correlate2d
 from scipy.stats import median_abs_deviation
 
 
-def filter_spec_with_spline(wvs, spec,specerr=None,x_nodes=None,M_spline=None):
+def filter_spec_with_spline(wvs, spec, specerr=None, x_nodes=None, M_spline=None):
     """
 
     Parameters

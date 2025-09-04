@@ -561,8 +561,6 @@ def runspec3(filename, outputdir):
 def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_png=True, full_output=False):
     hdu = fits.open(cal_file)
     data = hdu[1].data
-    dq = hdu['DQ'].data
-    data_f = np.zeros_like(data) + np.nan
 
     hdr = hdu[0].header
     pattern_type = hdr['PATTTYPE']
@@ -575,7 +573,6 @@ def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_p
     filenames = os.listdir(flat_dir)
 
     std = []
-    pos = []
     file = []
 
     brightest_col = colonne_median_max_channel(data, channel=channel)
@@ -596,8 +593,7 @@ def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_p
             flat = fits.open(os.path.join(flat_dir, filename))
             hdr_flat = flat[0].header
 
-            wave = flat['WAVELENGTH'].data
-            flat = flat['FLAT'].data
+            flat = flat['FLAT_EXTENDED'].data
 
             if hdr_flat['PATT_NUM'] == dither_numero and hdr_flat['PATTTYPE'] == pattern_type and hdr_flat['DITHDIRC'] == dither_direction and hdr_flat['BAND'] == band:
                 d_f = data[:, brightest_col] / flat[:, brightest_col]
@@ -1639,7 +1635,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files,channel,utils_dir,crds_di
         print(filename)
 
         preproc_task_list = []
-        preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
+        preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 10, "mad_threshold": 20}, True, True])
         if target_name is not None:
             preproc_task_list.append(["compute_coordinates_arrays", {"target_name": target_name}])
         else:
@@ -1653,7 +1649,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files,channel,utils_dir,crds_di
                                                               "threshold_badpix": 10,
                                                               "mppool": mppool}, True, True])
 
-        dataobj = JWSTMiri_cal(filename, channel=channel, crds_dir=crds_dir, utils_dir=utils_dir,
+        dataobj = JWSTMiri_cal(filename, channel_reduction=channel, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
 
         if mask_charge_transfer_radius is not None:
@@ -1746,7 +1742,7 @@ def compute_starlight_subtraction_miri(cal_files,channel,utils_dir,crds_dir,wave
                                                                         "threshold_badpix": 100,
                                                                         "mppool": mppool}, True, True])
 
-        dataobj = JWSTMiri_cal(filename, channel=channel, crds_dir=crds_dir, utils_dir=utils_dir,
+        dataobj = JWSTMiri_cal(filename, channel_reduction=channel, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
         if combined_star_func is not None:
             dataobj.reload_starspectrum_contnorm()
@@ -1798,7 +1794,7 @@ def get_combined_regwvs_miri(dataobj_list,channel,wv_sampling=None,mask_charge_t
         if use_starsub1d:
             starsub_filename = os.path.join(dataobj.utils_dir,"starsub1d",os.path.basename(dataobj.filename))
             print("starsub1d path for combined regwvs miri:", starsub_filename)
-            starsub_dataobj = JWSTMiri_cal(starsub_filename,channel,crds_dir=dataobj.crds_dir, utils_dir=dataobj.utils_dir)
+            starsub_dataobj = JWSTMiri_cal(starsub_filename, channel_reduction=channel, utils_dir=dataobj.utils_dir)
             if dataobj.data_unit == 'MJy':
                 replace_data = dataobj.convert_MJy_per_sr_to_MJy(data_in_MJy_per_sr=starsub_dataobj.data)
             elif dataobj.data_unit == "MJy/sr":

@@ -29,6 +29,7 @@ from tqdm import tqdm
 
 from breads.utils import rotate_coordinates, find_closest_leftnright_elements
 from breads.jwst_tools.fit_miri_psf_centroid import fit_trace
+from breads.jwst_tools.flat_miri_utils import beta_masking_inverse_slice
 import matplotlib.tri as tri
 import numpy as np
 from scipy.ndimage import generic_filter
@@ -40,7 +41,7 @@ import inspect
 
 
 class JWSTMiri_cal(Instrument):
-    def __init__(self, filename=None, channel_reduction='CH1', utils_dir=None, save_utils=True,
+    def __init__(self, filename=None, channel_reduction='1', utils_dir=None, save_utils=True,
                  load_utils=True,
                  preproc_task_list=None,
                  verbose=True, wv_ref=None):
@@ -265,14 +266,13 @@ class JWSTMiri_cal(Instrument):
         return
 
     def load_wavelength(self, hdulist):
-        debug = 1
-        
+
         try:
             self.wavelengths = hdulist['WAVELENGTH'].data
             self.ra_array = hdulist['RA_ARRAY'].data
             self.dec_array = hdulist['DEC_ARRAY'].data
         
-        except(Exception):
+        except(Exception) as e:
             model = datamodels.open(hdulist)
             self.wavelengths = np.zeros(self.data.shape) + np.nan
             ny, nx = self.data.shape[0], self.data.shape[1]
@@ -327,25 +327,21 @@ class JWSTMiri_cal(Instrument):
         if self.verbose:
             print("Initializing row_err and bad_pixels")
         new_badpix = np.ones(self.bad_pixels.shape)
+
         '''for colid in range(self.bad_pixels.shape[1]):
-            col_err = self.noise[:, colid]
-            col_err = col_err - generic_filter(col_err, np.nanmedian, size=window_size)
-            col_err_masking = col_err / median_abs_deviation(col_err[np.where(np.isfinite(self.bad_pixels[:, colid]))])
-            new_badpix[np.where((col_err_masking > mad_threshold))[0], colid] = np.nan'''
-        for colid in range(self.bad_pixels.shape[1]):
             col_flux = self.data[:, colid]
             col_flux[np.isnan(col_flux)] = 0
             col_flux = col_flux - generic_filter(col_flux, np.nanmedian, size=window_size)
             col_flux_masking = col_flux / median_abs_deviation(col_flux[np.where(np.isfinite(col_flux))])
-            new_badpix[np.where((np.abs(col_flux_masking) > mad_threshold))[0], colid] = np.nan
+            new_badpix[np.where((np.abs(col_flux_masking) > mad_threshold))[0], colid] = np.nan'''
 
         '''for colid in range(self.bad_pixels.shape[1]):
-            col_flux = self.data[:, colid]
+            col_flux = np.copy(self.data[:, colid])
             col_flux = col_flux / generic_filter(col_flux, np.nanmedian, size=50)
-            clipped_data = sigma_clip(col_flux, sigma=3, maxiters=5)
-            new_badpix[clipped_data.mask, colid] = np.nan'''
+            clipped_data = sigma_clip(col_flux, sigma=3, maxiters=20)
+            new_badpix[clipped_data.mask, colid] = np.nan
 
-        self.bad_pixels *= new_badpix
+        self.bad_pixels *= new_badpix'''
 
         if save_utils:
             if isinstance(save_utils, str):
@@ -590,8 +586,7 @@ class JWSTMiri_cal(Instrument):
 
         return wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
 
-    def compute_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, parallelize=False, mppool=None,
-                              wv_sampling=None, save_utils=False):
+    def compute_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, parallelize=False, wv_sampling=None, save_utils=False):
         """ Compute WebbPSF simulated PSFs for the NIRSpec IFU
 
         Parameters
@@ -618,14 +613,12 @@ class JWSTMiri_cal(Instrument):
         if self.verbose:
             print("Computing PSFs. This has to iterate over many wavelengths, so is slow.")
         
-        print(f"[DEBUG] wv_sampling is None? {wv_sampling}")
         if wv_sampling is None:
             if not hasattr(self, "wv_sampling"):
                 self.wv_sampling = self.get_regwvs_sampling()
             wv_sampling = self.wv_sampling
 
         self.wv_sampling = wv_sampling
-        print(f"[DEBUG] wv_sampling: {wv_sampling}, nb non nan {np.nanmedian(wv_sampling)}")
         nwavelen = np.size(wv_sampling)
         miri = webbpsf.MIRI()
         print("Loading telescope state as of observation date")
@@ -1029,7 +1022,6 @@ class JWSTMiri_cal(Instrument):
             reg_mean_map0[colid, :] = np.nanmedian(col * col_bp)
             reg_std_map0[colid, :] = reg_mean_map0[colid, :]
 
-        print(f"[DEBUG] reg_mean_map0 shape for input in normalize_columns {reg_mean_map0.shape}")
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_columns(im, im_wvs, noise=err,
                                                                               badpixs=self.bad_pixels,
                                                                               x_nodes=x_nodes, mypool=mppool,
@@ -1051,12 +1043,23 @@ class JWSTMiri_cal(Instrument):
                                                                                   reg_std_map=reg_std_map1)
 
         continuum = copy(spline_cont0)
-        #mask_4_brightest_slices =
-        continuum[np.where(continuum / err < 50)] = np.nan
-        continuum[np.where(continuum < np.median(continuum))] = np.nan
-        continuum[np.where(np.isnan(self.bad_pixels))] = np.nan
+        print(int(self.channel_reduction), self.band_aka)
+
+        #mask_brightest_slices = beta_masking_inverse_slice(self.data, int(self.channel_reduction), self.band_aka, N_slices=4)
+        #mask_brightest_slices[mask_brightest_slices==0] = np.nan
+        #continuum *= mask_brightest_slices
+
+        #self.data *= mask_brightest_slices
+
+        #continuum[np.where(continuum / err < 50)] = np.nan
+        #continuum[np.where(continuum < np.median(continuum))] = np.nan
+        #continuum[np.where(np.isnan(self.bad_pixels))] = np.nan
+
         normalized_im = im / continuum
         normalized_err = err / continuum
+
+        #normalized_im *= mask_brightest_slices
+        #normalized_err *= mask_brightest_slices
 
         new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
                                                                              normalized_im.flatten(),
@@ -1091,7 +1094,7 @@ class JWSTMiri_cal(Instrument):
 
         self.x_nodes = x_nodes
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-        if star_hf_subtraction:
+        if not star_hf_subtraction:
             print("[WARNING] star_hf_subtraction set to False: star_func interpolation function is set to f=1")
             self.star_func = interp1d(new_wavelengths, np.ones_like(new_wavelengths), kind="linear", bounds_error=False, fill_value=1)
         return new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes
@@ -1113,7 +1116,7 @@ class JWSTMiri_cal(Instrument):
 
         self.x_nodes = x_nodes
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-        if star_hf_subtraction:
+        if not star_hf_subtraction:
             print("[WARNING] star_hf_subtraction set to False: star_func interpolation function is set to f=1")
             self.star_func = interp1d(new_wavelengths, np.ones_like(new_wavelengths), kind="linear", bounds_error=False,fill_value=1)
 
@@ -1343,7 +1346,6 @@ class JWSTMiri_cal(Instrument):
             except TypeError:
                 hdulist.writeto(out_filename, clobber=True)
             hdulist.close()
-        print(f"[DEBUG] wv_sampling shape at the end of the interp step {self.wv_sampling.shape}")
         return regwvs_dataobj
 
     def reload_interpdata_regwvs(self, load_filename=None):
@@ -1373,7 +1375,6 @@ class JWSTMiri_cal(Instrument):
                 pass
 
         regwvs_dataobj.wv_sampling = np.nanmedian(regwvs_dataobj.wavelengths, axis=1)
-        print(f"[DEBUG] shape wv sampling after reload {regwvs_dataobj.wv_sampling.shape}")
         return regwvs_dataobj
 
     def mask_interp_elements_too_far_from_bin_edges(self, dwv_threshold):
@@ -1535,7 +1536,6 @@ def _task_normcolumns(paras):
     paras_out = np.zeros((im_rows.shape[1], np.size(x_nodes))) + np.nan
     plot=True
     for k in range(im_rows.shape[1]):
-        #print(f"[DEBUG] x_nodes {np.min(x_nodes)}, {np.max(x_nodes)}")
         M_spline = get_spline_model(x_nodes, im_wvs_rows[:, k], spline_degree=3)
 
         where_data_finite = np.where(np.isfinite(badpix_rows[:, k]) * np.isfinite(im_rows[:, k]) * \
@@ -1546,7 +1546,6 @@ def _task_normcolumns(paras):
         where_nan_im = np.where(np.isfinite(im_rows[:, k]))
         where_noise = np.where(np.isfinite(noise_rows[:, k]))
         where_0 = np.where(noise_rows[:, k]!=0)
-        #print(f"[DEBUG] {len(where_badpix[0])}, {len(where_nan_im[0])}, {len(where_noise[0])}, {len(where_0[0])}")
 
         if np.size(where_data_finite[0]) == 0:
             res[:, k] = np.nan
@@ -1554,31 +1553,14 @@ def _task_normcolumns(paras):
 
         d = im_rows[where_data_finite[0], k]
         d_err = noise_rows[where_data_finite[0], k]
-        
-        #print(f"[DEBUG] star model median value {np.nanmedian(star_model)}")
-        #print(f"[DEBUG] nb de valeurs valides {len(where_data_finite[0])}")
-        #print(f"[DEBUG] M shape {M_spline.shape}")
+
         M = M_spline[where_data_finite[0], :] * star_model[where_data_finite[0], k, None]
 
         if regularization:
             validpara = np.where(np.nansum(M > np.nanmax(M) * 0.00001, axis=0) != 0)
         else:
             validpara = np.where(np.nansum(M > np.nanmax(M) * 0.01, axis=0) != 0)
-        
-        print(f"[DEBUUG] number of validpara {len(validpara[0])}")
-        if len(validpara[0])>20 and len(where_badpix[0])>900 and plot==True:
-            print(f"[DEBUG] star model shape {star_model.shape}")
-            #plt.plot(star_model[:, k], label='star model')
-            #plt.savefig("/user/abidot/star_model.png")
-            plot=False
-            # fits.writeto("/user/abidot/M_spline_0.fits", M_spline, overwrite=False)
-            #fits.writeto("/user/abidot/M_spline.fits", M, overwrite=False)
-            #plt.imshow(M)
-            #plt.savefig("/user/abidot/spline_M.png")
-            #plt.plot(badpix_rows[:, k])
-            #plt.savefig("/user/abidot/badpix.png")
-            print(f"[DEBUG] validpara {validpara}")
-        #print(f"[DEBUG] s_reg_map shape {reg_std_map.shape}")
+
         if len(validpara[0])>0:
              M = M[:, validpara[0]]
         else:
@@ -1586,7 +1568,6 @@ def _task_normcolumns(paras):
 
         if regularization:
             d_reg, s_reg = reg_mean_map[k, :], reg_std_map[k, :]
-            #print(f"[DEBUG] s_reg shape {s_reg.shape}")
             s_reg = s_reg[validpara]
             d_reg = d_reg[validpara]
             where_reg = np.where(np.isfinite(s_reg))
@@ -1602,7 +1583,6 @@ def _task_normcolumns(paras):
 
         bounds_min = [-np.inf, ] * M.shape[1]
         bounds_max = [np.inf, ] * M.shape[1]
-        print(f"[DEBUG] size before lsq {d4fit.shape}, {M4fit.shape}, {s4fit.shape}")
         try:
             p = lsq_linear(M4fit / s4fit[:, None], d4fit / s4fit, bounds=(bounds_min, bounds_max)).x
             paras_out[k, validpara[0]] = p
@@ -1928,6 +1908,7 @@ def combine_spectrum(wavelengths, fluxes, errors, bin_size):
     :param bin_size: scalar value specifying the wavelength bin size.
     :return: tuple containing three 1D arrays: the new wavelength array, the combined flux values, and the new combined flux errors.
     """
+
     # Remove NaN values from the input arrays
     nan_mask = np.logical_or(np.isnan(wavelengths), np.isnan(fluxes))
     where_mask = np.where(~nan_mask)
@@ -1940,6 +1921,9 @@ def combine_spectrum(wavelengths, fluxes, errors, bin_size):
     wavelengths = wavelengths[sort_indices]
     fluxes = fluxes[sort_indices]
     errors = errors[sort_indices]
+
+    print("[DEBUG] combining spectrum", fluxes.shape, np.nanmax(fluxes))
+    print("[DEBUG] combining spectrum", wavelengths.shape, np.nanmax(wavelengths))
 
     # Determine the number of bins
     num_bins = int((wavelengths[-1] - wavelengths[0]) / bin_size) + 1
@@ -2130,18 +2114,9 @@ def _fit_wpsf_task(paras):
             pamin_pad = ((pamin) - padding / np.mean([rmin, rmax])) % (2.0 * np.pi)
             pamax_pad = ((pamax) + padding / np.mean([rmin, rmax])) % (2.0 * np.pi)
 
-        # if deltaphi2 >= 2 * np.pi:
-        #     pamin_pad2 = 0
-        #     pamax_pad2 = 2 * np.pi
-        # else:
-        #     pamin_pad2 = ((pamin) - padding2 / np.mean([rmin, rmax])) % (2.0 * np.pi)
-        #     pamax_pad2 = ((pamax) + padding2 / np.mean([rmin, rmax])) % (2.0 * np.pi)
-
         rmin_pad = np.max([rmin - padding, 0.0])
         rmax_pad = rmax + padding
-        # rmin_pad2 = np.max([rmin - padding2, 0.0])
-        # rmax_pad2 = rmax + padding2
-        #
+
         if pamin_pad < pamax_pad:
             fit_sector = (rmin_pad <= _R) & (_R < rmax_pad) & (pamin_pad <= _PA) & (_PA < pamax_pad) & np.isfinite(
                 _Zbad)
@@ -2157,87 +2132,31 @@ def _fit_wpsf_task(paras):
         if np.size(where_fit[0]) < 1:
             continue
         X, Y, Z, Zerr, Zbad = _X[where_fit], _Y[where_fit], _Z[where_fit], _Zerr[where_fit], _Zbad[where_fit]
-        # Zerr = Z/10.
+
         where_sc = np.where(sc_sector)
         if np.size(where_sc[0]) < 1:
             continue
-        # Xsc, Ysc, Zsc, Zerrsc, Zbadsc = _X[where_sc], _Y[where_sc], _Z[where_sc], _Zerr[where_sc], _Zbad[where_sc]
         Xsc, Ysc = _X[where_sc], _Y[where_sc]
 
         where_wepsf_finite = np.where(np.isfinite(wepsf) * np.isfinite(wifuX) * np.isfinite(wifuY))
-        # print(np.size(where_wepsf_finite[0]))
+
         if np.size(where_wepsf_finite[0]) < 3:
             continue
         wX, wY, wZ = wifuX[where_wepsf_finite], wifuY[where_wepsf_finite], wepsf[where_wepsf_finite]
         wX, wY = rotate_coordinates(wX, wY, -east2V2_deg, flipx=flipx)
 
-        # plt.scatter(wX, wY,s=100*wZ/np.nanmax(wZ))
-        # plt.show()
-
-        # if linear_interp:
-        #     filtered_triangles = filter_big_triangles(wX, wY,0.2)
-        #     # Create filtered triangulation
-        #     filtered_tri = tri.Triangulation(wX, wY, triangles=filtered_triangles)
-        #
-        #     # Perform LinearTriInterpolator for filtered triangulation
-        #     webbpsf_interp = tri.LinearTriInterpolator(filtered_tri, wZ)
-        #
-        #     # webbpsf_interp = LinearNDInterpolator(filtered_tri.points, wZ, fill_value=0.0)
-        # else:
-        #     webbpsf_interp = CloughTocher2DInterpolator(filtered_tri.points, wZ, fill_value=0.0)
         if linear_interp:
             webbpsf_interp = LinearNDInterpolator((wX, wY), wZ, fill_value=0.0)
         else:
             webbpsf_interp = CloughTocher2DInterpolator((wX, wY), wZ, fill_value=0.0)
-        # slice_currmodel = np.zeros(slice_flux.shape)
-        # slice_all_ampls = np.zeros((Nit_max + 1, np.size(dec_vec), np.size(ra_vec))) + np.nan
-        # slice_ampls_err = np.zeros((np.size(dec_vec), np.size(ra_vec))) + np.nan
 
-        # #PA_V3   =    64.98555793945364 / [deg] Position angle of telescope V3 axis
-        if 0:
-            fluxfinite = np.isfinite(Zbad)
-            wherefluxfinite = np.where(fluxfinite)
-            X, Y, Z, Zerr, Zbad = X[wherefluxfinite], Y[wherefluxfinite], Z[wherefluxfinite], Zerr[wherefluxfinite], \
-                Zbad[wherefluxfinite]
-            dra = 0.01
-            ddec = 0.01
-            ra_vec = np.arange(-2.5, 2.1, dra)
-            dec_vec = np.arange(-3.0, 1.9, ddec)
-            ra_grid, dec_grid = np.meshgrid(ra_vec, dec_vec)
-            r_grid = np.sqrt(ra_grid ** 2 + dec_grid ** 2)
-            interpolator_sc = LinearNDInterpolator((X, Y), Z, fill_value=0.0)
-            plt.subplot(1, 2, 1)
-            plt.imshow(interpolator_sc(ra_grid, dec_grid), interpolation="nearest", origin="lower",
-                       extent=[ra_vec[0] - dra / 2., ra_vec[-1] + dra / 2., dec_vec[0] - ddec / 2.,
-                               dec_vec[-1] + ddec / 2.])
-            plt.clim([-1e-9, 1e-9])
-            plt.colorbar()
-            plt.subplot(1, 2, 2)
-            plt.imshow(webbpsf_interp(ra_grid, dec_grid), interpolation="nearest", origin="lower",
-                       extent=[ra_vec[0] - dra / 2., ra_vec[-1] + dra / 2., dec_vec[0] - ddec / 2.,
-                               dec_vec[-1] + ddec / 2.])
-            plt.clim([-2e-9, 2e-9])
-            # plt.clim([-1e-5, 1e-5])
-            plt.colorbar()
-            webbpsf_interp = CloughTocher2DInterpolator((rotate_coordinates(wX, wY, 65 + 138.5, flipx=True)), wZ,
-                                                        fill_value=0.0)
-            # plt.subplot(2,2,3)
-            # plt.imshow(webbpsf_interp(ra_grid, dec_grid),interpolation="nearest",origin="lower",extent=[ra_vec[0]-dra/2.,ra_vec[-1]+dra/2.,dec_vec[0]-ddec/2.,dec_vec[-1]+ddec/2.])
-            # plt.clim([-0.5e-2,0.5e-2])
-            # webbpsf_interp = CloughTocher2DInterpolator((rotate_coordinates(wX, wY, -65-138.5,flipx=True)),wZ, fill_value=0.0)
-            # plt.subplot(2,2,4)
-            # plt.imshow(webbpsf_interp(ra_grid, dec_grid),interpolation="nearest",origin="lower",extent=[ra_vec[0]-dra/2.,ra_vec[-1]+dra/2.,dec_vec[0]-ddec/2.,dec_vec[-1]+ddec/2.])
-            # plt.clim([-0.5e-2,0.5e-2])
-            plt.show()
-
-        # wherefluxfinite4fit = np.where(np.isfinite(Zbad)*(R > IWA) * (R < OWA))
-        # X,Y,Z,Zerr,Zbad = X[wherefluxfinite4fit], Y[wherefluxfinite4fit], Z[wherefluxfinite4fit],Zerr[wherefluxfinite4fit], Zbad[wherefluxfinite4fit]
         if fit_angle:
             p0 = np.array([0.0, 0.0, 0.0])
             simplex_init_steps = np.array([0.05, 0.05, 1 / 1000])
         else:
             p0 = np.array([0.0, 0.0])
             simplex_init_steps = np.array([0.05, 0.05])
+
         if init_paras is not None:
             p0 = np.array(init_paras)
         m0 = webbpsf_interp(X - p0[0], Y - p0[1])
@@ -2265,62 +2184,6 @@ def _fit_wpsf_task(paras):
             a = np.nansum(Z * m0 / Zerr ** 2) / np.nansum(m0 ** 2 / Zerr ** 2)
         except:
             a, xc, yc, th = np.nan, np.nan, np.nan, np.nan
-        # print(a,xc, yc, th)
-        # 0.00014184273586106017 -0.1364760635130025 -0.08421747641555134 0.0013115802927045803
-        # 0.0001436426668425129 -0.1330706312425748 -0.0827898233517135 0.001335870184394232
-
-        if 0:
-            print(a, xc, yc, th)
-            print(np.nansum(m0) / 4.)
-            plt.figure(1)
-            plt.scatter(X, Y, s=Z / np.nanmedian(Z))
-            plt.axis('equal')
-
-            plt.figure(3)
-            plt.scatter(X, Z, c="orange")
-            plt.scatter(X, a * m0, c="blue")
-            plt.scatter(X, Z - a * m0, c="grey")
-
-            dra = 0.01
-            ddec = 0.01
-            ra_vec = np.arange(-2.5, 2.1, dra)
-            dec_vec = np.arange(-3.0, 1.9, ddec)
-            ra_grid, dec_grid = np.meshgrid(ra_vec, dec_vec)
-            r_grid = np.sqrt(ra_grid ** 2 + dec_grid ** 2)
-            interpolator_sc = LinearNDInterpolator((X, Y), Z, fill_value=0.0)
-            plt.figure(2)
-            plt.subplot(1, 3, 1)
-            lim = 1e-10
-            plt.imshow(interpolator_sc(ra_grid, dec_grid), interpolation="nearest", origin="lower",
-                       extent=[ra_vec[0] - dra / 2., ra_vec[-1] + dra / 2., dec_vec[0] - ddec / 2.,
-                               dec_vec[-1] + ddec / 2.])
-            plt.clim([-lim, lim])
-            plt.colorbar()
-            plt.subplot(1, 3, 2)
-            plt.imshow(a * webbpsf_interp(ra_grid - xc, dec_grid - yc), interpolation="nearest", origin="lower",
-                       extent=[ra_vec[0] - dra / 2., ra_vec[-1] + dra / 2., dec_vec[0] - ddec / 2.,
-                               dec_vec[-1] + ddec / 2.])
-            # plt.imshow(a * webbpsf_interp(ra_grid, dec_grid), interpolation="nearest", origin="lower",
-            #            extent=[ra_vec[0] - dra / 2., ra_vec[-1] + dra / 2., dec_vec[0] - ddec / 2.,
-            #                    dec_vec[-1] + ddec / 2.])
-            plt.clim([-lim, lim])
-            plt.colorbar()
-            plt.subplot(1, 3, 3)
-            plt.imshow(interpolator_sc(ra_grid, dec_grid) - a * webbpsf_interp(ra_grid - xc, dec_grid - yc),
-                       interpolation="nearest", origin="lower",
-                       extent=[ra_vec[0] - dra / 2., ra_vec[-1] + dra / 2., dec_vec[0] - ddec / 2.,
-                               dec_vec[-1] + ddec / 2.])
-            plt.clim([-lim, lim])
-            plt.colorbar()
-            # webbpsf_interp = CloughTocher2DInterpolator((rotate_coordinates(wX, wY, 65+138.5,flipx=True)),wZ, fill_value=0.0)
-            # plt.subplot(2,2,3)
-            # plt.imshow(webbpsf_interp(ra_grid, dec_grid),interpolation="nearest",origin="lower",extent=[ra_vec[0]-dra/2.,ra_vec[-1]+dra/2.,dec_vec[0]-ddec/2.,dec_vec[-1]+ddec/2.])
-            # plt.clim([-0.5e-2,0.5e-2])
-            # webbpsf_interp = CloughTocher2DInterpolator((rotate_coordinates(wX, wY, -65-138.5,flipx=True)),wZ, fill_value=0.0)
-            # plt.subplot(2,2,4)
-            # plt.imshow(webbpsf_interp(ra_grid, dec_grid),interpolation="nearest",origin="lower",extent=[ra_vec[0]-dra/2.,ra_vec[-1]+dra/2.,dec_vec[0]-ddec/2.,dec_vec[-1]+ddec/2.])
-            # plt.clim([-0.5e-2,0.5e-2])
-            plt.show()
 
         out_paras[sector_id, :] = np.array([a0, a, xc, yc, th])
         out_model[where_sc] = a * webbpsf_interp(Xsc - xc, Ysc - yc)
@@ -3095,11 +2958,9 @@ def _build_cube_task_para(inputs):
             where_finite_bp = np.where(np.isfinite(Zbp))
             where_finite_masking = np.where((Zerr_masking < 1e1))
             where_radius = np.where((R < aper_radius))
-            print("ICI", np.nanmin(X), np.nanmin(np.abs(R)), aper_radius, len(Z[where_finite_bp]), len(Z[where_finite_masking]), len(Z[where_radius]))
             if np.size(where_finite[0]) < N_pix_min:
                 outs.append([ra_id, dec_id, np.nan, np.nan]) #changed from continue
             else:
-                print("ICI", len(Z[where_finite]))
                 X_fin = X[where_finite]
                 Y_fin = Y[where_finite]
                 Z_fin = Z[where_finite]
