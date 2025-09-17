@@ -11,10 +11,14 @@ from astropy.io import fits
 import multiprocessing as mp
 import matplotlib.pyplot as plt
 import datetime
-from scipy.ndimage import generic_filter
+from scipy.ndimage import generic_filter, gaussian_filter
 from scipy.ndimage import convolve1d
 from scipy.interpolate import interp1d
 import matplotlib.tri as tri
+
+from jwst.pipeline import Detector1Pipeline, Spec2Pipeline, Spec3Pipeline
+from jwst.associations import asn_from_list as afl  # Tools for creating association files
+from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
 
 from breads.instruments.instrument import Instrument
 from breads.instruments.jwstnirspec_cal import JWSTNirspec_cal
@@ -28,6 +32,11 @@ from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_ca
 from breads.fit import fitfm
 from breads.utils import get_spline_model
 import breads.jwst_tools.plotting
+from breads.instruments.jwstmiri_cal import JWSTMiri_cal, fitpsf_miri, get_contnorm_spec_miri
+from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
+from breads.jwst_tools.flat_miri_utils import oddEvenCorrectionImage
+
+from collections import defaultdict
 
 
 ###########################################################################
@@ -1280,6 +1289,17 @@ def mkdir_miri_files(path):
         os.makedirs(path)
     return path
 
+def sort_by_target_name(input_dir, filetype='uncal.fits'):
+    files = find_files_to_process(input_dir, filetype)
+    targname_groups = defaultdict(list)
+
+    for file in files:
+        header = fits.getheader(file)
+        targname = header.get('TARGNAME', 'UNKNOWN')
+        targname_groups[targname].append(file)
+
+    return dict(targname_groups)
+
 
 def select_miri_output_directory(uncal_path, target_name, channel, band):
     """Short function to select the right MIRI output directory"""
@@ -1392,21 +1412,21 @@ def run_bkg_subtraction(uncal_path, target_name, list_bands=None, overwrite=Fals
     for band in list_bands:
         output_dir = os.path.join(uncal_path, target_name, band, 'stage1_sub_bkg')
         mkdir_miri_files(output_dir)
-        rate_files = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1'), filetype='rate.fits')
-        bkg_files = []
-        for fid, rate_file in enumerate(rate_files):
-            print(fid, rate_file)
-            hdr = fits.getheader(rate_file)
-            obs_label = hdr['OBSLABEL']
-            if 'BACKGROUND' in obs_label or 'BKG' in obs_label:
-                print('Background file:', rate_file)
-                bkg_files.append(rate_file)
-                rate_files.remove(rate_file)
+        background_outputdir = os.path.join(uncal_path, target_name, band, 'master_bkg')
+        mkdir_miri_files(background_outputdir)
+        rate_files_all = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1'), filetype='rate.fits')
+
+        bkg_files = [f for f in rate_files_all if 'BACKGROUND' in fits.getheader(f)['OBSLABEL']
+                     or 'BKG' in fits.getheader(f)['OBSLABEL']]
+        rate_files = [f for f in rate_files_all if f not in bkg_files]
 
         bkg_master = np.zeros((len(bkg_files), 1024, 1032))
         for i, bkg_file in enumerate(bkg_files):
             bkg_master[i, :, :] = fits.getdata(bkg_file)
         bkg_master = np.nanmedian(bkg_master, axis=0)
+        plt.imshow(bkg_master, origin='lower')
+        plt.show()
+        fits.writeto(os.path.join(background_outputdir,f"background_master_{band}.fits"), bkg_master, overwrite=overwrite)
 
         for fid, rate_file in enumerate(rate_files):
             out_name = os.path.join(output_dir, os.path.basename(rate_file))

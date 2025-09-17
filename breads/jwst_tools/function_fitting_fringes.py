@@ -10,7 +10,6 @@ from astropy.stats import sigma_clip
 from scipy.ndimage import gaussian_filter
 
 from breads.jwst_tools.PositiveEtalonModel import PositiveEtalonModel
-from breads.jwst_tools.PositiveEtalonCosModel import PositiveEtalonCosModel
 from breads.jwst_tools.flat_miri_utils import find_brightest_cols_two_channels, select_band_coor
 from breads.jwst_tools.flat_miri_utils import beta_masking_inverse_slice
 from BayesicFitting import SplinesModel

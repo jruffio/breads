@@ -14,7 +14,7 @@ from scipy.interpolate import interp1d
 from astropy.stats import sigma_clip
 from breads.utils import get_spline_model
 from scipy.optimize import lsq_linear
-import webbpsf
+import stpsf as webbpsf
 from scipy.interpolate import CloughTocher2DInterpolator
 from scipy.interpolate import LinearNDInterpolator
 from scipy.optimize import curve_fit
