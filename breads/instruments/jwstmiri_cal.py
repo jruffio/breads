@@ -1094,7 +1094,7 @@ class JWSTMiri_cal(Instrument):
                                       fill_value=1)
         return new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes
 
-    def reload_starspectrum_contnorm(self, load_filename=None, star_hf_subtraction=False):
+    def reload_starspectrum_contnorm(self, load_filename=None):
         if load_filename is None:
             load_filename = self.default_filenames["compute_starspectrum_contnorm"]
         if len(glob(load_filename)) == 0:
@@ -1111,10 +1111,6 @@ class JWSTMiri_cal(Instrument):
 
         self.x_nodes = x_nodes
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-        if not star_hf_subtraction:
-            print("[WARNING] star_hf_subtraction set to False: star_func interpolation function is set to f=1")
-            self.star_func = interp1d(new_wavelengths, np.ones_like(new_wavelengths), kind="linear", bounds_error=False,
-                                      fill_value=1)
 
         return new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes
 

@@ -1962,7 +1962,7 @@ def run_coordinate_recenter_miri(cal_files, utils_dir, crds_dir, init_centroid=(
 
     return regwvs_combdataobj.wv_sampling, poly_p_RA, poly_p_dec
 
-def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, crds_dir, wave_2d, coords_offset=(0, 0),
+def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, wave_2d, coords_offset=(0, 0),
                                              wv_nodes=None, target_name=None,
                                              mask_charge_transfer_radius=None, mppool=None,
                                              ra_dec_point_sources=None, overwrite=False):
@@ -1998,7 +1998,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, crds
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 10, "mad_threshold": 20}, True, True])
         if target_name is not None:
-            preproc_task_list.append(["compute_coordinates_arrays", {"target_name": target_name}])
+            preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}])
         else:
             preproc_task_list.append(["compute_coordinates_arrays"])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
