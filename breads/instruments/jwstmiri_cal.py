@@ -329,11 +329,11 @@ class JWSTMiri_cal(Instrument):
             print("Initializing row_err and bad_pixels")
         new_badpix = np.ones(self.bad_pixels.shape)
 
-        '''for colid in range(self.bad_pixels.shape[1]):
+        for colid in range(self.bad_pixels.shape[1]):
             col_flux = np.copy(self.data[:, colid])
             col_flux = col_flux / generic_filter(col_flux, np.nanmedian, size=50)
-            clipped_data = sigma_clip(col_flux, sigma=3, maxiters=20)
-            new_badpix[clipped_data.mask, colid] = np.nan'''
+            clipped_data = sigma_clip(col_flux, sigma=3, maxiters=3)
+            new_badpix[clipped_data.mask, colid] = np.nan
 
         self.bad_pixels *= new_badpix
 
@@ -991,7 +991,6 @@ class JWSTMiri_cal(Instrument):
         # self.bad_pixels *= bar_mask #TODO uncomment this, debug purpose only for now
         return bar_mask
 
-    # herenow
     def compute_starspectrum_contnorm(self, save_utils=False, im=None, im_wvs=None, err=None, mppool=None,
                                       spec_R_sampling=None, threshold_badpix=10, x_nodes=None, N_nodes=40,
                                       iterative=False, star_hf_subtraction=False):
@@ -1046,11 +1045,9 @@ class JWSTMiri_cal(Instrument):
         mask_brightest_slices[mask_brightest_slices==0] = np.nan
         continuum *= mask_brightest_slices
 
-        # self.data *= mask_brightest_slices
-
-        # continuum[np.where(continuum / err < 50)] = np.nan
+        continuum[np.where(continuum / err < 50)] = np.nan
         # continuum[np.where(continuum < np.median(continuum))] = np.nan
-        # continuum[np.where(np.isnan(self.bad_pixels))] = np.nan
+        continuum[np.where(np.isnan(self.bad_pixels))] = np.nan
 
         normalized_im = im / continuum
         normalized_err = err / continuum

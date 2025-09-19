@@ -32,7 +32,9 @@ from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_ca
 from breads.fit import fitfm
 from breads.utils import get_spline_model
 import breads.jwst_tools.plotting
-from breads.instruments.jwstmiri_cal import JWSTMiri_cal, fitpsf_miri, get_contnorm_spec_miri
+from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+from breads.instruments.jwstmiri_cal import fitpsf_miri
+from breads.instruments.jwstmiri_cal import get_contnorm_spec_miri
 from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
 from breads.jwst_tools.flat_miri_utils import oddEvenCorrectionImage
 
@@ -2003,7 +2005,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, crds
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
                                                                     "threshold_badpix": 100,
-                                                                    "mppool": mppool}, True, True])
+                                                                    "mppool": mppool, "star_hf_subtraction":True}, True, True])
         preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d",
                                                               "threshold_badpix": 10,
                                                               "mppool": mppool}, True, True])

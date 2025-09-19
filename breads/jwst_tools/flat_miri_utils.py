@@ -516,14 +516,14 @@ def beta_masking_slice_col(channel, band, liste_col_ID):
 
     return mask
 
-def find_N_brightest_slices(data, channel, N_slices, plot=False):
+def find_brightest_slices(data, channel, plot=False):
     data_copy = data.copy()
     if channel == 1 or channel == 4:
         data_copy[:, 500:] = np.nan
     else:
         data_copy[:, :500] = np.nan
 
-    medianes = np.nanmedian(data_copy, axis=0)  # Calculer la médiane de chaque colonne
+    medianes = np.nanmedian(data_copy, axis=0)
 
     # Find the peaks to identify center of the slices
     peaks, _ = find_peaks(medianes)
@@ -532,13 +532,17 @@ def find_N_brightest_slices(data, channel, N_slices, plot=False):
     peak_heights = medianes[peaks]
 
     # Find index for the N_slices brightest slices
-    topN_indices = np.argsort(peak_heights)[-N_slices:]  # Les 4 plus grands
-    topN_peaks_values = peak_heights[topN_indices]
+    ##topN_indices = np.argsort(peak_heights)[-N_slices:]
+    #topN_peaks_values = peak_heights[topN_indices]
+
+    top_indices = np.argsort(peak_heights)
+    top_peaks_values = peak_heights[top_indices]
 
     topN_indices = []
 
-    for i in range(N_slices):
-        topN_indices.append(np.where(medianes == topN_peaks_values[i])[0])
+    for i in range(len(top_peaks_values)):
+        topN_indices.append(np.where(medianes == top_peaks_values[i])[0])
+    topN_indices = np.array(topN_indices)
 
     print(topN_indices, len(peaks))
     if plot:
@@ -550,7 +554,7 @@ def find_N_brightest_slices(data, channel, N_slices, plot=False):
 
 def beta_masking_inverse_slice(data, channel, band, N_slices=4):
     beta_slice_num = beta_slice_ID(channel, band)
-    liste_col_ID = find_N_brightest_slices(data, channel, band, N_slices)
+    list_col_ID = find_brightest_slices(data, channel)
 
     mask = np.zeros_like(beta_slice_num)
     if channel == 1 or channel == 4:
@@ -558,10 +562,15 @@ def beta_masking_inverse_slice(data, channel, band, N_slices=4):
     elif channel == 2 or channel == 3:
         mask[:, :500] = 1
 
-    if len(liste_col_ID) > 0:
-        for col_ID in liste_col_ID:
-            ID = np.nanmax(beta_slice_num[:, col_ID])
-            print(f"Slice ID: {ID}")
-            mask[beta_slice_num == ID] = 1
+    list_ID =[]
+    if len(list_col_ID) > 0:
+        for col_ID in list_col_ID:
+            list_ID.append(np.nanmax(beta_slice_num[:, col_ID]))
+
+    list_ID = np.unique(np.array(list_ID))[-N_slices:]
+
+    for ID in list_ID:
+        print(f"Slice ID: {ID}")
+        mask[beta_slice_num == ID] = 1
 
     return mask
