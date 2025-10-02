@@ -275,17 +275,12 @@ class JWSTMiri_cal(Instrument):
 
         except(Exception) as e:
             model = datamodels.open(hdulist)
-            self.wavelengths = np.zeros(self.data.shape) + np.nan
-            ny, nx = self.data.shape[0], self.data.shape[1]
-            n_cores = 20
-            args = [('detector', 'world', j, i) for j in range(nx) for i in range(ny)]
-            path = inspect.getfile(model.meta.wcs.transform)
-            print("Path du fichier source:", os.path.abspath(path))
-            with Pool() as pool:
-                results = pool.starmap(model.meta.wcs.transform, args)
-            self.ra_array = np.array([res[0] for res in results]).reshape(nx, ny).transpose()
-            self.dec_array = np.array([res[1] for res in results]).reshape(nx, ny).transpose()
-            self.wavelengths = np.array([res[2] for res in results]).reshape(nx, ny).transpose()
+
+            # Pixel grid
+            yy, xx = np.mgrid[0:1024, 0:1032]
+
+            # Vectorized WCS transforms
+            self.ra_array, self.dec_array, self.wavelengths = model.meta.wcs.transform('detector', 'world', xx, yy)
 
             hdu_ra = fits.ImageHDU(data=self.ra_array)
             hdu_ra.header['EXTNAME'] = 'RA_ARRAY'
@@ -1282,34 +1277,69 @@ class JWSTMiri_cal(Instrument):
             wvs_finite = np.where(np.isfinite(self.wavelengths[:, colid]))
             if np.size(wvs_finite[0]) == 0:
                 continue
-            regwvs_dataobj.dra_as_array[:, colid] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], colid],
-                                                              self.dra_as_array[wvs_finite[0], colid], left=np.nan,
-                                                              right=np.nan)
-            regwvs_dataobj.ddec_as_array[:, colid] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], colid],
-                                                               self.ddec_as_array[wvs_finite[0], colid], left=np.nan,
-                                                               right=np.nan)
+            if self.channel == '34':
+                print("Flipping the wavelength axis")
+                regwvs_dataobj.dra_as_array[:, colid] = np.interp(wv_sampling, np.flip(self.wavelengths[wvs_finite[0], colid]),
+                                                                  np.flip(self.dra_as_array[wvs_finite[0], colid]), left=np.nan,
+                                                                  right=np.nan)
+                regwvs_dataobj.ddec_as_array[:, colid] = np.interp(wv_sampling, np.flip(self.wavelengths[wvs_finite[0], colid]),
+                                                                   np.flip(self.ddec_as_array[wvs_finite[0], colid]),
+                                                                   left=np.nan,
+                                                                   right=np.nan)
 
-            regwvs_dataobj.wavelengths[:, colid] = wv_sampling
-            regwvs_dataobj.area2d[:, colid] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], colid],
-                                                        self.area2d[wvs_finite[0], colid], left=np.nan, right=np.nan)
-            badpix_mask = np.isfinite(self.bad_pixels[:, colid]).astype(float)
-            regwvs_dataobj.bad_pixels[:, colid] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], colid],
-                                                            badpix_mask[wvs_finite], left=0, right=0)
+                regwvs_dataobj.wavelengths[:, colid] = wv_sampling
+                regwvs_dataobj.area2d[:, colid] = np.interp(wv_sampling, np.flip(self.wavelengths[wvs_finite[0], colid]),
+                                                            np.flip(self.area2d[wvs_finite[0], colid]), left=np.nan,
+                                                            right=np.nan)
+                badpix_mask = np.isfinite(np.flip(self.bad_pixels[:, colid])).astype(float)
+                regwvs_dataobj.bad_pixels[:, colid] = np.interp(wv_sampling, np.flip(self.wavelengths[wvs_finite[0], colid]),
+                                                                np.flip(badpix_mask[wvs_finite]), left=0, right=0)
 
-            # following little section written by chatgpt to find the left and right wavelengths in the original data
-            v_left, v_right = find_closest_leftnright_elements(self.wavelengths[wvs_finite[0], colid], wv_sampling)
+                # following little section written by chatgpt to find the left and right wavelengths in the original data
+                v_left, v_right = find_closest_leftnright_elements(np.flip(self.wavelengths[wvs_finite[0], colid]), wv_sampling)
 
-            regwvs_dataobj.leftnright_wavelengths[0, :, colid] = v_left
-            regwvs_dataobj.leftnright_wavelengths[1, :, colid] = v_right
+                regwvs_dataobj.leftnright_wavelengths[0, :, colid] = v_left
+                regwvs_dataobj.leftnright_wavelengths[1, :, colid] = v_right
 
-            where_finite = np.where(np.isfinite(self.bad_pixels[:, colid]))
-            if np.size(where_finite[0]) == 0:
-                # print("No ref points")
-                continue
-            regwvs_dataobj.data[:, colid] = np.interp(wv_sampling, self.wavelengths[where_finite[0], colid],
-                                                      _data[where_finite[0], colid], left=np.nan, right=np.nan)
-            regwvs_dataobj.noise[:, colid] = np.interp(wv_sampling, self.wavelengths[where_finite[0], colid],
-                                                       self.noise[where_finite[0], colid], left=np.nan, right=np.nan)
+                where_finite = np.where(np.isfinite(np.flip(self.bad_pixels[:, colid])))
+                if np.size(where_finite[0]) == 0:
+                    # print("No ref points")
+                    continue
+                regwvs_dataobj.data[:, colid] = np.interp(wv_sampling, np.flip(self.wavelengths[where_finite[0], colid]),
+                                                          np.flip(_data[where_finite[0], colid]), left=np.nan, right=np.nan)
+                regwvs_dataobj.noise[:, colid] = np.interp(wv_sampling, np.flip(self.wavelengths[where_finite[0], colid]),
+                                                           np.flip(self.noise[where_finite[0], colid]), left=np.nan,
+                                                           right=np.nan)
+
+            else:
+                regwvs_dataobj.dra_as_array[:, colid] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], colid],
+                                                                  self.dra_as_array[wvs_finite[0], colid], left=np.nan,
+                                                                  right=np.nan)
+                regwvs_dataobj.ddec_as_array[:, colid] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], colid],
+                                                                   self.ddec_as_array[wvs_finite[0], colid], left=np.nan,
+                                                                   right=np.nan)
+
+                regwvs_dataobj.wavelengths[:, colid] = wv_sampling
+                regwvs_dataobj.area2d[:, colid] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], colid],
+                                                            self.area2d[wvs_finite[0], colid], left=np.nan, right=np.nan)
+                badpix_mask = np.isfinite(self.bad_pixels[:, colid]).astype(float)
+                regwvs_dataobj.bad_pixels[:, colid] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], colid],
+                                                                badpix_mask[wvs_finite], left=0, right=0)
+
+                # following little section written by chatgpt to find the left and right wavelengths in the original data
+                v_left, v_right = find_closest_leftnright_elements(self.wavelengths[wvs_finite[0], colid], wv_sampling)
+
+                regwvs_dataobj.leftnright_wavelengths[0, :, colid] = v_left
+                regwvs_dataobj.leftnright_wavelengths[1, :, colid] = v_right
+
+                where_finite = np.where(np.isfinite(self.bad_pixels[:, colid]))
+                if np.size(where_finite[0]) == 0:
+                    # print("No ref points")
+                    continue
+                regwvs_dataobj.data[:, colid] = np.interp(wv_sampling, self.wavelengths[where_finite[0], colid],
+                                                          _data[where_finite[0], colid], left=np.nan, right=np.nan)
+                regwvs_dataobj.noise[:, colid] = np.interp(wv_sampling, self.wavelengths[where_finite[0], colid],
+                                                           self.noise[where_finite[0], colid], left=np.nan, right=np.nan)
 
         where_bad = np.where(regwvs_dataobj.bad_pixels != 1.0)
         regwvs_dataobj.data[where_bad] = np.nan
@@ -2948,8 +2978,7 @@ def _build_cube_task_para(inputs):
 
             R = np.sqrt((X - ra) ** 2 + (Y - dec) ** 2)
             Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
-            where_finite = np.where(
-                np.isfinite(Zbp) * (Zerr_masking < 1e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
+            where_finite = np.where(np.isfinite(Zbp) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
             where_finite_bp = np.where(np.isfinite(Zbp))
             where_finite_masking = np.where((Zerr_masking < 1e1))
             where_radius = np.where((R < aper_radius))
@@ -3025,7 +3054,7 @@ def build_cube_para(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename
     all_interp_flux = combdataobj.data.transpose()
     all_interp_err = combdataobj.noise.transpose()
     all_interp_badpix = combdataobj.bad_pixels.transpose()
-    fits.writeto("all_interp_ra.fits", all_interp_ra, overwrite=True)
+
     print(all_interp_ra.shape, np.nanmin(all_interp_ra), np.nanmax(all_interp_dec))
     if hasattr(combdataobj, "filelist"):
         N_dithers = len(combdataobj.filelist)
