@@ -58,6 +58,14 @@ def get_optimal_number_nodes(band):
         N_continuum = 80
         N_D = 20
         N_finesse = 20
+    elif band == '3A' or band == '3B' or band == '3C':
+        N_continuum = 80
+        N_D = 20
+        N_finesse = 20
+    elif band == '4A' or band == '4B' or band == '4C':
+        N_continuum = 50
+        N_D = 15
+        N_finesse = 20
     else:
         raise NotImplementedError
 
@@ -94,6 +102,36 @@ def get_first_guess(band, fast=False):
             freq = np.arange(3.3, 3.55, 0.02) / 10
         else:
             freq = np.arange(3.2, 3.8, 0.005) / 10
+    elif band == '3A':
+        if fast:
+            freq = np.arange(3.1, 3.2, 0.02) / 10
+        else:
+            freq = np.arange(3.1, 3.2, 0.005) / 10
+    elif band == '3B':
+        if fast:
+            freq = np.arange(2.9, 3.1, 0.02) / 10
+        else:
+            freq = np.arange(2.9, 3.1, 0.005) / 10
+    elif band == '3C':
+        if fast:
+            freq = np.arange(2.8, 3., 0.02) / 10
+        else:
+            freq = np.arange(2.8, 3., 0.005) / 10
+    elif band == '4A':
+        if fast:
+            freq = np.arange(2.8, 2.9, 0.02) / 10
+        else:
+            freq = np.arange(2.8, 2.9, 0.005) / 10
+    elif band == '4B':
+        if fast:
+            freq = np.arange(2.8, 2.9, 0.02) / 10
+        else:
+            freq = np.arange(2.8, 2.9, 0.005) / 10
+    elif band == '4C':
+        if fast:
+            freq = np.arange(2.8, 2.9, 0.02) / 10
+        else:
+            freq = np.arange(2.8, 2.9, 0.005) / 10
     else:
         raise NotImplementedError
 
@@ -125,7 +163,7 @@ def masking_infinite(wave, data, err, col_id, even_fit_only=False):
 
     return flat, D_est, continuum, lamb, flux, err_c
 
-def identify_badpix(wnum, flux, err, plot=False):
+def identify_badpix(wnum, flux, err, plot=True):
     wnum_0, flux_0 = np.copy(wnum), np.copy(flux)
     N_nodes_continuum = 50
     continuum = SplinesModel(nrknots=N_nodes_continuum, xrange=wnum)
@@ -151,6 +189,7 @@ def identify_badpix(wnum, flux, err, plot=False):
         wnum, flux, err = wnum[where_good_pix], flux[where_good_pix], err[where_good_pix]
 
     if plot:
+        plt.title('Bad pixels masking')
         plt.plot(wnum_0, flux_0)
         plt.scatter(wnum, flux, color='red')
         plt.show()
@@ -289,6 +328,8 @@ def fit_FP_bayesian(data, wave, err, band, col_id, snr_thresh, plot=False, plot_
         param_crop_D = param[N_nodes_continuum + N_nodes_finesse + 4:N_nodes_continuum + N_nodes_D + N_nodes_finesse + 6]
 
         if plot_model:
+            _ = fitter.fit(flux, plot=True)
+
             plt.title("Best D")
             D = SplinesModel(nrknots=N_nodes_D, xrange=wnum)
             plt.plot(wnum, D.result(wnum, param_crop_D), label=f"# nodes: {N_nodes_finesse}")
@@ -310,9 +351,10 @@ def fit_FP_bayesian(data, wave, err, band, col_id, snr_thresh, plot=False, plot_
             plt.show()
 
         lamb_axis = wave[:, col_id]
-        where_good_snr = np.where(data[:, col_id]/err[:, col_id] > snr_thresh)[0]
-        wnum_axis = micron_to_wavenumber(lamb_axis[where_good_snr])
-        flat[where_good_snr] = mdl_flat.result(wnum_axis, param_finesse_crop)
+        #where_good_snr = np.where(data[:, col_id]/err[:, col_id] > snr_thresh)[0]
+        wnum_axis = micron_to_wavenumber(lamb_axis)#[where_good_snr])
+        #flat[where_good_snr] = mdl_flat.result(wnum_axis, param_finesse_crop)
+        flat = mdl_flat.result(wnum_axis, param_finesse_crop)
 
 
         if spectrum is not None and plot:
@@ -335,7 +377,7 @@ def fit_FP_bayesian(data, wave, err, band, col_id, snr_thresh, plot=False, plot_
     flat[flat<0.1] = 1 #hard thresholding
 
     continuum_mdl = SplinesModel(nrknots=N_nodes_continuum, xrange=wnum)
-    continuum[where_good_snr] = continuum_mdl.result(wnum_axis, param_crop_continuum)
+    #continuum[where_good_snr] = continuum_mdl.result(wnum_axis, param_crop_continuum)
     return flat, D_est, continuum
 
 
@@ -356,8 +398,13 @@ def get_flat(uncaldir, targetname, list_bands=None, bkg_sub=False, snr_thresh=20
         fileslist = find_files_to_process(input_path, filetype='rate.fits')
 
         for file in fileslist:
-            first_band = band[0]+band[2]
-            second_band = band[1]+band[2]
+            if band[0] == '1':
+                first_band = band[0] + band[2]
+                second_band = band[1] + band[2]
+            else:
+                first_band = band[1] + band[2]
+                second_band = band[0] + band[2]
+            print(first_band, second_band)
             data_science, DQ_science, err_science = retrieve_data(file)
             coor_file = select_band_coor(band, crds_path)
             wave = coor_file['LAMBDA'].data  # Loading the wavelength map in micron
@@ -380,7 +427,7 @@ def get_flat(uncaldir, targetname, list_bands=None, bkg_sub=False, snr_thresh=20
                 try:
                     flat[:, col_id], D[:, col_id], continuum[:, col_id] = fit_FP_bayesian(data_science, wave,
                                                                                                     err_science,
-                                                                                                    first_band, col_id,
+                                                                                                    second_band, col_id,
                                                                                                     snr_thresh,
                                                                                                     plot=False,
                                                                                                     spectrum=spectrum,
@@ -408,8 +455,13 @@ def get_flat_brightest_slices(uncaldir, targetname, list_bands=None, snr_thresh=
         fileslist = find_files_to_process(input_path, filetype='rate.fits')
 
         for file in fileslist:
-            first_band = band[0]+band[2]
-            second_band = band[1]+band[2]
+            if band[0] == '1':
+                first_band = band[0] + band[2]
+                second_band = band[1] + band[2]
+            else:
+                first_band = band[1] + band[2]
+                second_band = band[0] + band[2]
+            print(first_band, second_band)
             data_science, DQ_science, err_science = retrieve_data(file)
             prim_header = fits.open(file)[0].header
 
@@ -461,8 +513,13 @@ def get_flat_multiprocess(uncaldir, targetname, bands=None, snr_thresh=20): #TOD
         fileslist = find_files_to_process(input_path, filetype='corr_rate.fits')
 
         for file in fileslist:
-            first_band = band[0] + band[2]
-            second_band = band[1] + band[2]
+            if band[0] == '1':
+                first_band = band[0] + band[2]
+                second_band = band[1] + band[2]
+            else:
+                first_band = band[1] + band[2]
+                second_band = band[0] + band[2]
+            print(first_band, second_band)
             data_science, DQ_science, err_science = retrieve_data(file)
             coor_file = select_band_coor(band, crds_path)
             wave = coor_file['LAMBDA'].data  # Loading the wavelength map in micron
