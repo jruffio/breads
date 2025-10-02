@@ -531,10 +531,6 @@ def find_brightest_slices(data, channel, plot=False):
     # Extract peaks height
     peak_heights = medianes[peaks]
 
-    # Find index for the N_slices brightest slices
-    ##topN_indices = np.argsort(peak_heights)[-N_slices:]
-    #topN_peaks_values = peak_heights[topN_indices]
-
     top_indices = np.argsort(peak_heights)
     top_peaks_values = peak_heights[top_indices]
 
@@ -567,10 +563,15 @@ def beta_masking_inverse_slice(data, channel, band, N_slices=4):
         for col_ID in list_col_ID:
             list_ID.append(np.nanmax(beta_slice_num[:, col_ID]))
 
-    list_ID = np.unique(np.array(list_ID))[-N_slices:]
-
+    list_ID = np.array(list_ID)[::-1]
+    slice_id_masked = []
     for ID in list_ID:
-        print(f"Slice ID: {ID}")
-        mask[beta_slice_num == ID] = 1
+        if len(slice_id_masked)>N_slices-1:
+            continue
+        if ID not in slice_id_masked:
+            slice_id_masked.append(ID)
+            print(f"Slice ID: {ID}")
+            mask[beta_slice_num == ID] = 1
+
 
     return mask
