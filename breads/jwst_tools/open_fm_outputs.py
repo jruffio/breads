@@ -81,6 +81,10 @@ def combined_outputs(flux_dithers_array, noise_dithers_array, weighted=True):
 
 def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_error_combined, decs, ras, rvs, coor_ptheta=None, savefig=True):
     import math
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Circle
+
     for k, rv in enumerate(rvs):
         n_dithers = flux_p.shape[0]
 
@@ -95,12 +99,25 @@ def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_erro
 
         for index in range(n_dithers):
             ax = axes[index]
-            im = ax.pcolormesh(ras, decs, (flux_p[index, k] / flux_error[index, k]).T, cmap='viridis', vmin=-2)
+            snr_map = (flux_p[index, k] / flux_error[index, k]).T
+            im = ax.pcolormesh(ras, decs, snr_map, cmap='viridis', vmin=-2, vmax=7)
             ax.invert_xaxis()
             ax.set_title(f"dither #{index+1}")  # optional titles
             # Add colorbar
             cbar = fig.colorbar(im, ax=ax, shrink=1)
             cbar.set_label('SNR', rotation=270, labelpad=10)
+
+            # Custom format_coord to display x,y,z
+            def format_coord(x_val, y_val, ras=ras, decs=decs, Z=snr_map):
+                col = np.searchsorted(ras, x_val) - 1
+                row = np.searchsorted(decs, y_val) - 1
+                if 0 <= col < Z.shape[1] and 0 <= row < Z.shape[0]:
+                    z = Z[row, col]
+                    return f"RA={x_val:.2f}, DEC={y_val:.2f}, SNR={z:.2f}"
+                else:
+                    return f"RA={x_val:.2f}, DEC={y_val:.2f}"
+            ax.format_coord = format_coord
+
             # Optional: add coordinates if provided
             if coor_ptheta is not None:
                 for coor in coor_ptheta:
@@ -123,14 +140,27 @@ def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_erro
         plt.tight_layout()
         plt.show()
 
+        # === Combined map ===
         fig, ax = plt.subplots()
         plt.xlabel('Delta RA (")')
         plt.ylabel('Delta DEC (")')
         plt.title(f"{targetname} combined SNR map on {band}, \n rv = {rv} km/s")
         plt.gca().invert_xaxis()
-        img = plt.pcolormesh(ras, decs, (flux_combined[k] / flux_error_combined[k]).transpose(), cmap='viridis')
+        snr_combined = (flux_combined[k] / flux_error_combined[k]).T
+        img = plt.pcolormesh(ras, decs, snr_combined, cmap='viridis')
         cbar = plt.colorbar()
         cbar.set_label('SNR', rotation=270)
+
+        # Custom format_coord for combined
+        def format_coord(x_val, y_val, ras=ras, decs=decs, Z=snr_combined):
+            col = np.searchsorted(ras, x_val) - 1
+            row = np.searchsorted(decs, y_val) - 1
+            if 0 <= col < Z.shape[1] and 0 <= row < Z.shape[0]:
+                z = Z[row, col]
+                return f"RA={x_val:.2f}, DEC={y_val:.2f}, SNR={z:.2f}"
+            else:
+                return f"RA={x_val:.2f}, DEC={y_val:.2f}"
+        ax.format_coord = format_coord
 
         if coor_ptheta is not None:
             for coor in coor_ptheta:
@@ -141,20 +171,40 @@ def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_erro
 
         plt.show()
 
+
 def plot_chi2_maps(targetname, band, rchi2, decs, ras, rvs, coor_ptheta=None):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Circle
+
     for k, rv in enumerate(rvs):
         fig, ax = plt.subplots(2, 2, figsize=(10, 8))  # optional figsize
         fig.suptitle(f'{targetname} Noise scaling factor maps for {band} \n fringe flat = extended flat ')
-        # Plot the SNR maps
+
+        # Plot the scaling maps
         for i in range(2):
             for j in range(2):
                 index = 2 * i + j
-                im = ax[i, j].pcolormesh(ras, decs, np.sqrt(rchi2[index, k].T), cmap='viridis')
+                scaling_map = np.sqrt(rchi2[index, k].T)
+                im = ax[i, j].pcolormesh(ras, decs, scaling_map, cmap='viridis')
                 ax[i, j].invert_xaxis()
                 ax[i, j].set_title(f"dither #{index+1}")  # optional titles
+
                 # Add colorbar
                 cbar = fig.colorbar(im, ax=ax[i, j], shrink=1)
                 cbar.set_label('Scaling', rotation=270, labelpad=10)
+
+                # Custom format_coord for interactive value display
+                def format_coord(x_val, y_val, ras=ras, decs=decs, Z=scaling_map):
+                    col = np.searchsorted(ras, x_val) - 1
+                    row = np.searchsorted(decs, y_val) - 1
+                    if 0 <= col < Z.shape[1] and 0 <= row < Z.shape[0]:
+                        z = Z[row, col]
+                        return f"RA={x_val:.2f}, DEC={y_val:.2f}, Scaling={z:.3f}"
+                    else:
+                        return f"RA={x_val:.2f}, DEC={y_val:.2f}"
+                ax[i, j].format_coord = format_coord
+
                 # Optional: add coordinates if provided
                 if coor_ptheta is not None:
                     for coor in coor_ptheta:
@@ -171,6 +221,7 @@ def plot_chi2_maps(targetname, band, rchi2, decs, ras, rvs, coor_ptheta=None):
 
         plt.tight_layout()
         plt.show()
+
 
 def plot_combined_channel(uncaldir, targetname, n_nodes, list_channels=None, coor_ptheta=None):
     if list_channels is None:
