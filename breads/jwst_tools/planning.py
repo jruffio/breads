@@ -6,6 +6,7 @@ import pysiaf
 
 def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
                           show_inner_diff_spikes=True, diff_spike_len = 2,
+                          psf_core_check_radius=0.15,
                           nirspec_aperture='ifu'):
     """ Visualize NIRSpec IFU or slit FOV for a companion
 
@@ -23,8 +24,16 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
         Where to center the IFU FOV. May be "star", "companion", "midpoint" between them
     show_inner_diff_spikes : bool
         Also display lines to indicate the inner smaller set of diffraction spikes in JWST's complex PSF.
-    diff_spike_len:
-    nirspec_aperture: e.g., "ifu" or "S200A1", etc.
+    diff_spike_len : float
+        length to draw the spikes, in arcseconds
+    nirspec_aperture: str
+       e.g., "ifu" or "S200A1", etc.
+    psf_core_check_radius : float
+        Radius in arcseconds to use when checking for proximity to the stellar PSF core.
+        The code will check and warn about potentially saturated pixels near the PSF core,
+        and will flag those IFU slices in red. You can adjust this parameter based on
+        expectations for how many spaxels may saturate for your target.
+
 
     Returns
     -------
@@ -113,6 +122,30 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
                 horizontalalignment='center', verticalalignment='center')
         plt.text(301.2, -496.9, "Top of NRS detectors", rotation=slice_V3IdlYAngle - 90, fontsize=8, color='green',
                 horizontalalignment='center', verticalalignment='center')
+
+
+        # Let's check if the star falls within any IFU slices, and if so warn the user
+        for apname in nrs_siaf.apernames:
+            if 'IFU_SLICE' in apname:
+                ap = nrs_siaf.apertures[apname]
+                x, y = ap.corners('tel', rederive=False)
+                x2, y2 = ap.closed_polygon_points('tel', rederive=False)
+                vertices = np.asarray([x,y]).transpose()
+                import matplotlib
+                polygon = matplotlib.patches.Polygon(vertices, closed=True, facecolor='pink', edgecolor='red', alpha=0.5)
+                # Note on polycon.contains_point:  from https://matplotlib.org/stable/api/_as_gen/matplotlib.patches.Patch.html
+                #  "The proper use of this method depends on the transform of the patch. [...]
+                #   The convention of checking against the transformed patch
+                #   stems from the fact that this method is predominantly used
+                #   to check if display coordinates (e.g. from mouse events) are
+                #   within the patch. If you want to do the above check with
+                #   data coordinates, you have to properly transform them first
+                transformed_star_coord = polygon.get_data_transform().transform((v2star, v3star))
+
+                if polygon.contains_point(transformed_star_coord, radius=psf_core_check_radius):
+                    print(f"Caution: {apname} contains the PSF core, and may have saturated pixels and increased noise ")
+                    plt.gca().add_patch(polygon)
+
 
     else:
         slice_V3IdlYAngle = ref_aperture.V3IdlYAngle
