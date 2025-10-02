@@ -32,10 +32,6 @@ from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_ca
 from breads.fit import fitfm
 from breads.utils import get_spline_model
 import breads.jwst_tools.plotting
-from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-from breads.instruments.jwstmiri_cal import fitpsf_miri
-from breads.instruments.jwstmiri_cal import get_contnorm_spec_miri
-from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
 from breads.jwst_tools.flat_miri_utils import oddEvenCorrectionImage
 
 from collections import defaultdict
@@ -1454,9 +1450,9 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
 
     for band in list_bands:
         if bkg_sub:
-            rate_files = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1'), filetype='rate.fits')
-        else:
             rate_files = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1_sub_bkg'), filetype='rate.fits')
+        else:
+            rate_files = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1'), filetype='rate.fits')
         output_dir = os.path.join(uncal_path, target_name, band, 'stage1_flat')
         rate_filtered_files = []
         for fid, rate_file in enumerate(rate_files):
@@ -1794,6 +1790,10 @@ def run_coordinate_recenter_miri(cal_files, utils_dir, crds_dir, init_centroid=(
                                  save_plots=False,
                                  filename_suffix="_webbpsf",
                                  overwrite=False):
+    from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+    from breads.instruments.jwstmiri_cal import fitpsf_miri
+    from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
+
     mypool = mp.Pool(processes=numthreads)
 
     if not os.path.exists(utils_dir):
@@ -1963,9 +1963,12 @@ def run_coordinate_recenter_miri(cal_files, utils_dir, crds_dir, init_centroid=(
     return regwvs_combdataobj.wv_sampling, poly_p_RA, poly_p_dec
 
 def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, wave_2d, coords_offset=(0, 0),
-                                             wv_nodes=None, target_name=None,
+                                             wv_nodes=None, target_name=None, fit_centroid=True,
                                              mask_charge_transfer_radius=None, mppool=None,
                                              ra_dec_point_sources=None, overwrite=False):
+    from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+    from breads.instruments.jwstmiri_cal import get_contnorm_spec_miri
+
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
 
@@ -1998,7 +2001,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, wave
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 10, "mad_threshold": 20}, True, True])
         if target_name is not None:
-            preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}])
+            preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name, "fit_centroid": fit_centroid}])
         else:
             preproc_task_list.append(["compute_coordinates_arrays"])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
@@ -2032,8 +2035,10 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, wave
     combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
     return combined_star_func
 
-def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, wave_2d, wv_nodes=None,
+def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, wave_2d, wv_nodes=None, target_name=None, fit_centroid=True,
                                        combined_star_func=None, coords_offset=(0, 0), mppool=None):
+    from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+
     hdulist_sc = fits.open(cal_files[0])
     detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
     if wv_nodes is None:
@@ -2049,7 +2054,7 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, 
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays"])
+        preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name, "fit_centroid": fit_centroid}])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         if combined_star_func is None:
@@ -2076,6 +2081,9 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, 
 
 def get_combined_regwvs_miri(dataobj_list, channel, wv_sampling=None, mask_charge_transfer_radius=None,
                              use_starsub1d=False, reload=False):
+    from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+    from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
+
     regwvs_dataobj_list = []
     for dataobj in dataobj_list:
 
