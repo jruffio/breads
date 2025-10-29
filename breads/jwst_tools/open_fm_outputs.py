@@ -4,10 +4,11 @@ import h5py
 from astropy.io import fits
 import numpy as np
 import matplotlib.pyplot as plt
+import math
 
 from breads.jwst_tools.reduction_utils import find_files_to_process
 
-def open_fm_outputs_miri(uncaldir, targetname, n_nodes, list_bands=None, coor_ptheta=None):
+def open_fm_outputs_miri(uncaldir, targetname, n_nodes, list_bands=None, companion_offsets=None):
     if list_bands is None:
         list_bands = ['1A', '1B', '1C', '2A', '2B', '2C', '3A', '3B', '3C', '4A', '4B', '4C']
 
@@ -35,8 +36,8 @@ def open_fm_outputs_miri(uncaldir, targetname, n_nodes, list_bands=None, coor_pt
 
         flux_combined, flux_error_combined = combined_outputs(flux_dithers_array, noise_dithers_array, weighted=True)
 
-        plot_snr_maps(targetname, band, flux_dithers_array, noise_dithers_array, flux_combined, flux_error_combined, decs, ras, rvs, coor_ptheta=coor_ptheta, savefig=True)
-        plot_chi2_maps(targetname, band, rchi2_dithers_array, decs, ras, rvs, coor_ptheta=coor_ptheta)
+        plot_snr_maps(targetname, band, flux_dithers_array, noise_dithers_array, flux_combined, flux_error_combined, decs, ras, rvs, companion_offsets=companion_offsets, savefig=True)
+        plot_chi2_maps(targetname, band, rchi2_dithers_array, decs, ras, rvs, companion_offsets=companion_offsets)
 
 
 def sort_by_dither_number(file_list):
@@ -79,11 +80,33 @@ def combined_outputs(flux_dithers_array, noise_dithers_array, weighted=True):
 
     return flux_combined, noise_combined
 
-def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_error_combined, decs, ras, rvs, coor_ptheta=None, savefig=True):
-    import math
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Circle
+
+def annotate_plot_star_and_companions(ax, companion_offsets=None, mark_star=True):
+    """ Utility function to draw markers for star and companions on a given plot
+
+    Parameters
+    -----------
+    ax : matplotlib Axes instance
+        Axes to plot into
+    companion_offsets : 2D list or ndarray of floats, shape [N, 2]
+        List or array of coordinates for offset planets or other substellar companions.
+        Specified as [∆RA, ∆Dec] in arcseconds for each companion.
+    mark_star : bool
+        Draw a star symbol at coordinates (0,0) ?
+    """
+    if companion_offsets is not None:
+        for coor in companion_offsets:
+            dra, ddec = coor
+            ax.plot(dra, ddec, 'ro')
+            circle = Circle((dra, ddec), 0.15 / 2, color='red', fill=False, linewidth=1.5)
+            ax.add_patch(circle)
+
+    if mark_star:
+        ax.scatter(0, 0, s=250, marker='*', facecolor='yellow', edgecolor='black')
+
+
+
+def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_error_combined, decs, ras, rvs, companion_offsets=None, savefig=True, mark_star=True):
 
     for k, rv in enumerate(rvs):
         n_dithers = flux_p.shape[0]
@@ -118,13 +141,7 @@ def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_erro
                     return f"RA={x_val:.2f}, DEC={y_val:.2f}"
             ax.format_coord = format_coord
 
-            # Optional: add coordinates if provided
-            if coor_ptheta is not None:
-                for coor in coor_ptheta:
-                    dra, ddec = coor
-                    ax.plot(dra, ddec, 'ro')
-                    circle = Circle((dra, ddec), 0.15 / 2, color='red', fill=False, linewidth=1.5)
-                    ax.add_patch(circle)
+            annotate_plot_star_and_companions(ax, companion_offsets, mark_star)
 
         # Set axis labels
         axes = np.atleast_2d(axes)
@@ -162,20 +179,12 @@ def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_erro
                 return f"RA={x_val:.2f}, DEC={y_val:.2f}"
         ax.format_coord = format_coord
 
-        if coor_ptheta is not None:
-            for coor in coor_ptheta:
-                dra, ddec = coor
-                ax.plot(dra, ddec, 'ro')
-                circle = Circle((dra, ddec), 0.15 / 2, color='red', fill=False, linewidth=1.5)
-                ax.add_patch(circle)
+        annotate_plot_star_and_companions(ax, companion_offsets, mark_star)
 
         plt.show()
 
 
-def plot_chi2_maps(targetname, band, rchi2, decs, ras, rvs, coor_ptheta=None):
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Circle
+def plot_chi2_maps(targetname, band, rchi2, decs, ras, rvs, companion_offsets=None, mark_star=True):
 
     for k, rv in enumerate(rvs):
         fig, ax = plt.subplots(2, 2, figsize=(10, 8))  # optional figsize
@@ -205,13 +214,7 @@ def plot_chi2_maps(targetname, band, rchi2, decs, ras, rvs, coor_ptheta=None):
                         return f"RA={x_val:.2f}, DEC={y_val:.2f}"
                 ax[i, j].format_coord = format_coord
 
-                # Optional: add coordinates if provided
-                if coor_ptheta is not None:
-                    for coor in coor_ptheta:
-                        dra, ddec = coor
-                        ax[i, j].plot(dra, ddec, 'ro')
-                        circle = Circle((dra, ddec), 0.15 / 2, color='red', fill=False, linewidth=1.5)
-                        ax[i, j].add_patch(circle)
+                annotate_plot_star_and_companions(ax[i, j], companion_offsets, mark_star)
 
         # Set axis labels
         for a in ax[-1, :]:  # bottom row
@@ -223,7 +226,7 @@ def plot_chi2_maps(targetname, band, rchi2, decs, ras, rvs, coor_ptheta=None):
         plt.show()
 
 
-def plot_combined_channel(uncaldir, targetname, n_nodes, list_channels=None, coor_ptheta=None):
+def plot_combined_channel(uncaldir, targetname, n_nodes, list_channels=None, companion_offsets=None, mark_star=True):
     if list_channels is None:
         list_channels = ['1', '2', '3', '4']
     list_bands = ['A', 'B', 'C']
@@ -264,12 +267,7 @@ def plot_combined_channel(uncaldir, targetname, n_nodes, list_channels=None, coo
             cbar = plt.colorbar()
             cbar.set_label('SNR', rotation=270)
 
-            if coor_ptheta is not None:
-                for coor in coor_ptheta:
-                    dra, ddec = coor
-                    ax.plot(dra, ddec, 'ro')
-                    circle = Circle((dra, ddec), 0.15 / 2, color='red', fill=False, linewidth=1.5)
-                    ax.add_patch(circle)
+            annotate_plot_star_and_companions(ax, companion_offsets, mark_star)
 
             plt.show()
 
