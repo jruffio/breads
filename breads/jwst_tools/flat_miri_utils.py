@@ -205,7 +205,9 @@ def miri_flat_running_mean(flat_rate_path, output_dir, crds_path, band, overwrit
             hdul = fits.HDUList([primary_hdu, hdu1, hdu2, hdu3, hdu4])
 
             flat_name = filename.replace("_rate.fits", "_flat.fits")
-            hdul.writeto(os.path.join(output_dir, flat_name), overwrite=overwrite)
+            output_name = os.path.join(output_dir, flat_name)
+            hdul.writeto(output_name, overwrite=overwrite)
+            print(f"==> Estimated fringe flat written to {output_name}")
 
 
 def run_miri_flat_running_mean(flat_path, targetname, output_dir=None, list_bands=None, overwrite=True):

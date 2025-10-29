@@ -1511,8 +1511,9 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
                 hdu_copy['ERR'].data /= best_flat
                 hdu_copy[0].header['S_FLAT'] = flat_name
                 hdu_copy[0].header['FLAT_STD_MIN'] = std_min
-                hdu_copy.writeto(out_name, overwrite=overwrite)
 
+                hdu_copy.writeto(out_name, overwrite=overwrite)
+                print(f"==> Wrote fringe-corrected file to {out_name}")
 
 def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=True, custom_bkg_sub=False, skip_cubes=True, skip_fringe=False,
                     skip_residual_fringes=False,
@@ -1747,7 +1748,9 @@ def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_p
     if save_png:
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f"../fig_fringes_{file_name}.png")
+        out_name = f"../fig_fringes_{file_name}.png"
+        plt.savefig(out_name)
+        print(f"==> Plot saved to {out_name}")
         plt.close()
 
     idx = np.nanargmin(std)
