@@ -16,9 +16,15 @@ from scipy.ndimage import convolve1d
 from scipy.interpolate import interp1d
 import matplotlib.tri as tri
 
-from jwst.pipeline import Detector1Pipeline, Spec2Pipeline, Spec3Pipeline
-from jwst.associations import asn_from_list as afl  # Tools for creating association files
-from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
+try:
+    import jwst
+    _HAS_OPTIONAL_DEPENDENCY_JWST = True
+
+    from jwst.pipeline import Detector1Pipeline, Spec2Pipeline, Spec3Pipeline
+    from jwst.associations import asn_from_list as afl  # Tools for creating association files
+    from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
+except ImportError:
+    _HAS_OPTIONAL_DEPENDENCY_JWST = False
 
 from breads.instruments.instrument import Instrument
 from breads.instruments.jwstnirspec_cal import JWSTNirspec_cal
