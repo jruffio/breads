@@ -342,10 +342,7 @@ class JWSTMiri_cal(Instrument):
             hdulist.append(pyfits.PrimaryHDU(data=self.bad_pixels))
             hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='SELF_BADPIX'))
             hdulist.append(pyfits.ImageHDU(data=old_badpix, name='OLD_BADPIX'))
-            try:
-                hdulist.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(out_filename, clobber=True)
+            hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
             if self.verbose:
                 print(f"Saved the quick bad pixel map to {out_filename}")
@@ -439,10 +436,7 @@ class JWSTMiri_cal(Instrument):
             hdulist.append(pyfits.ImageHDU(data=dra_as_array, name='DELTA_RA'))
             hdulist.append(pyfits.ImageHDU(data=ddec_as_array, name='DELTA_DEC'))
             hdulist.append(pyfits.ImageHDU(data=self.sr2d, name='AREA2D'))
-            try:
-                hdulist.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(out_filename, clobber=True)
+            hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
             if self.verbose:
                 print(f"  Saved the computed coordinates arrays to {out_filename}")
@@ -660,10 +654,7 @@ class JWSTMiri_cal(Instrument):
             hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WAVELEN'))
             hdulist.append(pyfits.ImageHDU(data=webbpsf_X, name='X'))
             hdulist.append(pyfits.ImageHDU(data=webbpsf_Y, name='Y'))
-            try:
-                hdulist.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(out_filename, clobber=True)
+            hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
             if self.verbose:
                 print(f"  Saved the computed PSFs to {out_filename}")
@@ -718,6 +709,7 @@ class JWSTMiri_cal(Instrument):
         self.webbpsf_interp = CloughTocher2DInterpolator((wX, wY), self.webbpsf_im.flatten(), fill_value=0.0)
 
         return wpsfs, wpsfs_header, wepsfs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
+
 
     def compute_quick_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, fov=6, save_utils=False):
         """ Compute WebbPSF simulated PSFs at the MEDIAN WAVELENGTH ONLY for the NIRSpec IFU
@@ -779,10 +771,7 @@ class JWSTMiri_cal(Instrument):
             hdulist.append(pyfits.ImageHDU(data=wepsfs, name='EPSFS'))
             hdulist.append(pyfits.ImageHDU(data=webbpsf_X, name='X'))
             hdulist.append(pyfits.ImageHDU(data=webbpsf_Y, name='Y'))
-            try:
-                hdulist.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(out_filename, clobber=True)
+            hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
             if self.verbose:
                 print(f"  Saved the computed PSFs to {out_filename}")
@@ -846,10 +835,7 @@ class JWSTMiri_cal(Instrument):
                 hdulist_sc["SCI"].data = model_im
             if bu == 'MJy/sr':
                 hdulist_sc["SCI"].data = model_im / (self.area2d * arcsec2_to_sr)
-            try:
-                hdulist_sc.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist_sc.writeto(out_filename, clobber=True)
+            hdulist_sc.writeto(out_filename, overwrite=True)
             hdulist_sc.close()
 
         if self.data_unit == 'MJy':
@@ -964,10 +950,7 @@ class JWSTMiri_cal(Instrument):
 
             hdulist = pyfits.HDUList()
             hdulist.append(pyfits.PrimaryHDU(data=bar_mask))
-            try:
-                hdulist.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(out_filename, clobber=True)
+            hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
 
         # self.bad_pixels *= bar_mask
@@ -1075,10 +1058,7 @@ class JWSTMiri_cal(Instrument):
             hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='BAD_PIX'))
             hdulist.append(pyfits.ImageHDU(data=new_res, name='RES'))
             hdulist.append(pyfits.ImageHDU(data=im, name='IMAGE'))
-            try:
-                hdulist.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(out_filename, clobber=True)
+            hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
 
         self.x_nodes = x_nodes
@@ -1177,10 +1157,7 @@ class JWSTMiri_cal(Instrument):
             hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='BADPIX'))
             hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
             hdulist.append(pyfits.ImageHDU(data=self.x_nodes, name='x_nodes'))
-            try:
-                hdulist.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(out_filename, clobber=True)
+            hdulist.writeto(out_filename, overwrite=True)
 
             if starsub_dir is not None:
                 if not os.path.exists(os.path.join(self.utils_dir, starsub_dir)):
@@ -1201,12 +1178,8 @@ class JWSTMiri_cal(Instrument):
                 if du == 'MJy' and bu == 'MJy/sr':
                     hdulist_sc["SCI"].data = subtracted_im / (self.sr2d)
                 hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
-                try:
-                    hdulist_sc.writeto(os.path.join(self.utils_dir, starsub_dir, os.path.basename(self.filename)),
-                                       overwrite=True)
-                except TypeError:
-                    hdulist_sc.writeto(os.path.join(self.utils_dir, starsub_dir, os.path.basename(self.filename)),
-                                       clobber=True)
+                hdulist_sc.writeto(os.path.join(self.utils_dir, starsub_dir, os.path.basename(self.filename)),
+                                   overwrite=True)
                 hdulist_sc.close()
         return subtracted_im, star_model, spline_paras0, self.x_nodes
 
@@ -1363,11 +1336,9 @@ class JWSTMiri_cal(Instrument):
             hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.area2d, name='INTERP_AREA2D'))
             hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.leftnright_wavelengths, name='INTERP_LEFTNRIGHT'))
             hdulist.append(pyfits.ImageHDU(data=self.wavelengths, name='WAVE_ORIGINAL'))
-            try:
-                hdulist.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(out_filename, clobber=True)
+            hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
+
         return regwvs_dataobj
 
     def reload_interpdata_regwvs(self, load_filename=None):
@@ -2359,10 +2330,7 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
                            "INIT_RA": init_paras[0], "INIT_DEC": init_paras[1]}
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(data=bestfit_coords, header=pyfits.Header(cards=wpsfsfit_header)))
-        try:
-            hdulist.writeto(out_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(out_filename, clobber=True)
+        hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
 
         RDI_psfsub_dir = os.path.join(os.path.dirname(out_filename), "RDI_psfsub" + RDI_folder_suffix)
@@ -2393,10 +2361,7 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
                 pyfits.ImageHDU(data=all_interp_badpix[(ny * obj_id):(ny * (obj_id + 1)), :], name='INTERP_BADPIX'))
             hdulist.append(
                 pyfits.ImageHDU(data=all_interp_area2d[(ny * obj_id):(ny * (obj_id + 1)), :], name='INTERP_AREA2D'))
-            try:
-                hdulist.writeto(_interpdata_psfsub_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(_interpdata_psfsub_filename, clobber=True)
+            hdulist.writeto(_interpdata_psfsub_filename, overwrite=True)
             hdulist.close()
 
             hdulist_sc = pyfits.open(filename)
@@ -2434,22 +2399,17 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
             ######
 
             tmp_sub = hdulist_sc["SCI"].data - new_model
+
             hdulist_sc["SCI"].data = tmp_sub
             hdulist_sc["DQ"].data[where_bad] = 1
-            # Write the new HDU list to a new FITS file
 
+            # Write the new HDU list to a new FITS file
             psfsub_filename = os.path.join(RDI_psfsub_dir, os.path.basename(filename))
-            try:
-                hdulist_sc.writeto(psfsub_filename, overwrite=True)
-            except TypeError:
-                hdulist_sc.writeto(psfsub_filename, clobber=True)
+            hdulist_sc.writeto(psfsub_filename, overwrite=True)
 
             hdulist_sc["SCI"].data = new_model
             psfmod_filename = os.path.join(RDI_model_dir, os.path.basename(filename))
-            try:
-                hdulist_sc.writeto(psfmod_filename, overwrite=True)
-            except TypeError:
-                hdulist_sc.writeto(psfmod_filename, clobber=True)
+            hdulist_sc.writeto(psfmod_filename, overwrite=True)
 
             hdulist_sc.close()
 
@@ -2583,10 +2543,7 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
         hdulist.append(pyfits.ImageHDU(data=snr_map, name='SNR'))
         hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
         hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
-        try:
-            hdulist.writeto(out_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(out_filename, clobber=True)
+        hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
     return snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
 
@@ -2812,10 +2769,7 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
         hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
         hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
         hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WAVE'))
-        try:
-            hdulist.writeto(out_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(out_filename, clobber=True)
+        hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
     return flux_cube, fluxerr_cube, ra_grid, dec_grid
 
@@ -2873,10 +2827,7 @@ def cube_matchedfilter(flux_cube, fluxerr_cube, wv_sampling, ra_grid, dec_grid, 
         hdulist.append(pyfits.ImageHDU(data=snr_map, name='SNR'))
         hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
         hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
-        try:
-            hdulist.writeto(out_filename, overwrite=True)
-        except TypeError:
-            hdulist.writeto(out_filename, clobber=True)
+        hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
     return snr_map, flux_map, fluxerr_map, ra_grid, dec_grid
 
@@ -2941,10 +2892,7 @@ def get_contnorm_spec_miri(dataobj_list, out_filename=None, load_utils=False, mp
             hdulist.append(pyfits.PrimaryHDU(data=new_wavelengths))
             hdulist.append(pyfits.ImageHDU(data=combined_fluxes, name='COM_FLUXES'))
             hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
-            try:
-                hdulist.writeto(out_filename, overwrite=True)
-            except TypeError:
-                hdulist.writeto(out_filename, clobber=True)
+            hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
     return new_wavelengths, combined_fluxes, combined_errors
     #
