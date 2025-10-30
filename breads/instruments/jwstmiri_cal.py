@@ -85,6 +85,7 @@ class JWSTMiri_cal(Instrument):
 
         Parameters
         ----------
+        wv_ref
         filename
         crds_dir
         utils_dir
@@ -103,7 +104,6 @@ class JWSTMiri_cal(Instrument):
             self.utils_dir = os.path.dirname(self.filename)
         else:
             self.utils_dir = utils_dir
-
         self.crds_dir = os.getenv('CUSTOM_CRDS_PATH')
 
         ## Part 1: Loading information from the FITS file and its header metadata
@@ -182,6 +182,7 @@ class JWSTMiri_cal(Instrument):
         self.bary_RV = 0  # Already corrected in wavecal for JWST. float(self.extheader["VELOSYS"])/1000 # in km/s
         self.R = 2700
 
+
         self.default_filenames = {}
         self.default_filenames["compute_med_filt_badpix"] = \
             os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_roughbadpix.fits"))
@@ -208,6 +209,7 @@ class JWSTMiri_cal(Instrument):
             os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_2dstarsub.fits"))
         self.default_filenames["compute_interpdata_regwvs"] = \
             os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_regwvs.fits"))
+
 
         # Mini "pipeline-like" sequence, running a list of task (ie, methods) specified in preproc_task_list
         if preproc_task_list is None:
@@ -298,6 +300,7 @@ class JWSTMiri_cal(Instrument):
 
     def compute_med_filt_badpix(self, save_utils=False, window_size=50, mad_threshold=50):
         """ Quick bad pixel identification.
+
         The data is first high-pass filtered row by row with a median filter with a window size of 50 (window_size)
         pixels. The median absolute deviation (MAP) is then calculated row by row, and any pixel deviating by more than
         50x the MAP are identified as bad.
@@ -308,7 +311,9 @@ class JWSTMiri_cal(Instrument):
 
         Parameters
         ----------
-        save_utils : bool
+        mad_threshold
+        window_size
+        save_utils : bool or string
             Save the computed bad pixel map (nans=bad) into the utils directory
             Default filename (set save_utils as a string instead of bool to override filename):
             os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_med_filt_badpix.fits"))
@@ -748,11 +753,8 @@ class JWSTMiri_cal(Instrument):
 
         wepsfs *= oversample ** 2
 
-        # print(psf_array_shape,pixelscale)
-
         halffov_x = pixelscale / oversample * wpsfs.shape[1] / 2.0
         halffov_y = pixelscale / oversample * wpsfs.shape[0] / 2.0
-
         x = np.linspace(-halffov_x, halffov_x, wpsfs.shape[1], endpoint=True)
         y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[0], endpoint=True)
         webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
@@ -1086,7 +1088,6 @@ class JWSTMiri_cal(Instrument):
 
         self.x_nodes = x_nodes
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-
         return new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes
 
     def compute_starsubtraction(self, save_utils=False, im=None, im_wvs=None, err=None, threshold_badpix=10,
@@ -1342,6 +1343,16 @@ class JWSTMiri_cal(Instrument):
         return regwvs_dataobj
 
     def reload_interpdata_regwvs(self, load_filename=None):
+        """ Reload interpolated data onto regular wavelengths
+
+        Parameters
+        ----------
+        load_filename
+
+        Returns
+        -------
+
+        """
         if "regwvs" in self.coords:
             raise Exception("This data object is already interpolated. Won't interpolate again.")
 
@@ -1371,6 +1382,20 @@ class JWSTMiri_cal(Instrument):
         return regwvs_dataobj
 
     def mask_interp_elements_too_far_from_bin_edges(self, dwv_threshold):
+        """ Mask interpolated elements too far from the edge bins
+
+        Parameters
+        ----------
+        dwv_threshold
+
+        Returns
+        -------
+        mask : ndarray
+            Mask of which pixels are masked
+
+        Also modifies self.bad_pixels
+
+        """
         if "regwvs" not in self.coords:
             raise Exception("'regwvs' in self.coords. This data object needs to be interpolated first.")
         dist_to_bin_edges = np.nanmin(np.abs(self.leftnright_wavelengths - self.wavelengths), axis=0)
@@ -1399,7 +1424,6 @@ class JWSTMiri_cal(Instrument):
                 ifuX, ifuY = self.dra_as_array, self.ddec_as_array
             elif "sky" in self.coords:
                 ifuX, ifuY = rotate_coordinates(self.dra_as_array, self.ddec_as_array, self.east2V2_deg, flipx=False)
-
         return ifuX, ifuY
 
     def getskycoords(self, ifux=None, ifuy=None):
@@ -1407,8 +1431,8 @@ class JWSTMiri_cal(Instrument):
 
         Parameters
         ----------
-        ras
-        decs
+        ifuy
+        ifux
 
         Returns
         -------
@@ -1493,16 +1517,15 @@ def untangle_dq(arr, verbose=True):
 
     Parameters
     ----------
+    verbose
     arr
 
     Returns
     -------
 
     """
-
     if verbose:
-        print("Unpacking data quality bitmasks")
-        print("DQ array is of type", arr.dtype)
+        print("\tUnpacking data quality bitmasks. DQ array is of type", arr.dtype)
     # Assume arr is your input numpy array of shape (ny, nx)
     ny, nx = arr.shape
 
@@ -1634,7 +1657,6 @@ def normalize_columns(image, im_wvs, noise=None, badpixs=None, star_model=None, 
         badpixs = np.ones(image.shape)
     if star_model is None:
         star_model = np.ones(image.shape)
-    # print(f"[DEBUG] star model shape for input {image.shape}")
     print(f"[DEBUG] reg_mean_map shape for input start0 {reg_mean_map.shape}")
     if x_nodes is None:
         x_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), nodes, endpoint=True)
@@ -1653,6 +1675,7 @@ def normalize_columns(image, im_wvs, noise=None, badpixs=None, star_model=None, 
         chunk_size = image.shape[1] // (3 * numthreads)
         if chunk_size == 0:
             parallel_flag = False
+
 
     if (mypool is None) or (parallel_flag == False):
         paras = new_image, im_wvs, new_noise, new_badpixs, x_nodes, star_model, threshold, star_sub_mode, regularization, reg_mean_map, reg_std_map
@@ -1771,7 +1794,6 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
     psfsub_model_im = np.zeros(sc_im.shape)
     bestfit_paras = np.zeros((4, np.size(wv_sampling))) + np.nan
     for wv_id, left_wv in enumerate(wv_sampling):
-
         center_wv = left_wv * (1 + 0.25 / 2700)
         right_wv = left_wv * (1 + 0.5 / 2700)
         print(left_wv, center_wv, right_wv, wv_min, wv_max)
@@ -1825,7 +1847,6 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
             m0 = interpolator((Xfit - fix_cen[0]) * psf_wv0 / center_wv, (Yfit - fix_cen[1]) * psf_wv0 / center_wv)
             a0 = np.nansum(Zfit * m0 / Zerr2_fit) / np.nansum(m0 ** 2 / Zerr2_fit)
             xc, yc, a = 0, 0, a0
-        # print(xc, yc, a)
         psfmodel = a * interpolator(Xsc * psf_wv0 / center_wv - xc, Ysc * psf_wv0 / center_wv - yc)
         psfsub_Zsc = Zsc - psfmodel
 
@@ -1838,6 +1859,21 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
 
 
 def where_point_source(dataobj, radec_as, rad_as):
+    """Which pixels in a point cloud are within some given radius of a given location?
+
+    Parameters
+    ----------
+    dataobj : data object
+        Point cloud data object
+    radec_as : tuple of floats
+        RA, Dec coordinates of interest
+    rad_as : float
+        Radius in arcseconds
+
+    Returns
+    -------
+
+    """
     ra, dec = radec_as
     dist2pointsource_as = np.sqrt((dataobj.dra_as_array - ra) ** 2 + (dataobj.ddec_as_array - dec) ** 2)
     return np.where(dist2pointsource_as < rad_as)
@@ -1892,8 +1928,8 @@ def PCA_wvs_axis_miri(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
 
 
 def combine_spectrum(wavelengths, fluxes, errors, bin_size):
-    """
-    Combines the spectrum by combining the flux values in each bin using a weighted mean.
+    """ Combines the spectrum by combining the flux values in each bin using a weighted mean.
+
     Calculates and returns the new combined flux errors.
 
     :param wavelengths: 1D array of wavelengths.
@@ -1976,6 +2012,24 @@ def combine_spectrum(wavelengths, fluxes, errors, bin_size):
 
 
 def combine_spectrum_1dspline(wavelengths, fluxes, errors, bin_size, oversampling=10):
+    """Combine a spectrum using a 1d epline
+
+    Parameters
+    ----------
+    wavelengths
+    fluxes
+    errors
+    bin_size
+    oversampling
+
+    Returns
+    -------
+    hd_wvs
+    splev(hd_wvs, spl)
+    err_func(hd_wvs)
+    spl
+
+    """
     new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(wavelengths, fluxes, errors, bin_size)
     star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
     err_func = interp1d(new_wavelengths, combined_errors, kind="linear", bounds_error=False, fill_value=1)
@@ -2072,45 +2126,30 @@ def _fit_wpsf_task(paras):
         phi_bounds_list = [[dphi * phi_i, dphi * (phi_i + 1)] for phi_i in
                            range(curr_sep_N_subsections)]
         phi_bounds_list[-1][1] = 2 * np.pi
-        # dphi = 2 * np.pi / curr_sep_N_subsections
-        # phi_bounds_list = [[dphi * phi_i, dphi * (phi_i + 1)] for phi_i in range(curr_sep_N_subsections)]
-        # phi_bounds_list[-1][1] = 2 * np.pi
-        # for phi_bound in phi_bounds_list:
-        #     print(((r_min,r_max),phi_bound) )
         iterator_sectors.extend([((r_min, r_max), phi_bound) for phi_bound in phi_bounds_list])
     tot_sectors = len(iterator_sectors)
 
     out_paras = np.zeros((tot_sectors, 5)) + np.nan
     out_model = np.zeros(_Z.shape) + np.nan
-    # print(rad_bounds)
-    # print(iterator_sectors)
-    # exit()
     for sector_id, sector in enumerate(iterator_sectors):
-        # if sector_id < 14:
-        #     continue
-        # print("sector",sector)
-        # exit()
         rmin, rmax = sector[0]
         pamin, pamax = sector[1]
         padding2 = padding / 2.0
         if pamin < pamax:
             deltaphi = pamax - pamin + 2 * padding / np.mean([rmin, rmax])
-            # deltaphi2 = pamax - pamin + 2 * padding2 / np.mean([rmin, rmax])
         else:
             deltaphi = (2 * np.pi - (pamin - pamax)) + 2 * padding / np.mean([rmin, rmax])
-            # deltaphi2 = (2 * np.pi - (pamin - pamax)) + 2 * padding2 / np.mean([rmin, rmax])
 
         # If the length or the arc is higher than 2*pi, simply pick the entire circle.
         if deltaphi >= 2 * np.pi:
             pamin_pad = 0
             pamax_pad = 2 * np.pi
         else:
-            pamin_pad = ((pamin) - padding / np.mean([rmin, rmax])) % (2.0 * np.pi)
-            pamax_pad = ((pamax) + padding / np.mean([rmin, rmax])) % (2.0 * np.pi)
+            pamin_pad = (pamin - padding / np.mean([rmin, rmax])) % (2.0 * np.pi)
+            pamax_pad = (pamax + padding / np.mean([rmin, rmax])) % (2.0 * np.pi)
 
         rmin_pad = np.max([rmin - padding, 0.0])
         rmax_pad = rmax + padding
-
         if pamin_pad < pamax_pad:
             fit_sector = (rmin_pad <= _R) & (_R < rmax_pad) & (pamin_pad <= _PA) & (_PA < pamax_pad) & np.isfinite(
                 _Zbad)
@@ -2185,8 +2224,23 @@ def _fit_wpsf_task(paras):
 
 
 def _interp_psf(paras):
+    """ Interpolate PSF
+
+    Parameters
+    ----------
+    paras : tuple
+        Contains the following:
+        linear_interp, wepsf, wifuX, wifuY, wv_id, east2V2_deg
+
+
+    Returns
+    -------
+    webbpsf_interp : Interpolator object
+        a scipy.interpolate Interpolator object for interpolating a PSF onto
+        specified coordinates.
+
+    """
     linear_interp, wepsf, wifuX, wifuY, wv_id, east2V2_deg = paras
-    # print(wv_id)
     wX, wY, wZ = wifuX.ravel(), wifuY.ravel(), wepsf.flatten()
     wX, wY = rotate_coordinates(wX, wY, -east2V2_deg, flipx=True)
 
@@ -2421,7 +2475,7 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
     wv_sampling = dataobj0.wv_sampling
     east2V2_deg = dataobj0.east2V2_deg
 
-    comp_spec = planet_f(wv_sampling * (1 - (rv) / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
+    comp_spec = planet_f(wv_sampling * (1 - rv / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
     comp_spec = comp_spec * dataobj0.aper_to_epsf_peak_f(wv_sampling)  # normalized to peak flux
     comp_spec = comp_spec * (wv_sampling * u.um) ** 2 / const.c  # from  Flambda to Fnu
     comp_spec = comp_spec.to(u.MJy).value
@@ -2436,17 +2490,11 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
     all_interp_ra, all_interp_dec, all_interp_wvs, all_interp_flux, all_interp_err, all_interp_badpix, all_interp_area2d = \
         dataobj0.interpdata_regwvs(wv_sampling=None, modelfit=False, out_filename=dataobj0.interpdata_regwvs_filename,
                                    load_interpdata_regwvs=True)
-    # print(all_interp_ra.shape)
-    # plt.scatter(all_interp_ra[:,1000],all_interp_dec[:,1000],s=all_interp_flux[:,1000]/np.nanmedian(all_interp_flux))
-    # plt.show()
     if len(dataobj_list) > 1:
         for dataobj in dataobj_list[1::]:
             interp_ra, interp_dec, interp_wvs, interp_flux, interp_err, interp_badpix, interp_area2d = \
                 dataobj.interpdata_regwvs(wv_sampling=None, modelfit=False,
                                           out_filename=dataobj.interpdata_regwvs_filename, load_interpdata_regwvs=True)
-            # print(all_interp_ra.shape)
-            # plt.scatter(interp_ra[:,1000],interp_dec[:,1000],s=interp_flux[:,1000]/np.nanmedian(interp_flux))
-            # plt.show()
             all_interp_ra = np.concatenate((all_interp_ra, interp_ra), axis=0)
             all_interp_dec = np.concatenate((all_interp_dec, interp_dec), axis=0)
             all_interp_wvs = np.concatenate((all_interp_wvs, interp_wvs), axis=0)
@@ -2455,16 +2503,9 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
             all_interp_badpix = np.concatenate((all_interp_badpix, interp_badpix), axis=0)
             all_interp_area2d = np.concatenate((all_interp_area2d, interp_area2d), axis=0)
     with pyfits.open(fitpsf_filename) as hdulist:
-        # bestfit_coords = hdulist[0].data
-        # wpsf_angle_offset = hdulist[0].header["INIT_ANG"]
-        # wpsf_ra_offset = hdulist[0].header["INIT_RA"]
-        # wpsf_dec_offset = hdulist[0].header["INIT_DEC"]
         all_interp_psfsub = hdulist[1].data
-        # all_interp_psfmodel = hdulist[2].data
     psf_interp_list = []
     print("create psf model")
-    # debug_init= 800
-    # debug_end = 900
     debug_init = 0
     debug_end = np.size(wv_sampling)
     if 0 or mppool is None:
@@ -2475,9 +2516,6 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
             print(wv_id, wv, np.size(wv_sampling))
             paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
             out = _interp_psf(paras)
-            # plt.imshow(psfs[wv_id, :, :],origin="lower")
-            # plt.imshow(out(ra_grid,dec_grid),origin="lower")
-            # plt.show()
             psf_interp_list.append(out)
     else:
         output_lists = mppool.map(_interp_psf, zip(itertools.repeat(linear_interp), psfs[debug_init:debug_end, :, :],
@@ -2489,12 +2527,6 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
         for wv_id, (wv, out) in enumerate(zip(wv_sampling, output_lists)):
             print(wv_id, np.size(wv_sampling))
             psf_interp_list.append(out)
-
-        # output_lists = mppool.map(_interp_psf,zip(itertools.repeat(linear_interp),psfs, psfX, psfY,np.arange(np.size(wv_sampling)),itertools.repeat(east2V2_deg)))
-        #
-        # for wv_id, (wv, out) in enumerate(zip(wv_sampling, output_lists)):
-        #     print(wv_id, np.size(wv_sampling))
-        #     psf_interp_list.append(out)
 
     print("done creating psf model")
 
@@ -2514,11 +2546,6 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
                 X = X[where_finite]
                 Y = Y[where_finite]
                 sampled_psf[where_finite[0], wv_id] = psf_interp_list[wv_id](X - ra, Y - dec)
-                # print(ra,dec)
-                # # plt.scatter(X,Y,s=psf_interp_list[wv_id](X,Y)/np.nanmedian(psf_interp_list[wv_id](X,Y)))#,s=sampled_psf[:,wv_id]/np.nanmedian(sampled_psf[:,wv_id])
-                # plt.scatter(X,Y,s=sampled_psf[where_finite[0],wv_id]/np.nanmedian(sampled_psf[where_finite[0],wv_id]))#,s=sampled_psf[:,wv_id]/np.nanmedian(sampled_psf[:,wv_id])
-                # plt.show()
-                # exit()
 
             sampled_psf = (sampled_psf * comp_spec[None, :]) * all_interp_area2d / dataobj_list[0].webbpsf_spaxel_area
 
@@ -2531,9 +2558,6 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
 
             flux_map[dec_id, ra_id] = mfflux
             fluxerr_map[dec_id, ra_id] = mffluxerr * noise_factor
-            # where_finite = np.where(np.isfinite(all_interp_badpix))
-            # X = all_interp_ra[where_finite]
-            # Y = all_interp_dec
 
     snr_map = flux_map / fluxerr_map
     if out_filename is not None:
@@ -2600,7 +2624,10 @@ import sys
 
 
 def rprint(string):
-    sys.stdout.write('\r' + str(string))
+    """Print a line of text, using a carriage return to overprint the current line
+    (rather than printing a new line)
+    """
+    sys.stdout.write('\r'+str(string))
     sys.stdout.flush()
 
 
