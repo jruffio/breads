@@ -55,6 +55,8 @@ docs = [
 jwst = [
     "jwst",
     "stpsf"
+    "lmfit"
+    "BayesicFitting"
 ]
 
 [project.urls]

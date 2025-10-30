@@ -1,9 +1,17 @@
 import numpy as numpy
-from BayesicFitting import EtalonModel
 from astropy import units
 import math
-from BayesicFitting.source import Tools
-from BayesicFitting.source.NonLinearModel import NonLinearModel
+
+try:
+    from BayesicFitting import EtalonModel
+    from BayesicFitting.source import Tools
+    from BayesicFitting.source.NonLinearModel import NonLinearModel
+except ImportError:
+    # these are optional dependencies for BREADS JWST support; OK to ignore them for
+    # non-JWST BREADS usage
+    pass
+
+
 
 class PositiveEtalonModel( NonLinearModel ):
     """

@@ -9,11 +9,17 @@ from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 
 import math
-from BayesicFitting import Fitter
-from BayesicFitting import SplinesModel
 
 import matplotlib
 from scipy.signal import find_peaks
+
+try:
+    from BayesicFitting import Fitter, SplinesModel
+except ImportError:
+    # these are optional dependencies for BREADS JWST support; OK to ignore them for
+    # non-JWST BREADS usage
+    pass
+
 
 def use_find_files_to_process(input_dir, filetype='uncal.fits'):
     from breads.jwst_tools.reduction_utils import find_files_to_process

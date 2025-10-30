@@ -12,8 +12,13 @@ from scipy.ndimage import gaussian_filter
 from breads.jwst_tools.PositiveEtalonModel import PositiveEtalonModel
 from breads.jwst_tools.flat_miri_utils import find_brightest_cols_two_channels, select_band_coor
 from breads.jwst_tools.flat_miri_utils import beta_masking_inverse_slice
-from BayesicFitting import SplinesModel
-from BayesicFitting import LevenbergMarquardtFitter
+
+try:
+    from BayesicFitting import SplinesModel, LevenbergMarquardtFitter
+except ImportError:
+    # these are optional dependencies for BREADS JWST support; OK to ignore them for
+    # non-JWST BREADS usage
+    pass
 
 from breads.jwst_tools.reduction_utils import find_files_to_process
 from breads.jwst_tools.flat_miri_utils import select_band_coor
