@@ -1,6 +1,5 @@
 import numpy as np
 from astropy.io import fits
-from lmfit.models import VoigtModel
 import os
 
 from astropy.stats import sigma_clip
@@ -62,6 +61,8 @@ def find_brightest_cols_two_channels(data):
     return col_id_1, col_id_2
 
 def find_psf_peak_channel_2D(data, row_id, crds_path, band, detector_part='left'):
+    from lmfit.models import VoigtModel
+
     hdu = select_band_coor(band, crds_path)
     alpha = hdu["alpha"].data
     beta = hdu["beta"].data
