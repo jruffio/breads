@@ -106,7 +106,9 @@ def annotate_plot_star_and_companions(ax, companion_offsets=None, mark_star=True
 
 
 
-def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_error_combined, decs, ras, rvs, companion_offsets=None, savefig=True, mark_star=True):
+def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_error_combined, decs, ras, rvs,
+                  vmin=-2, vmax = 7,
+                  companion_offsets=None, savefig=True, mark_star=True):
 
     for k, rv in enumerate(rvs):
         n_dithers = flux_p.shape[0]
@@ -123,8 +125,9 @@ def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_erro
         for index in range(n_dithers):
             ax = axes[index]
             snr_map = (flux_p[index, k] / flux_error[index, k]).T
-            im = ax.pcolormesh(ras, decs, snr_map, cmap='viridis', vmin=-2, vmax=7)
+            im = ax.pcolormesh(ras, decs, snr_map, cmap='viridis', vmin=vmin, vmax=vmax)
             ax.invert_xaxis()
+            ax.set_aspect('equal')
             ax.set_title(f"dither #{index+1}")  # optional titles
             # Add colorbar
             cbar = fig.colorbar(im, ax=ax, shrink=1)
@@ -165,6 +168,7 @@ def plot_snr_maps(targetname, band, flux_p, flux_error, flux_combined, flux_erro
         plt.gca().invert_xaxis()
         snr_combined = (flux_combined[k] / flux_error_combined[k]).T
         img = plt.pcolormesh(ras, decs, snr_combined, cmap='viridis')
+        ax.set_aspect('equal')
         cbar = plt.colorbar()
         cbar.set_label('SNR', rotation=270)
 
@@ -197,6 +201,7 @@ def plot_chi2_maps(targetname, band, rchi2, decs, ras, rvs, companion_offsets=No
                 scaling_map = np.sqrt(rchi2[index, k].T)
                 im = ax[i, j].pcolormesh(ras, decs, scaling_map, cmap='viridis')
                 ax[i, j].invert_xaxis()
+                ax[i, j].set_aspect('equal')
                 ax[i, j].set_title(f"dither #{index+1}")  # optional titles
 
                 # Add colorbar
@@ -264,6 +269,7 @@ def plot_combined_channel(uncaldir, targetname, n_nodes, list_channels=None, com
             plt.title(f"{targetname} combined SNR map on channel {channel}, rv={rv} km/s")
             plt.gca().invert_xaxis()
             img = plt.pcolormesh(ras, decs, (flux_combined[k] / flux_error_combined[k]).transpose(), cmap='viridis')
+            ax.set_aspect('equal')
             cbar = plt.colorbar()
             cbar.set_label('SNR', rotation=270)
 
