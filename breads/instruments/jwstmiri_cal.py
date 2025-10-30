@@ -1,41 +1,36 @@
 import os.path
-import matplotlib.pyplot as plt
-from breads.instruments.instrument import Instrument
-import breads.utils as utils
-from warnings import warn
-from astropy.io import fits
-import astropy.io.fits as pyfits
+import sys
 from copy import copy, deepcopy
-from breads.utils import broaden
-from astropy import units as u
 from glob import glob
-import itertools
-from scipy.interpolate import interp1d
-from astropy.stats import sigma_clip
-from breads.utils import get_spline_model
-from scipy.optimize import lsq_linear
+from warnings import warn
+import astropy.io.fits as pyfits
+import matplotlib.pyplot as plt
+import matplotlib.tri as tri
+import numpy as np
+import scipy.linalg as la
 import stpsf as webbpsf
-from scipy.interpolate import CloughTocher2DInterpolator
-from scipy.interpolate import LinearNDInterpolator
-from scipy.optimize import curve_fit
-# from stdatamodels.jwst import datamodels
+from astropy import constants as const
+from astropy import units as u
+import itertools
+from astropy.io import fits
+from astropy.stats import sigma_clip
+from scipy.optimize import lsq_linear
+from scipy.interpolate import CloughTocher2DInterpolator, LinearNDInterpolator
+from scipy.interpolate import interp1d, splev, splrep
+from scipy.optimize import minimize, curve_fit
 from jwst import datamodels
 from scipy.signal import convolve2d
-import scipy.linalg as la
-from scipy.optimize import minimize
-from astropy import constants as const
 from scipy.stats import median_abs_deviation
 from tqdm import tqdm
 
-from breads.utils import rotate_coordinates, find_closest_leftnright_elements
+import breads.utils as utils
+from breads.instruments.instrument import Instrument
+from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_elements
+from breads.utils import get_spline_model
 from breads.jwst_tools.fit_miri_psf_centroid import fit_trace
 from breads.jwst_tools.flat_miri_utils import beta_masking_inverse_slice
-import matplotlib.tri as tri
-import numpy as np
 from scipy.ndimage import generic_filter
 from multiprocessing import Pool
-from scipy.interpolate import splev, splrep
-from astropy.stats import sigma_clip
 
 import inspect
 
