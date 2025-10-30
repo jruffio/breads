@@ -18,7 +18,8 @@ from scipy.optimize import lsq_linear
 from scipy.interpolate import CloughTocher2DInterpolator, LinearNDInterpolator
 from scipy.interpolate import interp1d, splev, splrep
 from scipy.optimize import minimize, curve_fit
-from jwst import datamodels
+
+
 from scipy.signal import convolve2d
 from scipy.stats import median_abs_deviation
 from tqdm import tqdm
@@ -269,7 +270,9 @@ class JWSTMiri_cal(Instrument):
             self.dec_array = hdulist['DEC_ARRAY'].data
 
         except(Exception) as e:
-            model = datamodels.open(hdulist)
+
+            import jwst.datamodels
+            model = jwst.datamodels.open(hdulist)
 
             # Pixel grid
             yy, xx = np.mgrid[0:1024, 0:1032]
