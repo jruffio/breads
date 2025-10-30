@@ -134,16 +134,14 @@ class JWSTMiri_cal(Instrument):
             if 'photom' in file_crds:
                 sr2d_fits = file_crds
 
-        self.sr2d = fits.open(os.path.join(path_photom_crds, sr2d_fits))['PIXSIZ'].data
+        self.area2d = fits.open(os.path.join(path_photom_crds, sr2d_fits))['PIXSIZ'].data
 
         # high level decision flag
         self.opmode = "IFU"
         self.data = hdulist_sc["SCI"].data
-
         rnoise_var = hdulist_sc["VAR_RNOISE"].data
         pnoise_var = hdulist_sc["VAR_POISSON"].data
         self.noise = np.sqrt(rnoise_var + pnoise_var)
-
         dq = hdulist_sc["DQ"].data
         self.load_wavelength(hdulist_sc)
 
@@ -377,6 +375,8 @@ class JWSTMiri_cal(Instrument):
 
         Parameters
         ----------
+        targname
+        center_with_targname
         save_utils : bool
             Save the computed coordinates into the utils directory
 
@@ -435,7 +435,7 @@ class JWSTMiri_cal(Instrument):
             hdulist.append(pyfits.PrimaryHDU(data=self.wavelengths))
             hdulist.append(pyfits.ImageHDU(data=dra_as_array, name='DELTA_RA'))
             hdulist.append(pyfits.ImageHDU(data=ddec_as_array, name='DELTA_DEC'))
-            hdulist.append(pyfits.ImageHDU(data=self.sr2d, name='AREA2D'))
+            hdulist.append(pyfits.ImageHDU(data=self.area2d, name='AREA2D'))
             hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
             if self.verbose:
@@ -443,7 +443,7 @@ class JWSTMiri_cal(Instrument):
         self.dra_as_array, self.ddec_as_array = dra_as_array, ddec_as_array
         self.coords = "sky"
 
-        return self.wavelengths, dra_as_array, ddec_as_array, self.sr2d
+        return self.wavelengths, dra_as_array, ddec_as_array, self.area2d
 
     def reload_coordinates_arrays(self, load_filename=None):
         if load_filename is None:
@@ -479,13 +479,13 @@ class JWSTMiri_cal(Instrument):
 
     def convert_MJy_per_sr_to_MJy(self, save_utils=False, data_in_MJy_per_sr=None):
         if data_in_MJy_per_sr is not None:  # TODO peut etre supprimer ces boucles de conditions, le return est la seule chose qui change
-            return data_in_MJy_per_sr * self.sr2d
+            return data_in_MJy_per_sr * self.area2d
         else:
             if self.data_unit != "MJy/sr":
                 raise Exception("Data should in MJy/sr to be converted from MJy/sr to MJy")
 
-            self.data = self.data * (self.sr2d)
-            self.noise = self.noise * (self.sr2d)
+            self.data = self.data * (self.area2d)
+            self.noise = self.noise * (self.area2d)
             self.data_unit = "MJy"
             return self.data, self.noise
 
@@ -511,7 +511,6 @@ class JWSTMiri_cal(Instrument):
         ddec_as_array: in arcsec, new relative declination after offset
 
         """
-        # TODO commenter l'equation polynomiale en jeu
         if coords_offset is None:
             coords_offset = [0, 0]
         if self.verbose:
@@ -531,8 +530,8 @@ class JWSTMiri_cal(Instrument):
 
         Parameters
         ----------
-        filename : str
-            Filename of saved PSF
+        load_filename : str
+            Optional filename to load. If not provided, a default filename will be used.
 
         Returns
         -------
@@ -1170,9 +1169,9 @@ class JWSTMiri_cal(Instrument):
                 if du == 'MJy/sr' and bu == 'MJy/sr':
                     hdulist_sc["SCI"].data = subtracted_im
                 if du == 'MJy/sr' and bu == 'MJy':
-                    hdulist_sc["SCI"].data = subtracted_im * (self.sr2d)
+                    hdulist_sc["SCI"].data = subtracted_im * (self.area2d)
                 if du == 'MJy' and bu == 'MJy/sr':
-                    hdulist_sc["SCI"].data = subtracted_im / (self.sr2d)
+                    hdulist_sc["SCI"].data = subtracted_im / (self.area2d)
                 hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
                 hdulist_sc.writeto(os.path.join(self.utils_dir, starsub_dir, os.path.basename(self.filename)),
                                    overwrite=True)
@@ -2615,7 +2614,6 @@ def _build_cube_task(inputs):
     return outs
 
 
-import sys
 
 
 def rprint(string):
