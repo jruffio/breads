@@ -54,8 +54,8 @@ docs = [
 ]
 jwst = [
     "jwst",
-    "stpsf"
-    "lmfit"
+    "stpsf",
+    "lmfit",
     "BayesicFitting"
 ]
 
