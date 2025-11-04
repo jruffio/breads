@@ -9,16 +9,12 @@ from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 
 import math
-from BayesicFitting import Fitter
-from BayesicFitting import SplinesModel
-from BayesicFitting import LevenbergMarquardtFitter
-
 
 import matplotlib
 from scipy.signal import find_peaks
 
 try:
-    from BayesicFitting import Fitter, SplinesModel
+    from BayesicFitting import Fitter, SplinesModel, LevenbergMarquardtFitter
 except ImportError:
     # these are optional dependencies for BREADS JWST support; OK to ignore them for
     # non-JWST BREADS usage
