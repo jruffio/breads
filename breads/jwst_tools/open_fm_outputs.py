@@ -88,8 +88,13 @@ def combined_outputs(flux_dithers_array, noise_dithers_array, weighted=True):
     """
 
     if weighted:
-        flux_combined = np.nansum(flux_dithers_array / noise_dithers_array ** 2, axis=0) / np.nansum(1 / noise_dithers_array ** 2, axis=0)
-        noise_combined = 1 / np.sqrt(np.nansum(1 / noise_dithers_array ** 2, axis=0))
+        # use numpy masked array here because it works better than nansum in this case
+        # specifically it better handles the 1/noise part, which can yield np.Inf instead of np.Nan for some inputs
+        masked_flux_dithers_array = np.ma.masked_array(flux_dithers_array, mask = np.isnan(flux_dithers_array))
+        masked_noise_dithers_array = np.ma.masked_array(noise_dithers_array, mask = np.isnan(flux_dithers_array))
+
+        flux_combined = np.sum(masked_flux_dithers_array / masked_noise_dithers_array ** 2, axis=0) / np.sum(1 / masked_noise_dithers_array ** 2, axis=0)
+        noise_combined = 1 / np.sqrt(np.sum(1 / masked_noise_dithers_array ** 2, axis=0))
     else:
         flux_combined = np.nanmean(flux_dithers_array, 0)
         noise_combined = np.nanmean(noise_dithers_array, 0)
