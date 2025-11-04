@@ -133,9 +133,9 @@ class JWSTMiri_cal(Instrument):
         fitsfile_crds = os.listdir(path_photom_crds)
         for file_crds in fitsfile_crds:
             if 'photom' in file_crds:
-                sr2d_fits = file_crds
+                area2d_fits = file_crds
 
-        self.area2d = fits.open(os.path.join(path_photom_crds, sr2d_fits))['PIXSIZ'].data
+        self.area2d = fits.open(os.path.join(path_photom_crds, area2d_fits))['PIXSIZ'].data
 
         # high level decision flag
         self.opmode = "IFU"

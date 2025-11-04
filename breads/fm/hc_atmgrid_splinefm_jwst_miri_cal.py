@@ -69,7 +69,7 @@ def hc_atmgrid_splinefm_jwst_miri_cal(nonlin_paras, cubeobj, channel="2", atm_gr
     dec_array = cubeobj.ddec_as_array
     wvs = cubeobj.wavelengths
     sr_to_arcsec2 = 1/(2.*np.pi/(360.*3600.))**2
-    pixarea = cubeobj.sr2d * sr_to_arcsec2
+    pixarea = cubeobj.area2d * sr_to_arcsec2
 
     vsini,rv = other_nonlin_paras[0:2]
     # Defining the position of companion
