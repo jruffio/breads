@@ -100,6 +100,7 @@ class JWSTMiri_cal(Instrument):
             self.utils_dir = os.path.dirname(self.filename)
         else:
             self.utils_dir = utils_dir
+
         self.crds_dir = os.getenv('CUSTOM_CRDS_PATH')
 
         ## Part 1: Loading information from the FITS file and its header metadata
@@ -136,6 +137,10 @@ class JWSTMiri_cal(Instrument):
                 area2d_fits = file_crds
 
         self.area2d = fits.open(os.path.join(path_photom_crds, area2d_fits))['PIXSIZ'].data
+        if channel_reduction == '1' or channel_reduction == '4':
+            self.pixelscale = np.sqrt(np.nanmedian(self.area2d[10:-10,20:500]) * 4.25e10) #steradian to arcsec
+        else:
+            self.pixelscale = np.sqrt(np.nanmedian(self.area2d[10:-10,500:-20]) * 4.25e10)
 
         # high level decision flag
         self.opmode = "IFU"
@@ -573,7 +578,7 @@ class JWSTMiri_cal(Instrument):
 
         return wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
 
-    def compute_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, parallelize=False, wv_sampling=None, fov=6,
+    def compute_webbpsf_model(self, image_mask=None, oversample=10, parallelize=False, wv_sampling=None, fov=6,
                               save_utils=False):
         """ Compute WebbPSF simulated PSFs for the NIRSpec IFU
 
@@ -611,10 +616,8 @@ class JWSTMiri_cal(Instrument):
         miri = webbpsf.MIRI()
         print("Loading telescope state as of observation date")
         miri.load_wss_opd_by_date(self.priheader["DATE-BEG"])  # Load telescope state as of our observation date
-        print("other stuff")
         miri.image_mask = image_mask  # optional: model opaque field stop outside of the IFU aperture
-        miri.pixelscale = pixelscale  # Optional: set this manually to match the drizzled cube sampling, rather than the default
-        print("end other stuff")
+        miri.pixelscale = self.pixelscale  # Optional: set this manually to match the drizzled cube sampling, rather than the default
         if not parallelize:
             outarr_not_created = True
             for wv_id, wv in enumerate(wv_sampling):
@@ -636,13 +639,13 @@ class JWSTMiri_cal(Instrument):
 
         wepsfs *= oversample ** 2
 
-        halffov_x = pixelscale / oversample * wpsfs.shape[2] / 2.0
-        halffov_y = pixelscale / oversample * wpsfs.shape[1] / 2.0
+        halffov_x = self.pixelscale / oversample * wpsfs.shape[2] / 2.0
+        halffov_y = self.pixelscale / oversample * wpsfs.shape[1] / 2.0
         x = np.linspace(-halffov_x, halffov_x, wpsfs.shape[2], endpoint=True)
         y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[1], endpoint=True)
         webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
 
-        wpsfs_header = {"PIXELSCL": pixelscale, "im_mask": image_mask,
+        wpsfs_header = {"PIXELSCL": self.pixelscale, "im_mask": image_mask,
                         "oversamp": oversample, "DATE-BEG": self.priheader["DATE-BEG"]}
         if save_utils:
             if isinstance(save_utils, str):
@@ -661,7 +664,7 @@ class JWSTMiri_cal(Instrument):
             if self.verbose:
                 print(f"  Saved the computed PSFs to {out_filename}")
 
-        self.webbpsf_spaxel_area = (pixelscale) ** 2
+        self.webbpsf_spaxel_area = (self.pixelscale) ** 2
         psf_wv0_id = np.argmin(np.abs(wv_sampling - np.nanmedian(self.wavelengths)))
         self.webbpsf_im = wepsfs[psf_wv0_id]  # /np.nanmax(wepsfs[psf_wv0_id,:,:])
         self.webbpsf_X = webbpsf_X
@@ -670,7 +673,7 @@ class JWSTMiri_cal(Instrument):
         wX, wY = rotate_coordinates(self.webbpsf_X.flatten(), self.webbpsf_Y.flatten(), -self.east2V2_deg, flipx=True)
         self.webbpsf_interp = CloughTocher2DInterpolator((wX, wY), self.webbpsf_im.flatten(), fill_value=0.0)
 
-        return wpsfs, wpsfs_header, wepsfs, wv_sampling, webbpsf_X, webbpsf_Y, oversample, pixelscale
+        return wpsfs, wpsfs_header, wepsfs, wv_sampling, webbpsf_X, webbpsf_Y, oversample, self.pixelscale
 
     def reload_quick_webbpsf_model(self, load_filename=None):
         """ Reload a previously-computed quick WebbPSF model PSF from a FITS file
@@ -712,8 +715,7 @@ class JWSTMiri_cal(Instrument):
 
         return wpsfs, wpsfs_header, wepsfs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
 
-
-    def compute_quick_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, fov=6, save_utils=False):
+    def compute_quick_webbpsf_model(self, image_mask=None, oversample=10, fov=6, save_utils=False):
         """ Compute WebbPSF simulated PSFs at the MEDIAN WAVELENGTH ONLY for the NIRSpec IFU
 
         Parameters
@@ -721,8 +723,6 @@ class JWSTMiri_cal(Instrument):
         image_mask : str or None
             image mask to use in webbpsf calculations. Default is None since we generally do not wish the edges of the
             IFU aperture in the simulated PSF
-        pixelscale : float
-            Pixelscale to use for simulated PSF
         oversample : int
             Oversampling factor
         save_utils : bool
@@ -741,7 +741,7 @@ class JWSTMiri_cal(Instrument):
         miri = webbpsf.MIRI()
         miri.load_wss_opd_by_date(self.priheader["DATE-BEG"])  # Load telescope state as of our observation date
         miri.image_mask = image_mask  # optional: model opaque field stop outside of the IFU aperture
-        miri.pixelscale = pixelscale  # Optional: set this manually to match the drizzled cube sampling, rather than the default
+        miri.pixelscale = self.pixelscale  # Optional: set this manually to match the drizzled cube sampling, rather than the default
 
         paras = miri, self.webbpsf_wv0, oversample, self.opmode
         out = _get_wpsf_task(paras, fov=fov)
@@ -750,13 +750,14 @@ class JWSTMiri_cal(Instrument):
 
         wepsfs *= oversample ** 2
 
-        halffov_x = pixelscale / oversample * wpsfs.shape[1] / 2.0
-        halffov_y = pixelscale / oversample * wpsfs.shape[0] / 2.0
+        halffov_x = self.pixelscale / oversample * wpsfs.shape[1] / 2.0
+        halffov_y = self.pixelscale / oversample * wpsfs.shape[0] / 2.0
+
         x = np.linspace(-halffov_x, halffov_x, wpsfs.shape[1], endpoint=True)
         y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[0], endpoint=True)
         webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
 
-        wpsfs_header = {"PIXELSCL": pixelscale, "im_mask": image_mask,
+        wpsfs_header = {"PIXELSCL": self.pixelscale, "im_mask": image_mask,
                         "oversamp": oversample, "DATE-BEG": self.priheader["DATE-BEG"],
                         "WAVE": self.webbpsf_wv0}
         if save_utils:
@@ -775,14 +776,14 @@ class JWSTMiri_cal(Instrument):
             if self.verbose:
                 print(f"  Saved the computed PSFs to {out_filename}")
 
-        self.webbpsf_spaxel_area = (pixelscale) ** 2
+        self.webbpsf_spaxel_area = (self.pixelscale) ** 2
         self.webbpsf_im = wepsfs
         self.webbpsf_X = webbpsf_X
         self.webbpsf_Y = webbpsf_Y
         wX, wY = rotate_coordinates(self.webbpsf_X.flatten(), self.webbpsf_Y.flatten(), -self.east2V2_deg, flipx=True)
         self.webbpsf_interp = CloughTocher2DInterpolator((wX, wY), self.webbpsf_im.flatten(), fill_value=0.0)
 
-        return wpsfs, wpsfs_header, wepsfs, webbpsf_X, webbpsf_Y, oversample, pixelscale
+        return wpsfs, wpsfs_header, wepsfs, webbpsf_X, webbpsf_Y, oversample, self.pixelscale
 
     def insert_psf_model(self, save_utils=False, centroid=None, OWA=None, spectrum_func=None, out_folder="insert_psf",
                          mode=None):
@@ -2309,8 +2310,6 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
     else:
         init_paras = np.array(init_centroid)
 
-    print(len(glob(out_filename)), out_filename)
-
     # only process frames with wavelength index between debug_init and debug_end
     if debug_init is None:
         debug_init = 0
@@ -2327,19 +2326,19 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
                 continue
             print(wv_id, wv, np.size(wv_sampling))
             paras = linear_interp, psfs[wv_id], psfX[wv_id], psfY[wv_id], rotate_psf - wpsf_angle_offset, flipx, \
-                all_interp_ra[:, wv_id], all_interp_dec[:, wv_id], all_interp_flux[:, wv_id], all_interp_err[:,
-                                                                                              wv_id], all_interp_badpix[
-                                                                                                      :, wv_id], \
+                all_interp_ra[wv_id, :], all_interp_dec[wv_id, :], all_interp_flux[wv_id, :], all_interp_err[
+                                                                                              wv_id, :], all_interp_badpix[wv_id, :], \
                 IWA, OWA, fit_cen, fit_angle, init_paras, ann_width, padding, sector_area
             out = _fit_wpsf_task(paras)
 
             if not bestfit_coords_defined:
                 bestfit_coords = np.zeros(
-                    (out[0].shape[0], np.size(wv_sampling), 5)) + np.nan  # flux_init, flux,ra,dec,angle
+                    (out[0].shape[0], np.size(wv_sampling), 5)) + np.nan  # flux_init, flux, ra, dec, angle
                 bestfit_coords_defined = True
             bestfit_coords[:, wv_id, :] = out[0]
-            all_interp_psfmodel[:, wv_id] = out[1]
-            all_interp_psfsub[:, wv_id] = all_interp_flux[:, wv_id] - out[1]
+            all_interp_psfmodel[wv_id, :] = out[1]
+            all_interp_psfsub[wv_id, :] = all_interp_flux[wv_id, :] - out[1]
+
 
     else:
         print(f"[DEBUG] mpool is not None")
@@ -2366,11 +2365,11 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
             print(out_id, len(output_lists))
             if not bestfit_coords_defined:
                 bestfit_coords = np.zeros(
-                    (out[0].shape[0], np.size(wv_sampling), 5)) + np.nan  # flux_init, flux,ra,dec,angle
+                    (out[0].shape[0], np.size(wv_sampling), 5)) + np.nan  # flux_init, flux, ra, dec, angle
                 bestfit_coords_defined = True
             bestfit_coords[:, debug_init + out_id, :] = out[0]
-            all_interp_psfmodel[:, debug_init + out_id] = out[1]
-            all_interp_psfsub[:, debug_init + out_id] = all_interp_flux[:, debug_init + out_id] - out[1]
+            all_interp_psfmodel[debug_init + out_id, :] = out[1]
+            all_interp_psfsub[debug_init + out_id, :] = all_interp_flux[debug_init + out_id, :] - out[1]
 
     all_interp_psfsub = all_interp_psfsub * all_interp_area2d / psf_spaxel_area
     all_interp_psfmodel = all_interp_psfmodel * all_interp_area2d / psf_spaxel_area
@@ -2392,28 +2391,28 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
             os.makedirs(RDI_model_dir)
 
         for obj_id, filename in enumerate(combdataobj.filelist):
-            nx = combdataobj.data.shape[1]
-            ny = combdataobj.data.shape[0] // len(combdataobj.filelist)
+            ny = combdataobj.data.shape[1] // len(combdataobj.filelist)
+            nx = combdataobj.data.shape[0]
             interpdata_filename = os.path.join(combdataobj.utils_dir,
                                                os.path.basename(filename).replace(".fits", "_regwvs.fits"))
             _interpdata_psfsub_filename = interpdata_filename.replace(".fits", "_psfsub" + RDI_folder_suffix + ".fits")
             hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=all_interp_psfsub[(ny * obj_id):(ny * (obj_id + 1)), :]))
+            hdulist.append(pyfits.PrimaryHDU(data=all_interp_psfsub[:, (ny * obj_id):(ny * (obj_id + 1))]))
             hdulist.append(
-                pyfits.ImageHDU(data=all_interp_psfmodel[(ny * obj_id):(ny * (obj_id + 1)), :], name='INTERP_MOD'))
+                pyfits.ImageHDU(data=all_interp_psfmodel[:, (ny * obj_id):(ny * (obj_id + 1))], name='INTERP_MOD'))
             hdulist.append(
-                pyfits.ImageHDU(data=all_interp_err[(ny * obj_id):(ny * (obj_id + 1)), :], name='INTERP_ERR'))
-            hdulist.append(pyfits.ImageHDU(data=all_interp_ra[(ny * obj_id):(ny * (obj_id + 1)), :], name='INTERP_RA'))
+                pyfits.ImageHDU(data=all_interp_err[:, (ny * obj_id):(ny * (obj_id + 1))], name='INTERP_ERR'))
+            hdulist.append(pyfits.ImageHDU(data=all_interp_ra[:, (ny * obj_id):(ny * (obj_id + 1))], name='INTERP_RA'))
             hdulist.append(
-                pyfits.ImageHDU(data=all_interp_dec[(ny * obj_id):(ny * (obj_id + 1)), :], name='INTERP_DEC'))
+                pyfits.ImageHDU(data=all_interp_dec[:, (ny * obj_id):(ny * (obj_id + 1))], name='INTERP_DEC'))
             hdulist.append(
-                pyfits.ImageHDU(data=all_interp_wvs[(ny * obj_id):(ny * (obj_id + 1)), :], name='INTERP_WAVE'))
+                pyfits.ImageHDU(data=all_interp_wvs[:, (ny * obj_id):(ny * (obj_id + 1))], name='INTERP_WAVE'))
             hdulist.append(
-                pyfits.ImageHDU(data=all_interp_badpix[(ny * obj_id):(ny * (obj_id + 1)), :], name='INTERP_BADPIX'))
+                pyfits.ImageHDU(data=all_interp_badpix[:, (ny * obj_id):(ny * (obj_id + 1))], name='INTERP_BADPIX'))
             hdulist.append(
-                pyfits.ImageHDU(data=all_interp_area2d[(ny * obj_id):(ny * (obj_id + 1)), :], name='INTERP_AREA2D'))
+                pyfits.ImageHDU(data=all_interp_area2d[:, (ny * obj_id):(ny * (obj_id + 1))], name='INTERP_AREA2D'))
             hdulist.writeto(_interpdata_psfsub_filename, overwrite=True)
-            hdulist.close()
+
 
             hdulist_sc = pyfits.open(filename)
             wvs_ori = combdataobj.wvs_ori  # hdulist_sc["WAVELENGTH"].data

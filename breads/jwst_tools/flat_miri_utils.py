@@ -9,6 +9,10 @@ from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 
 import math
+from BayesicFitting import Fitter
+from BayesicFitting import SplinesModel
+from BayesicFitting import LevenbergMarquardtFitter
+
 
 import matplotlib
 from scipy.signal import find_peaks
@@ -151,12 +155,16 @@ def miri_flat_running_mean(flat_rate_path, output_dir, crds_path, band, overwrit
             img_no_nan = replace_nan_with_median(img, DQ)
 
             for j in range(col_min, col_max):
+                if j<500:
+                    sigma = 8
+                else:
+                    sigma = 12
                 try:
                     lamb_micron = np.arange(0, 1024, 1)
                     where_finite_wave = np.where(np.isfinite(lamb_micron))
                     y_data = img_no_nan[:, j]
 
-                    continuum = gaussian_filter(y_data, 8)
+                    continuum = gaussian_filter(y_data, sigma=sigma)
                     flat = y_data/continuum
 
                     clip_data = sigma_clip(flat, sigma=3)
@@ -174,8 +182,6 @@ def miri_flat_running_mean(flat_rate_path, output_dir, crds_path, band, overwrit
                     im_flat[where_finite_wave, j] = np.nan
 
             im_flat_extended = np.copy(im_flat)*mask
-            im_flat_extended[im_flat_extended > 1.3] = 1
-            im_flat_extended[im_flat_extended < 0.5] = 1
             row_id = 500 #middle row of the detector
 
             alpha_peak, beta_center = find_psf_peak_channel_2D(img, row_id, crds_path, band, detector_part='left')
@@ -584,3 +590,91 @@ def beta_masking_inverse_slice(data, channel, band, N_slices=4):
 
 
     return mask
+
+
+def miri_flat_splines(flat_rate_path, output_dir, crds_path, band, overwrite=False):
+    filenames = os.listdir(flat_rate_path)
+
+    hdu = select_band_coor(band, crds_path)
+    alpha = hdu["alpha"].data
+    beta = hdu["beta"].data
+    wave = hdu['LAMBDA'].data
+    hdu.close()
+
+    mask = np.ones_like(alpha)
+    mask[np.isnan(alpha)] = np.nan
+
+    for filename in filenames:
+        if filename.endswith("rate.fits"):
+            print(f"Computing running mean flat for {filename}")
+
+            hdu_f = fits.open(os.path.join(flat_rate_path, filename))
+            img = hdu_f[1].data
+            DQ = hdu_f['DQ'].data
+            err = hdu_f['ERR'].data
+            prim_header = hdu_f[0].header
+            hdu_f.close()
+            if get_band_miri_header(prim_header) != band:
+                print("wrong band", prim_header['BAND'], band)
+                continue
+
+            col_min, col_max = 10, 1020  # 572, 1020
+
+            flat = np.zeros_like(img, dtype=np.float64) + np.nan
+
+            for j in range(col_min, col_max):
+                try:
+                    flux = img[:, j]
+                    flux_0 = np.copy(flux)
+                    y_idx = np.arange(flux.shape[0])
+                    y_idx_0 = np.copy(y_idx)
+                    y_idx = y_idx[np.isfinite(flux)]
+                    flux = flux[np.isfinite(flux)]
+
+                    N_nodes_continuum_array = [200, 70]
+
+                    sigma = [5, 2]
+
+                    for i in range(2):
+                        N_nodes_continuum = N_nodes_continuum_array[i]
+                        continuum = SplinesModel(nrknots=N_nodes_continuum, xrange=y_idx_0)
+                        pars = [np.nanmean(flux)] + [0.] * (N_nodes_continuum + 1)  # pars for continuum splines
+                        continuum.parameters = pars  # insert initial parameters
+
+                        fitter = LevenbergMarquardtFitter(y_idx, continuum)
+                        param = fitter.fit(flux, plot=False)
+
+                        continuum_est = continuum.result(y_idx, param)
+
+                        ratio = flux / continuum_est
+                        clipped = sigma_clip(ratio, sigma=sigma[i])
+
+                        where_good_pix = np.where(~clipped.mask)[0]
+
+                        y_idx, flux = y_idx[where_good_pix], flux[where_good_pix]
+
+                    pars = [np.nanmean(flux)] + [0.] * (N_nodes_continuum + 1)  # pars for continuum splines
+                    continuum.parameters = pars  # insert initial parameters
+
+                    fitter = LevenbergMarquardtFitter(y_idx, continuum)
+                    param = fitter.fit(flux, plot=False)
+                    continuum_est = continuum.result(y_idx_0, param)
+
+                    flat[:, j] = flux_0 / continuum_est
+                except Exception as e:
+                    print(e)
+                    flat[:, j] *= np.nan
+
+            hdu1 = fits.ImageHDU(data=flat, name='FLAT')
+            hdu2 = fits.ImageHDU(data=wave, name='WAVELENGTH')
+            hdu3 = fits.ImageHDU(data=flat, name='FLAT_IMAGE')
+            hdu4 = fits.ImageHDU(data=flat, name='FLAT_EXTENDED')
+
+            # Create PrimaryHDU and HDUlist
+            primary_hdu = fits.PrimaryHDU()
+            primary_hdu.header = prim_header
+
+            hdul = fits.HDUList([primary_hdu, hdu1, hdu2, hdu3, hdu4])
+
+            flat_name = filename.replace("_rate.fits", "_flat_splines.fits")
+            hdul.writeto(os.path.join(output_dir, flat_name), overwrite=overwrite)

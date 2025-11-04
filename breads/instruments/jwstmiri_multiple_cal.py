@@ -24,9 +24,11 @@ class JWSTMiri_multiple_cals(JWSTMiri_cal):
             self.combine_dataobj_list(dataobj_list)
 
     def combine_dataobj_list(self, dataobj_list):
+        print("DEBUG intializing combine_dataobj_list")
         self.ins_type = dataobj_list[0].ins_type
         self.coords = dataobj_list[0].coords
         self.R = dataobj_list[0].R
+        self.pixelscale = dataobj_list[0].pixelscale
         self.data_unit = dataobj_list[0].data_unit
         self.opmode = dataobj_list[0].opmode
         if hasattr(self, "wv_ref"):
