@@ -70,6 +70,22 @@ def read_fm_outputs(hdf5_file):
         return flux_p, flux_error, rchi2, decs, ras, rv
 
 def combined_outputs(flux_dithers_array, noise_dithers_array, weighted=True):
+    """ Combine flux and uncertainties from multiple dithers
+
+    Parameters
+    ----------
+    flux_dithers_array
+        array of the fluxes for each dither
+    noise_dithers_array
+        array of the estimated uncertaintiesfor each dither
+    weighted: bool
+      If true, compute combined cubes weighted by the individual SNR in the input dithers.
+      If false, just take the plain average of the SNRs per each dither
+
+    Returns
+    -------
+    flux_combined, noise_combined
+    """
 
     if weighted:
         flux_combined = np.nansum(flux_dithers_array / noise_dithers_array ** 2, axis=0) / np.nansum(1 / noise_dithers_array ** 2, axis=0)

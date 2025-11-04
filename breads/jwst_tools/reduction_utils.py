@@ -1699,6 +1699,19 @@ def runspec3(filename, outputdir):
 
 
 def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_png=True, full_output=False):
+    """ For MIRI, look at a selection of possible fringe flats and find the best match for a given science file
+
+    Parameters
+    ----------
+    cal_file
+    flat_dir
+    channel
+    flat_extended : bool
+        use the FLAT_EXTENDED extension, instead of regular FLAT?
+    save_png : bool
+        Save a PNG showing the fringes used to determine the best match
+    full_output : bool
+    """
     hdu = fits.open(cal_file)
     data = hdu[1].data
 
@@ -1718,14 +1731,19 @@ def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_p
     brightest_col = colonne_median_max_channel(data, channel=channel)
     print("Brightest column:", brightest_col)
     if save_png:
-        plt.title("Best fringes flat pattern selection")
+        xlim = [450, 500]
+        plt.title(f"Best fringes flat pattern selection\nFor channel {channel} {band}, using brighest column: {brightest_col} ")
         plt.xlabel("Row index")
         plt.ylabel("Fringes transmission")
-        plt.xlim([450, 500])
+        plt.xlim(*xlim)
         plt.ylim([0.5, 1.5])
         file_name = hdr['FILENAME']
-        continuum = gaussian_filter(data[:, brightest_col], sigma=8)
-        fringe_data = data[:, brightest_col] / continuum
+        col_data = data[:, brightest_col]
+        while np.any(np.isnan(col_data)):
+            import astropy
+            col_data = astropy.convolution.interpolate_replace_nans(col_data, kernel=[1,1,1])
+        continuum = gaussian_filter(col_data, sigma=8)
+        fringe_data = col_data / continuum
         plt.plot(fringe_data, label='data')
 
     for filename in filenames:
@@ -1751,18 +1769,21 @@ def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_p
                     if std[-1] < 40:
                         plt.plot(flat[:, brightest_col], label=filename)
 
-    if save_png:
-        plt.legend()
-        plt.tight_layout()
-        out_name = f"../fig_fringes_{file_name}.png"
-        plt.savefig(out_name)
-        print(f"==> Plot saved to {out_name}")
-        plt.close()
-
     idx = np.nanargmin(std)
     std_min = np.nanmin(std)
     flat_name = file[idx]
     print("Flat selected:", flat_name)
+
+    if save_png:
+        plt.text(0.05, 0.05, "Flat selected: "+flat_name, transform=plt.gca().transAxes)
+        plt.legend()
+        plt.tight_layout()
+        out_name = f"./fig_fringes_{os.path.splitext(os.path.basename(file_name))[0]}.png"
+
+        plt.savefig(out_name)
+        print(f"==> Plot saved to {out_name}")
+        plt.close()
+
     hdu_best_flat = fits.open(os.path.join(flat_dir, flat_name))
     if flat_extended:
         best_flat = hdu_best_flat['FLAT_EXTENDED'].data

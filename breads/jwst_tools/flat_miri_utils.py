@@ -80,7 +80,7 @@ def find_psf_peak_channel_2D(data, row_id, crds_path, band, detector_part='left'
     else:
         raise ValueError(f"Unknown value {detector_part} for detector_part must be either 'left' or 'right'")
 
-    print(f"Brightest column identified: {brightest_col}")
+    print(f"Brightest column in {band} identified: {brightest_col}")
 
     model = VoigtModel()
 
