@@ -41,29 +41,29 @@ def get_band_miri_header(prim_hdr):
 
 def select_band_coor(band, crds_path):
     if band == '12A':
-        hdu = fits.open(os.path.join(crds_path, "references/jwst/miri/12A/jwst_mirifushort_short_coor.fits"))
+        hdu = fits.open(os.path.join(crds_path, "jwst_mirifushort_short_coor.fits"))
     elif band == '12B':
-        hdu = fits.open(os.path.join(crds_path, "references/jwst/miri/12B/jwst_mirifushort_medium_coor.fits"))
+        hdu = fits.open(os.path.join(crds_path, "jwst_mirifushort_medium_coor.fits"))
     elif band == '12C':
-        hdu = fits.open(os.path.join(crds_path, "references/jwst/miri/12C/jwst_mirifushort_long_coor.fits"))
+        hdu = fits.open(os.path.join(crds_path, "jwst_mirifushort_long_coor.fits"))
     elif band == '34A':
-        hdu = fits.open(os.path.join(crds_path, "references/jwst/miri/34A/jwst_mirifulong_short_coor.fits"))
+        hdu = fits.open(os.path.join(crds_path, "jwst_mirifulong_short_coor.fits"))
     elif band == '34B':
-        hdu = fits.open(os.path.join(crds_path, "references/jwst/miri/34B/jwst_mirifulong_medium_coor.fits"))
+        hdu = fits.open(os.path.join(crds_path, "jwst_mirifulong_medium_coor.fits"))
     elif band == '34C':
-        hdu = fits.open(os.path.join(crds_path, "references/jwst/miri/34C/jwst_mirifulong_long_coor.fits"))
+        hdu = fits.open(os.path.join(crds_path, "jwst_mirifulong_long_coor.fits"))
     else:
         raise ValueError(f'band must be 12A, 12B, 12C, 34A, 34B, 34C, not {band}')
     return hdu
 
-def colonne_median_max(mat):
+def column_median_max(mat):
     medianes = np.nanmedian(mat, axis=0)
     col_index = np.nanargmax(medianes)
     return col_index
 
 def find_brightest_cols_two_channels(data):
-    col_id_1 = colonne_median_max(data[:, :500])
-    col_id_2 = colonne_median_max(data[:, 500:]) + 500
+    col_id_1 = column_median_max(data[:, :500])
+    col_id_2 = column_median_max(data[:, 500:]) + 500
     return col_id_1, col_id_2
 
 def find_psf_peak_channel_2D(data, row_id, crds_path, band, detector_part='left'):
@@ -74,9 +74,9 @@ def find_psf_peak_channel_2D(data, row_id, crds_path, band, detector_part='left'
     beta = hdu["beta"].data
 
     if detector_part == 'left':
-        brightest_col = colonne_median_max(data[:, :500])
+        brightest_col = column_median_max(data[:, :500])
     elif detector_part == 'right':
-        brightest_col = colonne_median_max(data[:, 500:]) + 500
+        brightest_col = column_median_max(data[:, 500:]) + 500
     else:
         raise ValueError(f"Unknown value {detector_part} for detector_part must be either 'left' or 'right'")
 
@@ -114,9 +114,9 @@ def replace_nan_with_median(image, dq, size=3):
     image[mask] = filtered[mask]
     return image
 
-def miri_flat_running_mean(flat_rate_path, output_dir, crds_path, band, overwrite=False):
+def miri_flat_running_mean(data_rate_path, output_dir, crds_path, band, overwrite=False):
 
-    filenames = os.listdir(flat_rate_path)
+    filenames = os.listdir(data_rate_path)
 
     hdu = select_band_coor(band, crds_path)
     alpha = hdu["alpha"].data
@@ -134,7 +134,7 @@ def miri_flat_running_mean(flat_rate_path, output_dir, crds_path, band, overwrit
         if filename.endswith("rate.fits"):
             print(f"Computing running mean flat for {filename}")
 
-            hdu_f = fits.open(os.path.join(flat_rate_path, filename))
+            hdu_f = fits.open(os.path.join(data_rate_path, filename))
             img = hdu_f[1].data
             DQ = hdu_f['DQ'].data
             prim_header = hdu_f[0].header
@@ -221,15 +221,22 @@ def miri_flat_running_mean(flat_rate_path, output_dir, crds_path, band, overwrit
 
 def run_miri_flat_running_mean(flat_path, targetname, output_dir=None, list_bands=None, overwrite=True):
     if output_dir is None:
-        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data/miri_flat/")
+        output_dir = os.getenv("FLAT_PATH")
+        if output_dir is None:
+            raise ValueError("No FLAT_PATH specified to save the fringe flat")
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
     for band in list_bands:
         print(f"Computing flat for band {band}")
-        flat_path_band = os.path.join(flat_path, targetname, band, 'stage1')
+        data_rate_path_band = os.path.join(flat_path, targetname, band, 'stage1')
         output_dir_band = os.path.join(output_dir, band)
+        print("[DEBUG] Writing flat image to {}".format(output_dir_band))
+        if not os.path.exists(output_dir_band):
+            os.makedirs(output_dir_band)
+
         crds_path = os.getenv('CUSTOM_CRDS_PATH')
-        miri_flat_running_mean(flat_path_band, output_dir_band, crds_path, band, overwrite=overwrite)
+        miri_flat_running_mean(data_rate_path_band, output_dir_band, crds_path, band, overwrite=overwrite)
 
 
 def plot_flat(uncal_dir, target_name, list_bands=None):
@@ -246,7 +253,7 @@ def plot_flat(uncal_dir, target_name, list_bands=None):
         for file_stage1, file_stage1_flat in zip(files_stage1, files_stage1_flat):
             data_stage1 = fits.getdata(file_stage1)
             data_stage1_flat = fits.getdata(file_stage1_flat)
-            idx_max = colonne_median_max(data_stage1)
+            idx_max = column_median_max(data_stage1)
 
             plt.plot(data_stage1[:, idx_max], label='stage1')
             plt.plot(data_stage1_flat[:, idx_max], label='stage1_flat')
@@ -269,7 +276,7 @@ def plot_starsub_fit(uncal_dir, utils_dir, target_name, list_bands=None):
             data_starmodel = fits.open(file_starsub)['STARMODEL'].data
             bp = fits.open(file_starsub)['BADPIX'].data
             res = fits.getdata(file_starsub)
-            idx_max = colonne_median_max(data_original)
+            idx_max = column_median_max(data_original)
 
             for i in range(-2, 3, 1):
                 plt.plot((data_original+bp)[:, idx_max+i], label='Star')
@@ -588,8 +595,8 @@ def beta_masking_inverse_slice(data, channel, band, N_slices=4):
     return mask
 
 
-def miri_flat_splines(flat_rate_path, output_dir, crds_path, band, overwrite=False):
-    filenames = os.listdir(flat_rate_path)
+def miri_flat_splines(data_rate_path, output_dir, crds_path, band, overwrite=False):
+    filenames = os.listdir(data_rate_path)
 
     hdu = select_band_coor(band, crds_path)
     alpha = hdu["alpha"].data
@@ -604,7 +611,7 @@ def miri_flat_splines(flat_rate_path, output_dir, crds_path, band, overwrite=Fal
         if filename.endswith("rate.fits"):
             print(f"Computing running mean flat for {filename}")
 
-            hdu_f = fits.open(os.path.join(flat_rate_path, filename))
+            hdu_f = fits.open(os.path.join(data_rate_path, filename))
             img = hdu_f[1].data
             DQ = hdu_f['DQ'].data
             err = hdu_f['ERR'].data

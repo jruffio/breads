@@ -1198,7 +1198,7 @@ def save_combined_regwvs(regwvs_combdataobj, out_filename):
     hdulist.close()
 
 
-def get_2D_point_cloud_interpolator(regwvs_combdataobj, wv0):
+def get_2D_point_cloud_interpolator(regwvs_combdataobj, wv0, miri=False):
     """
 
     Parameters
@@ -1224,6 +1224,12 @@ def get_2D_point_cloud_interpolator(regwvs_combdataobj, wv0):
         bad_pixels = regwvs_combdataobj.bad_pixels
         wv_sampling = regwvs_combdataobj.wv_sampling
 
+    if miri:
+        data = data.transpose()
+        dra_as_array = dra_as_array.transpose()
+        ddec_as_array = ddec_as_array.transpose()
+        bad_pixels = bad_pixels.transpose()
+
     wv0_index = np.argmin(np.abs(wv_sampling - wv0))
 
     where_good = np.where(np.isfinite(bad_pixels[:, wv0_index]))
@@ -1237,6 +1243,44 @@ def get_2D_point_cloud_interpolator(regwvs_combdataobj, wv0):
     pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, z)
 
     return pointcloud_interp
+
+def get_2D_point_cloud_per_dither(regwvs_combdataobj, wv0, miri=False):
+    if isinstance(regwvs_combdataobj, str):
+        with fits.open(regwvs_combdataobj) as hdulist:
+            data = hdulist["DATA"].data
+            dra_as_array = hdulist["RA"].data
+            ddec_as_array = hdulist["DEC"].data
+            bad_pixels = hdulist["BADPIX"].data
+            wv_sampling = hdulist["WV_SAMPLING"].data
+    else:
+        data = regwvs_combdataobj.data
+        dra_as_array = regwvs_combdataobj.dra_as_array
+        ddec_as_array = regwvs_combdataobj.ddec_as_array
+        bad_pixels = regwvs_combdataobj.bad_pixels
+        wv_sampling = regwvs_combdataobj.wv_sampling
+
+    if miri:
+        data = data.transpose()
+        dra_as_array = dra_as_array.transpose()
+        ddec_as_array = ddec_as_array.transpose()
+        bad_pixels = bad_pixels.transpose()
+        detector_row_size = 1032
+
+    wv0_index = np.argmin(np.abs(wv_sampling - wv0))
+
+    print(data.shape)
+    n_dithers = data.shape[0] // detector_row_size
+
+    print("n_dithers:", n_dithers)
+    x, y, z = [], [], []
+    for i in range(n_dithers):
+        where_good = np.where(np.isfinite(bad_pixels[i*detector_row_size:(i+1)*detector_row_size, wv0_index]))
+        x.append(dra_as_array[i*detector_row_size+where_good[0], wv0_index])
+        y.append(ddec_as_array[i*detector_row_size+where_good[0], wv0_index])
+        z.append(data[i*detector_row_size+where_good[0], wv0_index])
+
+    return x, y, z
+
 
 
 ############################################################################
@@ -1476,10 +1520,13 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
             band = hdr['BAND']
 
             if flat_path is None:
-                flat_path_rate = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/miri_flat')
-                print("checking", flat_path, os.path.dirname(__file__))
+                flat_path_rate = os.getenv("FLAT_PATH")
+                if output_dir is None:
+                    raise ValueError("No FLAT_PATH specified to apply the fringe flat")
             else:
                 flat_path_rate = flat_path
+
+            print("Searching fringes flat files in:", flat_path_rate)
 
             if detector == 'MIRIFUSHORT':
                 if band == 'SHORT':
@@ -1490,7 +1537,7 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
                     flat_path_rate = os.path.join(flat_path_rate, '12C')
                 else:
                     raise ValueError(f'Unsupported band for file: {rate_file} must be either SHORT, MEDIUM or LONG')
-                channel = 'CH1'
+                channel = 'CH2'
 
             else:
                 if band == 'SHORT':
@@ -1502,9 +1549,6 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
                 else:
                     raise ValueError(f'Unsupported band for file: {rate_file} must be either SHORT, MEDIUM or LONG')
                 channel = 'CH3'
-
-            if os.path.exists(flat_path_rate) == 0:
-                raise ValueError(f"'flat_path' {flat_path_rate} does not exist")
 
             best_flat, flat_name, std_min = best_flat_selection(rate_file, flat_path_rate, channel,
                                                                 flat_extended=flat_extended)
@@ -1728,8 +1772,8 @@ def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_p
     std = []
     file = []
 
-    brightest_col = colonne_median_max_channel(data, channel=channel)
-    print("Brightest column:", brightest_col)
+    brightest_col = column_median_max_channel(data, channel=channel)
+    print(f"Brightest column for Channel {channel}: {brightest_col}")
     if save_png:
         xlim = [450, 500]
         plt.title(f"Best fringes flat pattern selection\nFor channel {channel} {band}, using brighest column: {brightest_col} ")
@@ -1794,17 +1838,17 @@ def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_p
     else:
         return best_flat, flat_name, std_min
 
-def colonne_median_max(mat):
-    medianes = np.nanmedian(mat, axis=0)  # Calculer la médiane de chaque colonne
-    col_index = np.nanargmax(medianes)  # Trouver l'indice de la médiane max
+def column_median_max(mat):
+    medianes = np.nanmedian(mat, axis=0)
+    col_index = np.nanargmax(medianes)
     return col_index
 
 
-def colonne_median_max_channel(data, channel='CH1'):
-    if channel == 'CH1' or channel == 'CH3':
-        brightest_col = colonne_median_max(data[:, :500])
-    elif channel == 'CH2' or channel == 'CH4':
-        brightest_col = colonne_median_max(data[:, 500:]) + 500
+def column_median_max_channel(data, channel='CH1'):
+    if channel == 'CH1' or channel == 'CH4':
+        brightest_col = column_median_max(data[:, :500])
+    elif channel == 'CH2' or channel == 'CH3':
+        brightest_col = column_median_max(data[:, 500:]) + 500
     else:
         raise ValueError('Channel must be CH1, CH2, CH3 or CH4')
 
@@ -1992,7 +2036,7 @@ def run_coordinate_recenter_miri(cal_files, utils_dir, crds_dir, init_centroid=(
 
     return regwvs_combdataobj.wv_sampling, poly_p_RA, poly_p_dec
 
-def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, wave_2d, coords_offset=(0, 0),
+def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coords_offset=(0, 0),
                                              wv_nodes=None, target_name=None, fit_centroid=True,
                                              mask_charge_transfer_radius=None, mppool=None,
                                              ra_dec_point_sources=None, overwrite=False):
@@ -2004,10 +2048,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, wave
 
     hdulist_sc = fits.open(cal_files[0])
     detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
-    if wv_nodes is None:
-        wv_nodes = np.linspace(np.nanmin(wave_2d),
-                               np.nanmax(wave_2d),
-                               40, endpoint=True)
+
     hdulist_sc.close()
 
     splitbasename = os.path.basename(cal_files[0]).split("_")
@@ -2038,7 +2079,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, wave
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
                                                                     "threshold_badpix": 100,
-                                                                    "mppool": mppool, "star_hf_subtraction":True}, True, True])
+                                                                    "mppool": mppool, "star_hf_subtraction":False}, True, True])
         preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d",
                                                               "threshold_badpix": 10,
                                                               "mppool": mppool}, True, True])
@@ -2063,18 +2104,17 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, wave
                                                                                interpolation="linear")
 
     combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+    combined_star_func = interp1d(np.arange(0, 30, 100), np.ones_like(np.arange(0, 30, 100)), kind="linear",
+                                  bounds_error=False, fill_value=1)
+
     return combined_star_func
 
-def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, wave_2d, wv_nodes=None, target_name=None, fit_centroid=True,
+def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, wv_nodes=None, target_name=None, fit_centroid=True,
                                        combined_star_func=None, coords_offset=(0, 0), mppool=None):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
 
     hdulist_sc = fits.open(cal_files[0])
     detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
-    if wv_nodes is None:
-        wv_nodes = np.linspace(np.nanmin(wave_2d),
-                               np.nanmax(wave_2d),
-                               40, endpoint=True)
 
     hdulist_sc.close()
 
@@ -2090,12 +2130,13 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, 
         if combined_star_func is None:
             preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
                                                                         "threshold_badpix": 100,
-                                                                        "mppool": mppool}, True, True])
+                                                                        "mppool": mppool, "star_hf_subtraction":True}, True, True])
 
         dataobj = JWSTMiri_cal(filename, channel_reduction=channel, utils_dir=utils_dir,
                                save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
         if combined_star_func is not None:
             dataobj.reload_starspectrum_contnorm()
+            combined_star_func = interp1d(np.arange(0,30,100), np.ones_like(np.arange(0,30,100)), kind="linear", bounds_error=False, fill_value=1)
             dataobj.star_func = combined_star_func
 
         outputs = dataobj.reload_starsubtraction()
@@ -2109,8 +2150,7 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, 
 
     return dataobj_list
 
-def get_combined_regwvs_miri(dataobj_list, channel, wv_sampling=None, mask_charge_transfer_radius=None,
-                             use_starsub1d=False, reload=False):
+def get_combined_regwvs_miri(dataobj_list, channel, wv_sampling=None, use_starsub1d=False, reload=False):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
     from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
 
@@ -2143,7 +2183,6 @@ def get_combined_regwvs_miri(dataobj_list, channel, wv_sampling=None, mask_charg
         regwvs_dataobj_list.append(regwvs_dataobj)
 
     regwvs_combdataobj = JWSTMiri_multiple_cals(regwvs_dataobj_list)
-    if mask_charge_transfer_radius is not None:
-        regwvs_combdataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
+
 
     return regwvs_combdataobj

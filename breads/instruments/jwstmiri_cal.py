@@ -101,7 +101,7 @@ class JWSTMiri_cal(Instrument):
         else:
             self.utils_dir = utils_dir
 
-        self.crds_dir = os.getenv('CUSTOM_CRDS_PATH')
+        self.crds_dir = os.getenv('CRDS_PATH')
 
         ## Part 1: Loading information from the FITS file and its header metadata
         hdulist_sc = pyfits.open(self.filename)
@@ -129,12 +129,17 @@ class JWSTMiri_cal(Instrument):
             self.band_aka += 'C'
             self.band_reduction_aka += 'C'
 
-        path_photom_crds = os.path.join(self.crds_dir, 'references/jwst/miri/', self.band_aka)
+        path_photom_crds = os.path.join(self.crds_dir, 'references/jwst/miri/')
 
         fitsfile_crds = os.listdir(path_photom_crds)
         for file_crds in fitsfile_crds:
             if 'photom' in file_crds:
-                area2d_fits = file_crds
+                hdu_photom = fits.open(os.path.join(path_photom_crds, file_crds))
+                hdr_photom = hdu_photom[0].header
+                if hdr_photom['CHANNEL'] == self.channel and hdr_photom['BAND'] == self.band:
+                    area2d_fits = file_crds
+                    print(f"Photom file selected: {file_crds}")
+                hdu_photom.close()
 
         self.area2d = fits.open(os.path.join(path_photom_crds, area2d_fits))['PIXSIZ'].data
         if channel_reduction == '1' or channel_reduction == '4':
