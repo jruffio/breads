@@ -9,7 +9,7 @@ from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 
 import math
-
+import jwst
 import matplotlib
 from scipy.signal import find_peaks
 
@@ -39,23 +39,6 @@ def get_band_miri_header(prim_hdr):
     band = channel + band
     return band
 
-def select_band_coor(band, crds_path):
-    if band == '12A':
-        hdu = fits.open(os.path.join(crds_path, "jwst_mirifushort_short_coor.fits"))
-    elif band == '12B':
-        hdu = fits.open(os.path.join(crds_path, "jwst_mirifushort_medium_coor.fits"))
-    elif band == '12C':
-        hdu = fits.open(os.path.join(crds_path, "jwst_mirifushort_long_coor.fits"))
-    elif band == '34A':
-        hdu = fits.open(os.path.join(crds_path, "jwst_mirifulong_short_coor.fits"))
-    elif band == '34B':
-        hdu = fits.open(os.path.join(crds_path, "jwst_mirifulong_medium_coor.fits"))
-    elif band == '34C':
-        hdu = fits.open(os.path.join(crds_path, "jwst_mirifulong_long_coor.fits"))
-    else:
-        raise ValueError(f'band must be 12A, 12B, 12C, 34A, 34B, 34C, not {band}')
-    return hdu
-
 def column_median_max(mat):
     medianes = np.nanmedian(mat, axis=0)
     col_index = np.nanargmax(medianes)
@@ -66,12 +49,8 @@ def find_brightest_cols_two_channels(data):
     col_id_2 = column_median_max(data[:, 500:]) + 500
     return col_id_1, col_id_2
 
-def find_psf_peak_channel_2D(data, row_id, crds_path, band, detector_part='left'):
+def find_psf_peak_channel_2D(data, row_id, alpha, beta, band, detector_part='left'):
     from lmfit.models import VoigtModel
-
-    hdu = select_band_coor(band, crds_path)
-    alpha = hdu["alpha"].data
-    beta = hdu["beta"].data
 
     if detector_part == 'left':
         brightest_col = column_median_max(data[:, :500])
@@ -114,21 +93,9 @@ def replace_nan_with_median(image, dq, size=3):
     image[mask] = filtered[mask]
     return image
 
-def miri_flat_running_mean(data_rate_path, output_dir, crds_path, band, overwrite=False):
+def miri_flat_running_mean(data_rate_path, output_dir, band, overwrite=False):
 
     filenames = os.listdir(data_rate_path)
-
-    hdu = select_band_coor(band, crds_path)
-    alpha = hdu["alpha"].data
-    beta = hdu["beta"].data
-    wave = hdu['LAMBDA'].data
-    hdu.close()
-
-    dbeta_left = np.abs(np.nanmin(np.diff(np.unique(beta[500, :500]))))
-    dbeta_right = np.abs(np.nanmin(np.diff(np.unique(beta[500, 500:]))))
-
-    mask = np.ones_like(alpha)
-    mask[np.isnan(alpha)] = np.nan
 
     for filename in filenames:
         if filename.endswith("rate.fits"):
@@ -177,41 +144,22 @@ def miri_flat_running_mean(data_rate_path, output_dir, crds_path, band, overwrit
                     print(e)
                     im_flat[where_finite_wave, j] = np.nan
 
-            im_flat_extended = np.copy(im_flat)*mask
-            row_id = 500 #middle row of the detector
-
-            alpha_peak, beta_center = find_psf_peak_channel_2D(img, row_id, crds_path, band, detector_part='left')
-            beta_dist = beta[:, :500] - beta_center
-            alpha_dist = alpha[:, :500] - alpha_peak
-            where_too_far = np.where(np.abs(beta_dist)>2.2*dbeta_left)
-            im_flat[where_too_far] = np.nan
-
-
-            alpha_peak, beta_center = find_psf_peak_channel_2D(img, row_id, crds_path, band, detector_part='right')
-            beta_dist = beta[:, 500:] - beta_center
-            alpha_dist = alpha[:, 500:] - alpha_peak
-            where_too_far = np.where(np.abs(beta_dist) > 2.2 * dbeta_right)
-            where_too_far_off = where_too_far[1]+500
-            im_flat[where_too_far[0], where_too_far_off] = np.nan
-
+            im_flat_extended = np.copy(im_flat)
 
             im_flat[im_flat>1.3] = 1 #Hard thresholding
             im_flat[im_flat<0.5] = 1
 
             im_filt = img / im_flat
 
-            im_flat *= mask
-
             hdu1 = fits.ImageHDU(data=im_flat, name='FLAT')
-            hdu2 = fits.ImageHDU(data=wave, name='WAVELENGTH')
-            hdu3 = fits.ImageHDU(data=im_filt, name='FLAT_IMAGE')
-            hdu4 = fits.ImageHDU(data=im_flat_extended, name='FLAT_EXTENDED')
+            hdu2 = fits.ImageHDU(data=im_filt, name='FLAT_IMAGE')
+            hdu3 = fits.ImageHDU(data=im_flat_extended, name='FLAT_EXTENDED')
 
             # Create PrimaryHDU and HDUlist
             primary_hdu = fits.PrimaryHDU()
             primary_hdu.header = prim_header
 
-            hdul = fits.HDUList([primary_hdu, hdu1, hdu2, hdu3, hdu4])
+            hdul = fits.HDUList([primary_hdu, hdu1, hdu2, hdu3])
 
             flat_name = filename.replace("_rate.fits", "_flat.fits")
             output_name = os.path.join(output_dir, flat_name)
@@ -235,8 +183,7 @@ def run_miri_flat_running_mean(flat_path, targetname, output_dir=None, list_band
         if not os.path.exists(output_dir_band):
             os.makedirs(output_dir_band)
 
-        crds_path = os.getenv('CUSTOM_CRDS_PATH')
-        miri_flat_running_mean(data_rate_path_band, output_dir_band, crds_path, band, overwrite=overwrite)
+        miri_flat_running_mean(data_rate_path_band, output_dir_band, band, overwrite=overwrite)
 
 
 def plot_flat(uncal_dir, target_name, list_bands=None):
@@ -290,204 +237,7 @@ def plot_starsub_fit(uncal_dir, utils_dir, target_name, list_bands=None):
 
     return 1
 
-def oddEvenCorrectionImage(hdu, crds_path, plot=False):
-    data = hdu["SCI"].data
-    nbLine0, nbColumn0 = data.shape
-    prim_hdr = hdu[0].header
-
-    channel_band =  get_band_miri_header(prim_hdr)
-    hdu_coor = select_band_coor(channel_band, crds_path)
-
-    beta = hdu_coor['beta'].data
-
-    channels =['left', 'right']
-    flux_corr_2D = np.zeros((nbLine0, nbColumn0))
-    for channel in channels:
-        print(channel)
-        if channel == 'left':
-            col_min = 5
-            col_max = 500
-        else:
-            col_min = 500
-            col_max = 1024
-
-        beta_crop = beta[:, col_min:col_max]
-        data_crop = data[:, col_min:col_max]
-        beta_unique = np.unique(beta_crop[500, :]) #taking the middle-ish row of the detector
-        nbLine, nbColumn = data_crop.shape
-        y = np.arange(0, nbLine)
-        x = np.arange(0, nbColumn)
-        xx, yy = np.meshgrid(x, y)
-
-        if channel == 'right':
-            print(beta_unique)
-
-        for i, bet in enumerate(beta_unique):
-            slice_data = data_crop[beta_crop==bet]
-            if channel == 'right':
-                print(i, len(beta_unique), slice_data.shape)
-            if len(slice_data)>0:
-                slice_yy = yy[beta_crop==bet]
-                slice_xx = xx[beta_crop==bet]
-                flux_corr = oddEvenCorrection_prop(slice_data, slice_xx, slice_yy, plot=plot)
-                for f, x, y in zip(flux_corr, slice_xx, slice_yy):
-                    flux_corr_2D[y, x + col_min] = f
-
-    return flux_corr_2D
-
-
-def fitSplines(xs, y, weight=None, minknots=0, maxknots=10,
-               min=None, max=None):
-    """
-    Try fit Splines with knots from 2..maxknots+2
-
-    Parameters
-    ----------
-    xs : array
-        xdata input
-    y : array
-        ydata to be fitted
-    weights : array
-        of the fit
-    minknots : int
-
-    """
-    dmx = np.max(xs) if max is None else max
-    dmn = np.min(xs) if min is None else min
-    best = -math.inf
-    for k in range(minknots, maxknots + 1):
-        poly = SplinesModel(nrknots=k + 2, min=dmn, max=dmx)
-
-        isfin = np.isfinite(y)
-        xsfin = xs[isfin]
-        yfin = y[isfin]
-        weightfin = weight[isfin]
-
-        ftr = Fitter(xsfin, poly)
-        param = ftr.fit(yfin, weights=weightfin)
-        yfit = poly.result(xsfin)
-
-        try:
-            ev = ftr.getEvidence(limits=[-100, 100], noiseLimits=[1e-6, 1e-3])
-        except:
-            ev = -math.inf
-        if ev > best:
-            best = ev
-            kb = k
-            pb = param
-    # Use best model
-    poly = SplinesModel(nrknots=kb + 2, min=dmn, max=dmx)
-    poly.parameters = pb
-
-    return poly
-
-
-
-def oddEvenCorrection_prop(flux, xpix, ypix, plot=False):
-    """
-    Correct flux differences between odd and even lines
-
-    Parameters
-    ----------
-    flux : array of float
-        array with fluxes
-    xpix : array of int
-        indices of pixels in x direction
-    ypix : array of int
-        indices of pixels in y direction
-    plot : boolean
-        produce plot in figure "Odd-Even Correction"
-
-    Returns
-    -------
-    array of flux : corrected fluxes
-
-    """
-
-    # get a unique list of the x values
-    xlines = list(set(xpix))
-    print(xpix)
-    print(ypix)
-    if plot:
-        plt.figure("Odd-Even Correction")
-
-    triangle = np.asarray([1, 2, 1], dtype=float) / 4.0
-
-    cor = np.asarray([], dtype=float)
-    ycr = np.asarray([], dtype=float)
-
-    for k in xlines:
-        q = np.where(xpix == k)
-        print(len(q[0]))
-        if len(q[0]) < 10: continue
-        fq = flux[q]
-        yq = ypix[q]
-        cc = np.convolve(fq, triangle, "full")[1:-1]
-        fc = fq/cc
-
-        dfq = (fc[:-1] - fc[1:]) / 2
-        dfq = np.where(yq[1:] % 2 == 0, -dfq, dfq)
-
-        clip = sigma_clip(dfq, sigma=3, maxiters=5)
-        where_valid = np.where(~clip.mask)
-        dfq = dfq[where_valid]
-        plt.plot(dfq)
-        plt.show()
-
-        yc = 0.5 * (yq[1:] + yq[:-1])
-        yc = yc[where_valid]
-        cor = np.append(cor, dfq)
-        ycr = np.append(ycr, yc)
-
-
-    dmx = np.max(ycr)
-    dmn = np.min(ycr)
-
-    median = np.nanmedian(cor)
-    quart = np.nanmedian(abs(cor - median))
-
-    wgt = np.where(abs(cor - median) > 8 * quart, 0.0, 1.0)
-
-    poly = fitSplines(ycr, cor, weight=wgt, minknots=5, maxknots=5,
-                      min=0, max=1024)
-
-    yfit = poly.result(ycr)
-
-    if plot:
-        plt.plot(ycr, yfit, 'r.')
-        plt.plot(ycr, cor, 'g.')
-        plt.plot([dmn, dmx], [median, median], 'b-')
-        plt.ylim(median - 4 * quart, median + 4 * quart)
-        plt.xlim(0, 1030)
-        plt.xlabel("y-pixel")
-        plt.ylabel("odd-even correction")
-        plt.title("Odd/even Correction")
-        plt.show()
-
-        #plt.plot(flux)
-        flux_old = np.copy(flux)
-
-    for k in xlines:
-        q = np.where(xpix == k)
-        yq = ypix[q]
-        fc = poly.result(yq)
-        b = np.where(yq % 2 == 0)
-        fc[b] *= -1
-        fc += 1
-        flux[q] = flux[q]*fc
-
-        if plot:
-            plt.title("flat odd even coef")
-            plt.plot(yq, flux[q]/flux_old[q])
-            print(np.nanpercentile(flux[q]/flux_old[q], 75))
-            plt.show()
-
-    return flux
-
-def beta_slice_ID(channel, band):
-    crds_path = os.getenv('CUSTOM_CRDS_PATH')
-    hdu = select_band_coor(band, crds_path)
-    beta = hdu["beta"].data
+def beta_slice_ID(beta, channel):
     beta_c = np.copy(beta)
 
     if channel == 1 or channel == 4:
@@ -513,8 +263,8 @@ def beta_slice_ID(channel, band):
 
     return beta_slice_num
 
-def beta_masking_slice(channel, band, liste_ID):
-    beta_slice_num = beta_slice_ID(channel, band)
+def beta_masking_slice(beta, channel, liste_ID):
+    beta_slice_num = beta_slice_ID(beta, channel)
     mask = np.ones_like(beta_slice_num)
 
     if len(liste_ID) > 0:
@@ -522,8 +272,8 @@ def beta_masking_slice(channel, band, liste_ID):
             mask[beta_slice_num == ID] = 0
     return mask
 
-def beta_masking_slice_col(channel, band, liste_col_ID):
-    beta_slice_num = beta_slice_ID(channel, band)
+def beta_masking_slice_col(beta, channel, liste_col_ID):
+    beta_slice_num = beta_slice_ID(beta, channel)
     mask = np.ones_like(beta_slice_num)
 
     if len(liste_col_ID) > 0:
@@ -566,8 +316,8 @@ def find_brightest_slices(data, channel, plot=False):
 
     return topN_indices
 
-def beta_masking_inverse_slice(data, channel, band, N_slices=4):
-    beta_slice_num = beta_slice_ID(channel, band)
+def beta_masking_inverse_slice(data, beta, channel, N_slices=4):
+    beta_slice_num = beta_slice_ID(beta, channel)
     list_col_ID = find_brightest_slices(data, channel)
 
     mask = np.zeros_like(beta_slice_num)
@@ -591,21 +341,11 @@ def beta_masking_inverse_slice(data, channel, band, N_slices=4):
             print(f"Slice ID: {ID}")
             mask[beta_slice_num == ID] = 1
 
-
     return mask
 
 
-def miri_flat_splines(data_rate_path, output_dir, crds_path, band, overwrite=False):
+def miri_flat_splines(data_rate_path, output_dir, band, overwrite=False):
     filenames = os.listdir(data_rate_path)
-
-    hdu = select_band_coor(band, crds_path)
-    alpha = hdu["alpha"].data
-    beta = hdu["beta"].data
-    wave = hdu['LAMBDA'].data
-    hdu.close()
-
-    mask = np.ones_like(alpha)
-    mask[np.isnan(alpha)] = np.nan
 
     for filename in filenames:
         if filename.endswith("rate.fits"):
@@ -669,15 +409,14 @@ def miri_flat_splines(data_rate_path, output_dir, crds_path, band, overwrite=Fal
                     flat[:, j] *= np.nan
 
             hdu1 = fits.ImageHDU(data=flat, name='FLAT')
-            hdu2 = fits.ImageHDU(data=wave, name='WAVELENGTH')
-            hdu3 = fits.ImageHDU(data=flat, name='FLAT_IMAGE')
-            hdu4 = fits.ImageHDU(data=flat, name='FLAT_EXTENDED')
+            hdu2 = fits.ImageHDU(data=flat, name='FLAT_IMAGE')
+            hdu3 = fits.ImageHDU(data=flat, name='FLAT_EXTENDED')
 
             # Create PrimaryHDU and HDUlist
             primary_hdu = fits.PrimaryHDU()
             primary_hdu.header = prim_header
 
-            hdul = fits.HDUList([primary_hdu, hdu1, hdu2, hdu3, hdu4])
+            hdul = fits.HDUList([primary_hdu, hdu1, hdu2, hdu3])
 
             flat_name = filename.replace("_rate.fits", "_flat_splines.fits")
             hdul.writeto(os.path.join(output_dir, flat_name), overwrite=overwrite)

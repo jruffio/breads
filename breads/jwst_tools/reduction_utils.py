@@ -38,7 +38,6 @@ from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_ca
 from breads.fit import fitfm
 from breads.utils import get_spline_model
 import breads.jwst_tools.plotting
-from breads.jwst_tools.flat_miri_utils import oddEvenCorrectionImage
 
 from collections import defaultdict
 
@@ -1363,11 +1362,8 @@ def select_miri_output_directory(uncal_path, target_name, channel, band):
     return os.path.join(uncal_path, target_name, channel + band_alias, 'stage1')
 
 
-def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores="1", skip_dark=False,
-                    oddeven_correction=True):
+def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores="1", skip_dark=False):
     """Run pipeline stage 1, with some customizations for reductions"""
-
-    crds_path = os.getenv('CUSTOM_CRDS_PATH')
 
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
@@ -1426,25 +1422,6 @@ def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores=
 
                 det1.call(file, save_results=True, output_dir=output_dir,
                           steps=step_parameters)
-
-            if oddeven_correction:
-                new_name = os.path.basename(file).replace('uncal.fits', 'odd_even_corr_rate.fits')
-                out_name_corr = os.path.join(output_dir, new_name)
-                if os.path.exists(out_name_corr) and not overwrite:
-                    print(f"Output file {out_name} already exists in output dir;\n\tskipping {file}.")
-                else:
-                    # Open the recently created stage 1 file
-                    with fits.open(out_name) as hdul:
-                        # Copy every hdu (Header/Data Units)
-                        new_hdul = fits.HDUList([hdu.copy() for hdu in hdul])
-
-                        # Modify the extension 'SCI' with odd/even flux correction
-                        sci_hdu = new_hdul['SCI']
-                        flux_corr = oddEvenCorrectionImage(hdul, crds_path)
-                        sci_hdu.data = flux_corr
-
-                        # Sauvegarder dans un nouveau fichier
-                        new_hdul.writeto(out_name_corr, overwrite=overwrite)
 
     # Print out the time benchmark
     time1 = time.perf_counter()
@@ -1671,8 +1648,7 @@ def run_stage3_miri(uncal_path, target_name, list_bands=None, overwrite=False):
 
 
 def run_full_miri_default_pipeline(uncal_path, target_name, list_bands=None, overwrite=False):
-    run_stage1_miri(uncal_path, list_bands=list_bands, overwrite=overwrite, maximum_cores="1", skip_dark=False,
-                    oddeven_correction=False)
+    run_stage1_miri(uncal_path, list_bands=list_bands, overwrite=overwrite, maximum_cores="1", skip_dark=False)
     run_stage2_miri(uncal_path, target_name, list_bands=list_bands, custom_flatted=False, skip_cubes=False,
                     skip_fringe=False, skip_residual_fringes=True, skip_flatfield=False, skip_straylight=False,
                     overwrite=overwrite)
@@ -1856,188 +1832,8 @@ def column_median_max_channel(data, channel='CH1'):
 
 ## Breads function functions for miri
 
-def run_coordinate_recenter_miri(cal_files, utils_dir, crds_dir, init_centroid=(0, 0), wv_sampling=None, N_wvs_nodes=40,
-                                 mask_charge_transfer_radius=None,
-                                 IWA=0.3, OWA=1.0,
-                                 debug_init=None, debug_end=None,
-                                 numthreads=16,
-                                 save_plots=False,
-                                 filename_suffix="_webbpsf",
-                                 overwrite=False):
-    from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-    from breads.instruments.jwstmiri_cal import fitpsf_miri
-    from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
-
-    mypool = mp.Pool(processes=numthreads)
-
-    if not os.path.exists(utils_dir):
-        os.makedirs(utils_dir)
-
-    # Science data: List of stage 2 cal.fits files
-    for filename in cal_files:
-        print(filename)
-    print("N files: {0}".format(len(cal_files)))
-
-    # Definie the filename of the output file saved by fitpsf
-    splitbasename = os.path.basename(cal_files[0]).split("_")
-    fitpsf_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[
-        3] + "_fitpsf" + filename_suffix + ".fits")
-    poly2d_centroid_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[
-        3] + "_poly2d_centroid" + filename_suffix + ".txt")
-
-    hdulist_sc = fits.open(cal_files[0])
-    detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
-    band = hdulist_sc[0].header["BAND"]
-
-    if wv_sampling is None:
-        if band == 'SHORT':
-            wmin = 4.90
-            wmax = 5.74
-        elif band == 'MEDIUM':
-            wmin = 5.66
-            wmax = 6.63
-        elif band == 'LONG':
-            wmin = 6.53
-            wmax = 7.65
-        else:
-            print(f"BAND {band} not supported")
-        wv_sampling = np.arange(wmin, wmax, 0.5 * (wmin + wmax) / 300)
-    hdulist_sc.close()
-
-    regwvs_dataobj_list = []
-    for filename in cal_files[0::]:
-        print(filename)
-        if detector not in filename:
-            raise Exception("The files in cal_files should all be for the same detector")
-
-        preproc_task_list = []
-        preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays"])
-        preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
-        preproc_task_list.append(["compute_starspectrum_contnorm", {"N_nodes": N_wvs_nodes,
-                                                                    "threshold_badpix": 100,
-                                                                    "mppool": mypool}, True, True])
-        preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d_tmp",
-                                                              "threshold_badpix": 10,
-                                                              "mppool": mypool}, True, True])
-        preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, False])
-
-        dataobj = JWSTMiri_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
-                               save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
-        regwvs_dataobj_list.append(dataobj.reload_interpdata_regwvs())
-
-    regwvs_combdataobj = JWSTMiri_multiple_cals(regwvs_dataobj_list)
-    if mask_charge_transfer_radius is not None:
-        regwvs_combdataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
-    print(f"[DEBUG] wv_sampling after JWSTMiri_multiple_cal {regwvs_combdataobj.wv_sampling}")
-    # Load the webbPSF model (or compute if it does not yet exist)
-    webbpsf_reload = regwvs_combdataobj.reload_webbpsf_model()
-    if webbpsf_reload is None:
-        webbpsf_reload = regwvs_combdataobj.compute_webbpsf_model(wv_sampling=regwvs_combdataobj.wv_sampling,
-                                                                  image_mask=None,
-                                                                  pixelscale=0.1, oversample=10,
-                                                                  parallelize=False, mppool=mypool,
-                                                                  save_utils=True)
-    wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale = webbpsf_reload
-    webbpsf_X = np.tile(webbpsf_X[None, :, :], (wepsfs.shape[0], 1, 1))
-    webbpsf_Y = np.tile(webbpsf_Y[None, :, :], (wepsfs.shape[0], 1, 1))
-
-    # Fit a model PSF (WebbPSF) to the combined point cloud of dataobj_list
-    # Save output as fitpsf_filename
-    ann_width = None
-    padding = 0.0
-    sector_area = None
-    where_center_disk = regwvs_combdataobj.where_point_source((0.0, 0.0), IWA)
-    regwvs_combdataobj.bad_pixels[where_center_disk] = np.nan
-
-    fitpsf_miri(regwvs_combdataobj, wepsfs, webbpsf_X, webbpsf_Y, out_filename=fitpsf_filename, IWA=0.0, OWA=OWA,
-                mppool=mypool, init_centroid=init_centroid, ann_width=ann_width, padding=padding,
-                sector_area=sector_area, RDI_folder_suffix=filename_suffix, rotate_psf=regwvs_combdataobj.east2V2_deg,
-                flipx=True, psf_spaxel_area=(wpsf_pixelscale) ** 2, debug_init=debug_init, debug_end=debug_end)
-
-    with fits.open(fitpsf_filename) as hdulist:
-        print(f"[DEBUG] path to fitpsf {fitpsf_filename}")
-        bestfit_coords = hdulist[0].data
-        wpsf_angle_offset = hdulist[0].header["INIT_ANG"]
-        wpsf_ra_offset = hdulist[0].header["INIT_RA"]
-        wpsf_dec_offset = hdulist[0].header["INIT_DEC"]
-
-    x2fit = regwvs_combdataobj.wv_sampling - np.nanmedian(regwvs_combdataobj.wv_sampling)
-    y2fit = bestfit_coords[0, :, 2]
-
-    _wv_min = regwvs_combdataobj.wv_sampling[0] + 0.1 * (
-                regwvs_combdataobj.wv_sampling[-1] - regwvs_combdataobj.wv_sampling[0])
-    _wv_max = regwvs_combdataobj.wv_sampling[-1] - 0.1 * (
-                regwvs_combdataobj.wv_sampling[-1] - regwvs_combdataobj.wv_sampling[0])
-    print(_wv_min, _wv_max)
-
-    wherefinite = np.where(
-        np.isfinite(y2fit) * (regwvs_combdataobj.wv_sampling > _wv_min) * (regwvs_combdataobj.wv_sampling < _wv_max))
-    poly_p_RA = np.polyfit(x2fit[wherefinite], y2fit[wherefinite], deg=2)
-    print("[DEBUG] RA correction " + detector, poly_p_RA)
-
-    y2fit = bestfit_coords[0, :, 3]
-    wherefinite = np.where(
-        np.isfinite(y2fit) * (regwvs_combdataobj.wv_sampling > _wv_min) * (regwvs_combdataobj.wv_sampling < _wv_max))
-    poly_p_dec = np.polyfit(x2fit[wherefinite], y2fit[wherefinite], deg=2)
-    print("Dec correction " + detector, poly_p_dec)
-
-    np.savetxt(poly2d_centroid_filename, [poly_p_RA, poly_p_dec], delimiter=' ')
-
-    if save_plots:
-        color_list = ["#ff9900", "#006699", "#6600ff", "#006699", "#ff9900", "#6600ff"]
-        print(bestfit_coords.shape)
-        fontsize = 12
-        plt.figure(figsize=(12, 10))
-        plt.subplot(3, 1, 1)
-
-        plt.plot(regwvs_combdataobj.wv_sampling, bestfit_coords[0, :, 0] * 1e9, linestyle="-", color=color_list[0],
-                 label="Fixed centroid", linewidth=1)
-        plt.plot(regwvs_combdataobj.wv_sampling, bestfit_coords[0, :, 1] * 1e9, linestyle="--", color=color_list[2],
-                 label="Free centroid", linewidth=1)
-        plt.xlim([regwvs_combdataobj.wv_sampling[0], regwvs_combdataobj.wv_sampling[-1]])
-        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
-        plt.ylabel("Flux density (mJy)", fontsize=fontsize)
-        plt.gca().tick_params(axis='x', labelsize=fontsize)
-        plt.gca().tick_params(axis='y', labelsize=fontsize)
-        plt.legend(loc="upper right")
-
-        plt.subplot(3, 1, 2)
-        plt.plot(regwvs_combdataobj.wv_sampling, bestfit_coords[0, :, 2], label="bestfit centroid")
-        poly_model = np.polyval(poly_p_RA,
-                                regwvs_combdataobj.wv_sampling - np.nanmedian(regwvs_combdataobj.wv_sampling))
-        plt.plot(regwvs_combdataobj.wv_sampling, poly_model, label="polyfit")
-        plt.plot(regwvs_combdataobj.wv_sampling, bestfit_coords[0, :, 2] - poly_model, label="residuals")
-        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
-        plt.ylabel("$\\Delta$RA (as)", fontsize=fontsize)
-        plt.gca().tick_params(axis='x', labelsize=fontsize)
-        plt.gca().tick_params(axis='y', labelsize=fontsize)
-        plt.legend(loc="upper right")
-
-        plt.subplot(3, 1, 3)
-        plt.plot(regwvs_combdataobj.wv_sampling, bestfit_coords[0, :, 3], label="bestfit centroid")
-        poly_model = np.polyval(poly_p_dec,
-                                regwvs_combdataobj.wv_sampling - np.nanmedian(regwvs_combdataobj.wv_sampling))
-        plt.plot(regwvs_combdataobj.wv_sampling, poly_model, label="polyfit")
-        plt.plot(regwvs_combdataobj.wv_sampling, bestfit_coords[0, :, 3] - poly_model, label="residuals")
-        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
-        plt.ylabel("$\\Delta$Dec (as)", fontsize=fontsize)
-        plt.gca().tick_params(axis='x', labelsize=fontsize)
-        plt.gca().tick_params(axis='y', labelsize=fontsize)
-
-        plt.tight_layout()
-
-        now = datetime.datetime.now()
-        formatted_datetime = now.strftime("%Y%m%d_%H%M%S")
-
-        out_filename = os.path.join(utils_dir, formatted_datetime + "_centroid_calibration.png")
-        print("Saving " + out_filename)
-        plt.savefig(out_filename, dpi=300)
-
-    return regwvs_combdataobj.wv_sampling, poly_p_RA, poly_p_dec
-
 def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coords_offset=(0, 0),
-                                             wv_nodes=None, target_name=None, fit_centroid=True,
+                                             wv_nodes=None, target_name=None,
                                              mask_charge_transfer_radius=None, mppool=None,
                                              ra_dec_point_sources=None, overwrite=False):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
@@ -2072,7 +1868,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coor
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 10, "mad_threshold": 20}, True, True])
         if target_name is not None:
-            preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name, "fit_centroid": fit_centroid}])
+            preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}])
         else:
             preproc_task_list.append(["compute_coordinates_arrays"])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
@@ -2109,14 +1905,9 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coor
 
     return combined_star_func
 
-def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, wv_nodes=None, target_name=None, fit_centroid=True,
+def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, wv_nodes=None, target_name=None,
                                        combined_star_func=None, coords_offset=(0, 0), mppool=None):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-
-    hdulist_sc = fits.open(cal_files[0])
-    detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
-
-    hdulist_sc.close()
 
     dataobj_list = []
     for filename in cal_files[0::]:
@@ -2124,7 +1915,7 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, 
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name, "fit_centroid": fit_centroid}])
+        preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         if combined_star_func is None:
@@ -2144,7 +1935,6 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, crds_dir, 
         if outputs is None:
             outputs = dataobj.compute_starsubtraction(save_utils=True, starsub_dir="starsub1d",
                                                       threshold_badpix=10, mppool=mppool)
-        subtracted_im, star_model, spline_paras0, _wv_nodes = outputs
 
         dataobj_list.append(dataobj)
 

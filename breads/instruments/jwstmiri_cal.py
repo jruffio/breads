@@ -28,7 +28,6 @@ import breads.utils as utils
 from breads.instruments.instrument import Instrument
 from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_elements
 from breads.utils import get_spline_model
-from breads.jwst_tools.fit_miri_psf_centroid import fit_trace
 from breads.jwst_tools.flat_miri_utils import beta_masking_inverse_slice
 from scipy.ndimage import generic_filter
 from multiprocessing import Pool
@@ -278,6 +277,8 @@ class JWSTMiri_cal(Instrument):
             self.wavelengths = hdulist['WAVELENGTH'].data
             self.ra_array = hdulist['RA_ARRAY'].data
             self.dec_array = hdulist['DEC_ARRAY'].data
+            self.alpha = hdulist['ALPHA'].data
+            self.beta = hdulist['BETA'].data
 
         except(Exception) as e:
 
@@ -289,6 +290,7 @@ class JWSTMiri_cal(Instrument):
 
             # Vectorized WCS transforms
             self.ra_array, self.dec_array, self.wavelengths = model.meta.wcs.transform('detector', 'world', xx, yy)
+            self.alpha, self.beta, _ = model.meta.wcs.transform('detector', 'alpha_beta', xx, yy)
 
             hdu_ra = fits.ImageHDU(data=self.ra_array)
             hdu_ra.header['EXTNAME'] = 'RA_ARRAY'
@@ -299,6 +301,12 @@ class JWSTMiri_cal(Instrument):
             hdu_wave = fits.ImageHDU(data=self.wavelengths)
             hdu_wave.header['EXTNAME'] = 'WAVELENGTH'
             hdulist.append(hdu_wave)
+            hdu_alpha = fits.ImageHDU(data=self.alpha)
+            hdu_alpha.header['EXTNAME'] = 'ALPHA'
+            hdulist.append(hdu_alpha)
+            hdu_beta = fits.ImageHDU(data=self.beta)
+            hdu_beta.header['EXTNAME'] = 'BETA'
+            hdulist.append(hdu_beta)
 
             hdulist.writeto(self.filename, overwrite=True)
 
@@ -382,7 +390,7 @@ class JWSTMiri_cal(Instrument):
         self.bad_pixels *= new_badpix
         return new_badpix
 
-    def compute_coordinates_arrays(self, save_utils=False, center_with_targname=True, targname=None, fit_centroid=True):
+    def compute_coordinates_arrays(self, save_utils=False, center_with_targname=True, targname=None):
         """ Determine the relative coordinates in the focal plane relative to the target.
         Compute the coordinates {wavelen, delta_ra, delta_dec, area} for each pixel in a 2D image
 
@@ -420,20 +428,8 @@ class JWSTMiri_cal(Instrument):
             host_dec_deg = host_coord.dec.deg
             print("host_ra_deg", host_ra_deg, "host_dec_deg", host_dec_deg)
 
-            if fit_centroid:
-                hdu = fits.open(self.filename)
-                _, _, offset_ra_arcsec, offset_dec_arcsec = fit_trace(hdu, self.band_reduction_aka, self.crds_dir,
-                                                                      everyn=10)
-                hdu.close()
-                offset_ra_deg = -(host_ra_deg - offset_ra_arcsec / 3600)
-                offset_dec_deg = -(host_dec_deg - offset_dec_arcsec / 3600)
-
-                print("ra offset", offset_ra_deg * 3600, "dec offset", offset_dec_deg * 3600)
-            else:
-                offset_ra_deg, offset_dec_deg = 0, 0
-
-            dra_as_array = (self.ra_array - host_ra_deg - offset_ra_deg) * 3600 * np.cos(np.radians(self.dec_array))
-            ddec_as_array = (self.dec_array - host_dec_deg - offset_dec_deg) * 3600
+            dra_as_array = (self.ra_array - host_ra_deg) * 3600 * np.cos(np.radians(self.dec_array))
+            ddec_as_array = (self.dec_array - host_dec_deg) * 3600
         else:
             dra_as_array = self.ra_array
             ddec_as_array = self.dec_array
@@ -472,7 +468,7 @@ class JWSTMiri_cal(Instrument):
         self.coords = "sky"
         return wavelen_array, dra_as_array, ddec_as_array, area2d
 
-    def set_coords2ifu(self, load_filename=None):
+    def set_coords2ifu(self):
         ifuX, ifuY = self.getifucoords()
         self.dra_as_array, self.ddec_as_array = ifuX, ifuY
         if "regwvs" in self.coords:
@@ -481,7 +477,7 @@ class JWSTMiri_cal(Instrument):
             self.coords = "ifu"
         return ifuX, ifuY
 
-    def set_coords2sky(self, load_filename=None):
+    def set_coords2sky(self):
         dra_as_array, ddec_as_array = self.getskycoords()
         self.dra_as_array, self.ddec_as_array = dra_as_array, ddec_as_array
         if "regwvs" in self.coords:
@@ -491,7 +487,7 @@ class JWSTMiri_cal(Instrument):
         return dra_as_array, ddec_as_array
 
     def convert_MJy_per_sr_to_MJy(self, save_utils=False, data_in_MJy_per_sr=None):
-        if data_in_MJy_per_sr is not None:  # TODO peut etre supprimer ces boucles de conditions, le return est la seule chose qui change
+        if data_in_MJy_per_sr is not None:
             return data_in_MJy_per_sr * self.area2d
         else:
             if self.data_unit != "MJy/sr":
@@ -873,21 +869,25 @@ class JWSTMiri_cal(Instrument):
         linear_interp = True
         init_paras = np.array([0, 0])
 
-        mask = copy(self.bad_pixels)
-        diff_wv_map = np.abs(self.wavelengths - self.webbpsf_wv0)
+        mask = np.copy(self.bad_pixels).transpose()
+        data = np.copy(self.data).transpose()
+        noise = np.copy(self.noise).transpose()
+        dra_as_array = np.copy(self.dra_as_array).transpose()
+        ddec_as_array = np.copy(self.ddec_as_array).transpose()
+        diff_wv_map = np.abs(self.wavelengths - self.webbpsf_wv0).transpose()
+
         mask[np.where(diff_wv_map > np.nanmedian(self.wavelengths) / self.R)] = np.nan
         allnans_rows = np.where(np.nansum(np.isfinite(diff_wv_map), axis=1) == 0)
         diff_wv_map[allnans_rows, :] = 0
-        # diff_wv_map[np.where(np.isnan(diff_wv_map))] = 0
         argmin_ids = np.nanargmin(diff_wv_map, axis=1)
         print(argmin_ids)
 
         paras = linear_interp, self.webbpsf_im, self.webbpsf_X, self.webbpsf_Y, self.east2V2_deg, True, \
-            self.dra_as_array[np.arange(self.data.shape[0]), argmin_ids], \
-            self.ddec_as_array[np.arange(self.data.shape[0]), argmin_ids], \
-            self.data[np.arange(self.data.shape[0]), argmin_ids], \
-            self.noise[np.arange(self.data.shape[0]), argmin_ids], \
-            mask[np.arange(self.data.shape[0]), argmin_ids], \
+            dra_as_array[:, argmin_ids], \
+            ddec_as_array[:, argmin_ids], \
+            data[:, argmin_ids], \
+            noise[:, argmin_ids], \
+            mask[:, argmin_ids], \
             IWA, OWA, fit_cen, fit_angle, init_paras
         out, _ = _fit_wpsf_task(paras)
         ra_offset, dec_offset, angle_offset = out[0, 2::]
@@ -909,6 +909,7 @@ class JWSTMiri_cal(Instrument):
         if apply_offset:
             self.dra_as_array -= ra_offset
             self.ddec_as_array -= dec_offset
+        print(f"offset estimation from webbPSF fit: {ra_offset}, {dec_offset}")
         return ra_offset, dec_offset
 
     def reload_new_coords_from_webbPSFfit(self, load_filename=None, apply_offset=True):
@@ -1024,7 +1025,7 @@ class JWSTMiri_cal(Instrument):
         continuum = copy(spline_cont0)
         print(int(self.channel_reduction), self.band_aka)
 
-        mask_brightest_slices = beta_masking_inverse_slice(self.data, int(self.channel_reduction), self.band_aka, N_slices=4)
+        mask_brightest_slices = beta_masking_inverse_slice(self.data, self.beta, int(self.channel_reduction), N_slices=4)
         mask_brightest_slices[mask_brightest_slices==0] = np.nan
         continuum *= mask_brightest_slices
 

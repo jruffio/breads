@@ -10,8 +10,10 @@ from astropy.stats import sigma_clip
 from scipy.ndimage import gaussian_filter
 
 from breads.jwst_tools.PositiveEtalonModel import PositiveEtalonModel
-from breads.jwst_tools.flat_miri_utils import find_brightest_cols_two_channels, select_band_coor
+from breads.jwst_tools.flat_miri_utils import find_brightest_cols_two_channels
 from breads.jwst_tools.flat_miri_utils import beta_masking_inverse_slice
+
+from jwst.assign_wcs import AssignWcsStep
 
 try:
     from BayesicFitting import SplinesModel, LevenbergMarquardtFitter
@@ -21,7 +23,6 @@ except ImportError:
     pass
 
 from breads.jwst_tools.reduction_utils import find_files_to_process
-from breads.jwst_tools.flat_miri_utils import select_band_coor
 
 from multiprocessing import Pool
 
@@ -52,7 +53,11 @@ def retrieve_data(filename):
     DQ = hdu_data['DQ'].data
     err = hdu_data['ERR'].data
 
-    return data, DQ, err
+    model = AssignWcsStep.call(filename)
+    yy, xx = np.mgrid[0:1024, 0:1032]
+    _, _, wave = model.meta.wcs.transform('detector', 'alpha_beta', xx, yy)  # Loading the wavelength map in micron
+
+    return data, DQ, err, wave
 
 def get_optimal_number_nodes(band):
     if band == '1A' or band == '1B' or band == '1C':
@@ -388,8 +393,6 @@ def fit_FP_bayesian(data, wave, err, band, col_id, snr_thresh, plot=False, plot_
 
 def get_flat(uncaldir, targetname, list_bands=None, bkg_sub=False, snr_thresh=20, spectrum=None, N_continuum=None, N_D=None, N_finesse=None, mask_star_lines=True, fast=False):
 
-    crds_path = os.getenv('CUSTOM_CRDS_PATH')
-
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
@@ -410,9 +413,8 @@ def get_flat(uncaldir, targetname, list_bands=None, bkg_sub=False, snr_thresh=20
                 first_band = band[1] + band[2]
                 second_band = band[0] + band[2]
             print(first_band, second_band)
-            data_science, DQ_science, err_science = retrieve_data(file)
-            coor_file = select_band_coor(band, crds_path)
-            wave = coor_file['LAMBDA'].data  # Loading the wavelength map in micron
+            data_science, DQ_science, err_science, wave = retrieve_data(file)
+
             filename = os.path.basename(file)
             save_filename = os.path.join(save_path, filename.replace('rate.fits', 'fit_flat.fits'))
             save_continuum_name = os.path.join(save_path_continuum, filename.replace('rate.fits', 'fit_continuum.fits'))
@@ -448,8 +450,6 @@ def get_flat(uncaldir, targetname, list_bands=None, bkg_sub=False, snr_thresh=20
 
 def get_flat_brightest_slices(uncaldir, targetname, list_bands=None, snr_thresh=20, spectrum=None, N_continuum=None, N_D=None, N_finesse=None, mask_star_lines=True):
 
-    crds_path = os.getenv('CUSTOM_CRDS_PATH')
-
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
@@ -467,11 +467,9 @@ def get_flat_brightest_slices(uncaldir, targetname, list_bands=None, snr_thresh=
                 first_band = band[1] + band[2]
                 second_band = band[0] + band[2]
             print(first_band, second_band)
-            data_science, DQ_science, err_science = retrieve_data(file)
+            data_science, DQ_science, err_science, wave = retrieve_data(file)
             prim_header = fits.open(file)[0].header
 
-            coor_file = select_band_coor(band, crds_path)
-            wave = coor_file['LAMBDA'].data  # Loading the wavelength map in micron
             filename = os.path.basename(file)
             save_filename = os.path.join(save_path, filename.replace('rate.fits', 'fit_flat.fits'))
             save_continuum_name = os.path.join(save_path_continuum, filename.replace('rate.fits', 'fit_continuum.fits'))
@@ -506,7 +504,6 @@ def get_flat_brightest_slices(uncaldir, targetname, list_bands=None, snr_thresh=
             hdul.writeto(save_filename, overwrite=True)
 
 def get_flat_multiprocess(uncaldir, targetname, bands=None, snr_thresh=20): #TODO
-    crds_path = os.getenv('CUSTOM_CRDS_PATH')
 
     if bands is None:
         bands = ['12A', '12B', '12C', '34A', '34B', '34C']
@@ -525,9 +522,7 @@ def get_flat_multiprocess(uncaldir, targetname, bands=None, snr_thresh=20): #TOD
                 first_band = band[1] + band[2]
                 second_band = band[0] + band[2]
             print(first_band, second_band)
-            data_science, DQ_science, err_science = retrieve_data(file)
-            coor_file = select_band_coor(band, crds_path)
-            wave = coor_file['LAMBDA'].data  # Loading the wavelength map in micron
+            data_science, DQ_science, err_science, wave = retrieve_data(file)
             filename = os.path.basename(file)
             save_filename = os.path.join(save_path, filename.replace('rate.fits', 'fit_flat.fits'))
             save_continuum_name = os.path.join(save_path_continuum, filename.replace('rate.fits', 'fit_continuum.fits'))
