@@ -1661,7 +1661,6 @@ def normalize_columns(image, im_wvs, noise=None, badpixs=None, star_model=None, 
         badpixs = np.ones(image.shape)
     if star_model is None:
         star_model = np.ones(image.shape)
-    print(f"[DEBUG] reg_mean_map shape for input start0 {reg_mean_map.shape}")
     if x_nodes is None:
         x_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), nodes, endpoint=True)
 
@@ -1905,7 +1904,6 @@ def PCA_wvs_axis_miri(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
 
     # new_im[np.where(np.sum(np.isfinite(new_im), axis=0) < 100)[0], :] = np.nan #TODO dur de comprendre donc j'ai peut etre inverse les dimensions
     new_im = new_im[:, np.where(np.sum(np.isfinite(new_im), axis=0) != 0)[0]]
-    print(f"[DEBUG] shape PCA norm {new_im.shape} {np.nanstd(new_im, axis=0)[:, None].shape} ")
     stds = np.nanstd(new_im, axis=0)
     new_im = new_im / stds[np.newaxis, :]
 
@@ -1926,7 +1924,6 @@ def PCA_wvs_axis_miri(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
     # calculate the KL basis vectors
     kl_basis = np.dot(X.T, evecs)
     kls = kl_basis * (1. / np.sqrt(evals * (nz - 1)))[None, :]  # multiply a value for each row
-    print(f"[DEBUG] PCA component shape {kls.shape}")
 
     return new_wvs, kls
 
@@ -1956,8 +1953,6 @@ def combine_spectrum(wavelengths, fluxes, errors, bin_size):
     fluxes = fluxes[sort_indices]
     errors = errors[sort_indices]
 
-    print("[DEBUG] combining spectrum", fluxes.shape, np.nanmax(fluxes))
-    print("[DEBUG] combining spectrum", wavelengths.shape, np.nanmax(wavelengths))
 
     # Determine the number of bins
     num_bins = int((wavelengths[-1] - wavelengths[0]) / bin_size) + 1
@@ -2326,7 +2321,6 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
     wpsf_angle_offset = 0
     bestfit_coords_defined = False
     if mppool is None:
-        print(f"[DEBUG] mpool is None")
         for wv_id, wv in enumerate(wv_sampling):
             if not (wv_id >= debug_init and wv_id < debug_end):
                 continue
@@ -2347,7 +2341,6 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
 
 
     else:
-        print(f"[DEBUG] mpool is not None")
         output_lists = mppool.map(_fit_wpsf_task,
                                   zip(itertools.repeat(linear_interp),
                                       psfs, psfX, psfY,
@@ -2428,9 +2421,6 @@ def fitpsf_miri(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.
             new_badpix = np.zeros((ny_ori, nx_ori)) + np.nan
             new_area2d = np.zeros((ny_ori, nx_ori)) + np.nan
             for colid in range(nx_ori):
-                print(f"[BIG DEBUG] psfmodel shape {all_interp_psfmodel.shape}")
-                print(
-                    f"[DEBUG] shapes for psf fit: {wvs_ori[:, colid].shape}, {wv_sampling.shape}, {all_interp_psfmodel[ny * obj_id:ny * (obj_id + 1), colid].shape}")
                 new_model[:, colid] = np.interp(wvs_ori[:, colid], wv_sampling,
                                                 all_interp_psfmodel[ny * obj_id:ny * (obj_id + 1), colid], left=np.nan,
                                                 right=np.nan)
