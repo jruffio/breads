@@ -1768,13 +1768,13 @@ def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_p
 
     for filename in filenames:
         if filename.endswith(".fits"):
-            flat = fits.open(os.path.join(flat_dir, filename))
-            hdr_flat = flat[0].header
+            flat_hdu = fits.open(os.path.join(flat_dir, filename))
+            hdr_flat = flat_hdu[0].header
 
             if flat_extended:
-                flat = flat['FLAT_EXTENDED'].data
+                flat = flat_hdu['FLAT_EXTENDED'].data
             else:
-                flat = flat['FLAT'].data
+                flat = flat_hdu['FLAT'].data
 
             if hdr_flat['PATT_NUM'] == dither_numero and hdr_flat['PATTTYPE'] == pattern_type and hdr_flat[
                 'DITHDIRC'] == dither_direction and hdr_flat['BAND'] == band:
@@ -1788,6 +1788,7 @@ def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_p
                 if save_png:
                     if std[-1] < 40:
                         plt.plot(flat[:, brightest_col], label=filename)
+            flat_hdu.close()
 
     idx = np.nanargmin(std)
     std_min = np.nanmin(std)
