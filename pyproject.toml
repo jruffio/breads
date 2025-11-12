@@ -52,6 +52,12 @@ docs = [
     "tomli; python_version <\"3.11\"",
     "jwst",
 ]
+jwst = [
+    "jwst",
+    "stpsf",
+    "lmfit",
+    "BayesicFitting"
+]
 
 [project.urls]
 Homepage = "http://breads.readthedocs.io/"
