@@ -135,6 +135,8 @@ class JWSTMiri_cal(Instrument):
             if 'photom' in file_crds:
                 hdu_photom = fits.open(os.path.join(path_photom_crds, file_crds))
                 hdr_photom = hdu_photom[0].header
+                if hdr_photom['DETECTOR'] == 'MIRIMAGE':
+                    continue
                 if hdr_photom['CHANNEL'] == self.channel and hdr_photom['BAND'] == self.band:
                     area2d_fits = file_crds
                     print(f"Photom file selected: {file_crds}")
