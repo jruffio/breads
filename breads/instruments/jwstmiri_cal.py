@@ -18,6 +18,9 @@ from scipy.optimize import lsq_linear
 from scipy.interpolate import CloughTocher2DInterpolator, LinearNDInterpolator
 from scipy.interpolate import interp1d, splev, splrep
 from scipy.optimize import minimize, curve_fit
+import warnings
+from astropy.utils.exceptions import AstropyUserWarning
+
 
 
 from scipy.signal import convolve2d
@@ -347,8 +350,10 @@ class JWSTMiri_cal(Instrument):
 
         for colid in range(self.bad_pixels.shape[1]):
             col_flux = np.copy(self.data[:, colid])
-            col_flux = col_flux / generic_filter(col_flux, np.nanmedian, size=50)
-            clipped_data = sigma_clip(col_flux, sigma=3, maxiters=3)
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', AstropyUserWarning)
+                col_flux = col_flux / generic_filter(col_flux, np.nanmedian, size=50)
+                clipped_data = sigma_clip(col_flux, sigma=3, maxiters=3)
             new_badpix[clipped_data.mask, colid] = np.nan
 
         self.bad_pixels *= new_badpix
