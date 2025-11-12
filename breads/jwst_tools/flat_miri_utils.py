@@ -111,8 +111,6 @@ def miri_flat_running_mean(data_rate_path, output_dir, band, overwrite=False):
                 continue
 
             im_flat = np.zeros_like(img, dtype=np.float64) + np.nan
-            im_SNR = np.zeros_like(img, dtype=np.float64) + np.nan
-
             col_min, col_max = 10, 1020  # 572, 1020
 
             img_no_nan = replace_nan_with_median(img, DQ)
@@ -139,7 +137,6 @@ def miri_flat_running_mean(data_rate_path, output_dir, band, overwrite=False):
                     flat[np.isnan(flat)] = 1
 
                     im_flat[where_finite_wave, j] = flat
-                    im_SNR[where_finite_wave, j] = y_data/np.sqrt(y_data)
                 except Exception as e:
                     print(e)
                     im_flat[where_finite_wave, j] = np.nan
