@@ -44,13 +44,16 @@ test = [
 ]
 docs = [
     "nbsphinx",
+    "pandoc",
     "sphinx",
     "stsci_rtd_theme",
     "sphinx-astropy",
     "sphinx-automodapi",
     "sphinx-issues",
-    "tomli; python_version <\"3.11\"",
+]
+jwst = [
     "jwst",
+    "stpsf"
 ]
 
 [project.urls]
