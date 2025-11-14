@@ -32,6 +32,7 @@ Breads has been developed by Jean-Baptiste Ruffio (UC San Diego) and collaborato
    forward_models.rst
    fitting.rst
    utils.rst
+   jwst_tools.rst
    development.rst
 
 
