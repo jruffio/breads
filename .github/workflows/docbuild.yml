@@ -1,0 +1,29 @@
+name: Build docs
+
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+
+jobs:
+  build:
+    runs-on: ubuntu-latest 
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@d632683dd7b4114ad314bca15554477dd762a938  # v4.2.0
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3  # v5.2.0
+      with:
+        python-version: '3.13'
+    - name: install breads
+      run: | # Install, including optional dependencies for docs
+        pip install .[docs]  
+    - name: Build Sphinx documentation
+      run: |
+        cd docs # Navigate to your documentation source directory
+        make html # Or use sphinx-build directly: sphinx-build -b html . _build/html
+ 
