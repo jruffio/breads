@@ -9,9 +9,14 @@ from scipy.ndimage import median_filter
 import matplotlib.pyplot as plt
 
 import math
-import jwst
 import matplotlib
 from scipy.signal import find_peaks
+
+try:
+    import jwst
+    _HAS_OPTIONAL_DEPENDENCY_JWST = True
+except ImportError:
+    _HAS_OPTIONAL_DEPENDENCY_JWST = False
 
 try:
     from BayesicFitting import Fitter, SplinesModel, LevenbergMarquardtFitter
