@@ -11,7 +11,7 @@ name = "breads"
 description = "Broad Respository for Exoplanet Analysis, Discovery, and Spectroscopy"
 authors = [
     { name = "Jean-Baptiste Ruffio", email = "jruffio@ucsd.edu" },
-    { name = "Marshall Perirn", email = "mperrin@stsci.edu" },
+    { name = "Marshall Perrin", email = "mperrin@stsci.edu" },
     { name = "Shubh Agrawal", email = "shubh@caltech.edu" },
     { name = "Alex Madurowicz", email = "amadurowicz@stsci.edu" },
     { name = "Ben Sappey", email = "bsappey@ucsd.edu" },
@@ -32,7 +32,9 @@ dependencies = [
     "pandas>2.0.0",
     "astroquery>=0.4.9",
     "multiprocess",
-    "tqdm"
+    "tqdm",
+    "h5py",
+    "species"
 ]
 
 [project.license]
@@ -44,14 +46,15 @@ test = [
 ]
 docs = [
     "nbsphinx",
+    "pandoc",
     "sphinx",
     "stsci_rtd_theme",
     "sphinx-astropy",
     "sphinx-automodapi",
     "sphinx-issues",
     "tomli",
-    "jwst",
 ]
+
 jwst = [
     "jwst",
     "stpsf",

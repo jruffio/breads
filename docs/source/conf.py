@@ -15,14 +15,39 @@
 # sys.path.insert(0, os.path.abspath('.'))
 
 
+
+from datetime import datetime
+from pathlib import Path
+
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
+try:
+    from sphinx_astropy.conf.v1 import *  # noqa
+except ImportError:
+    print(
+        "ERROR: the documentation requires the sphinx-astropy package to be installed"
+    )
+    sys.exit(1)
+
 # -- Project information -----------------------------------------------------
+with open(Path(__file__).parent.parent.parent / "pyproject.toml", "rb") as metadata_file:
+    configuration = tomllib.load(metadata_file)
+    metadata = configuration["project"]
+    project = metadata["name"]
+    author = metadata["authors"][0]["name"]
+    copyright = f"{datetime.now().year}, {author}"
 
-project = 'breads'
-copyright = '2021-2023, Jean-Baptiste Ruffio, Shubh Agrawal, Marshall Perrin'
-author = 'Jean-Baptiste Ruffio, Shubh Agrawal'
-
-# The full version, including alpha/beta/rc tags
-release = '0.0.1'
+    # The short X.Y version.
+    try:
+        version = project.__version__.split("-", 1)[0]
+        # The full version, including alpha/beta/rc tags.
+        release = project.__version__
+    except AttributeError:
+        version = "dev"
+        release = "dev"
 
 
 # -- General configuration ---------------------------------------------------
@@ -31,7 +56,12 @@ release = '0.0.1'
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = ['sphinx.ext.autodoc',
+              "sphinx.ext.inheritance_diagram",
+                "sphinx.ext.viewcode",
+                "sphinx.ext.autosummary",
+
               "sphinx_automodapi.automodapi",
+                  "nbsphinx",
               #"nbsphinx",
               "numpydoc",
 ]
