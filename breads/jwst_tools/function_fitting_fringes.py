@@ -361,9 +361,7 @@ def fit_FP_bayesian(data, wave, err, band, col_id, snr_thresh, plot=False, plot_
             plt.show()
 
         lamb_axis = wave[:, col_id]
-        #where_good_snr = np.where(data[:, col_id]/err[:, col_id] > snr_thresh)[0]
-        wnum_axis = micron_to_wavenumber(lamb_axis)#[where_good_snr])
-        #flat[where_good_snr] = mdl_flat.result(wnum_axis, param_finesse_crop)
+        wnum_axis = micron_to_wavenumber(lamb_axis)
         flat = mdl_flat.result(wnum_axis, param_finesse_crop)
 
 
@@ -386,8 +384,6 @@ def fit_FP_bayesian(data, wave, err, band, col_id, snr_thresh, plot=False, plot_
 
     flat[flat<0.1] = 1 #hard thresholding
 
-    continuum_mdl = SplinesModel(nrknots=N_nodes_continuum, xrange=wnum)
-    #continuum[where_good_snr] = continuum_mdl.result(wnum_axis, param_crop_continuum)
     return flat, D_est, continuum
 
 
@@ -438,14 +434,14 @@ def get_flat(uncaldir, targetname, list_bands=None, bkg_sub=False, snr_thresh=20
             D = np.zeros_like(data_science) + np.nan
             continuum = np.zeros_like(data_science) + np.nan
 
-            for col_id in range(50, 60):
+            for col_id in range(5, 500):
                 print(col_id)
                 try:
                     flat[:, col_id], D[:, col_id], continuum[:, col_id] = fit_FP_bayesian(data_science, wave, err_science, first_band, col_id, snr_thresh, plot=False, spectrum=spectrum, N_continuum=N_continuum, N_D=N_D, N_finesse=N_finesse, mask_star_lines=mask_star_lines, fast=fast)
                 except Exception as e:
                     print("Exception", e)
 
-            for col_id in range(560, 570):
+            for col_id in range(500, 1020):
                 print(col_id)
                 try:
                     flat[:, col_id], D[:, col_id], continuum[:, col_id] = fit_FP_bayesian(data_science, wave,
@@ -472,127 +468,3 @@ def get_flat(uncaldir, targetname, list_bands=None, bkg_sub=False, snr_thresh=20
             hdul = fits.HDUList([primary_hdu, hdu1, hdu2])
             hdul.writeto(save_filename, overwrite=overwrite)
             print(f"==> Estimated fringe flat written to {save_filename}")
-
-
-def get_flat_brightest_slices(uncaldir, targetname, list_bands=None, snr_thresh=20, spectrum=None, N_continuum=None, N_D=None, N_finesse=None, mask_star_lines=True):
-
-    if list_bands is None:
-        list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
-
-    for band in list_bands:
-        input_path = os.path.join(uncaldir, targetname, band, 'stage1')
-        save_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/miri_flat', band)
-        save_path_continuum = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/miri_flat_continuum', band)
-        fileslist = find_files_to_process(input_path, filetype='rate.fits')
-
-        for file in fileslist:
-            if band[0] == '1':
-                first_band = band[0] + band[2]
-                second_band = band[1] + band[2]
-            else:
-                first_band = band[1] + band[2]
-                second_band = band[0] + band[2]
-            print(first_band, second_band)
-            data_science, DQ_science, err_science, wave = retrieve_data(file)
-            prim_header = fits.open(file)[0].header
-
-            filename = os.path.basename(file)
-            save_filename = os.path.join(save_path, filename.replace('rate.fits', 'fit_flat.fits'))
-            save_continuum_name = os.path.join(save_path_continuum, filename.replace('rate.fits', 'fit_continuum.fits'))
-            flat = np.zeros_like(data_science) + 1
-            D = np.zeros_like(data_science) + np.nan
-            continuum = np.zeros_like(data_science) + np.nan
-
-            data_science *= beta_masking_inverse_slice(data_science, int(band[0]), band, N_slices=4)
-            data_science *= beta_masking_inverse_slice(data_science, int(band[1]), band, N_slices=4)
-
-            for col_id in range(5, 500):
-                print(col_id)
-                try:
-                    flat[:, col_id], D[:, col_id], continuum[:, col_id] = fit_FP_bayesian(data_science, wave, err_science, first_band, col_id, snr_thresh, plot=False, spectrum=spectrum, N_continuum=N_continuum, N_D=N_D, N_finesse=N_finesse, mask_star_lines=mask_star_lines)
-                except Exception as e:
-                    print(e)
-
-            for col_id in range(500, 1020):
-                print(col_id)
-                try:
-                    flat[:, col_id], D[:, col_id], continuum[:, col_id] = fit_FP_bayesian(data_science, wave, err_science, second_band, col_id, snr_thresh, plot=False, spectrum=spectrum, N_continuum=N_continuum, N_D=N_D, N_finesse=N_finesse, mask_star_lines=mask_star_lines)
-                except Exception as e:
-                    print(e)
-
-            primary_hdu = fits.PrimaryHDU()
-            primary_hdu.header = prim_header
-            hdu1 = fits.ImageHDU(data=flat, name='FLAT_EXTENDED')
-            hdu2 = fits.ImageHDU(data=flat, name='FLAT')
-
-            # Combiner tous les HDU dans un HDUList
-            hdul = fits.HDUList([primary_hdu, hdu1, hdu2])
-            hdul.writeto(save_filename, overwrite=True)
-
-def get_flat_multiprocess(uncaldir, targetname, bands=None, snr_thresh=20): #TODO
-
-    if bands is None:
-        bands = ['12A', '12B', '12C', '34A', '34B', '34C']
-
-    for band in bands:
-        input_path = os.path.join(uncaldir, targetname, band, 'stage1')
-        save_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/miri_flat', band)
-        save_path_continuum = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/miri_flat_continuum', band)
-        fileslist = find_files_to_process(input_path, filetype='corr_rate.fits')
-
-        for file in fileslist:
-            if band[0] == '1':
-                first_band = band[0] + band[2]
-                second_band = band[1] + band[2]
-            else:
-                first_band = band[1] + band[2]
-                second_band = band[0] + band[2]
-            print(first_band, second_band)
-            data_science, DQ_science, err_science, wave = retrieve_data(file)
-            filename = os.path.basename(file)
-            save_filename = os.path.join(save_path, filename.replace('rate.fits', 'fit_flat.fits'))
-            save_continuum_name = os.path.join(save_path_continuum, filename.replace('rate.fits', 'fit_continuum.fits'))
-            flat = np.zeros_like(data_science) + 1
-            D = np.zeros_like(data_science) + np.nan
-            continuum = np.zeros_like(data_science) + np.nan
-
-            param_multiprocess = []
-            for col_id in range(94, 95): #for col_id in range(5, 500):
-                param_multiprocess.append((data_science, wave, err_science, first_band, col_id, snr_thresh, None, None, None, False))
-            for col_id in range(700, 701): #for col_id in range(500, 1020):
-                param_multiprocess.append((data_science, wave, err_science, second_band, col_id, snr_thresh, None, None, None, False))
-
-            with Pool() as pool:
-                results = pool.starmap(fit_FP_bayesian, param_multiprocess)
-            return 1
-
-def plot_psd_func(signal1, signal2, sampling_rate):
-
-    N = len(signal1)
-
-    signal1[np.isnan(signal1)] = 0
-    signal2[np.isnan(signal2)] = 0
-    # Calcul de la FFT et du module
-    fft_vals_1 = np.fft.fft(signal1)
-    fft_vals_2 = np.fft.fft(signal2)
-
-    fft_magnitude_1 = np.abs(fft_vals_1) / N  # normalisation
-    fft_magnitude_2 = np.abs(fft_vals_2) / N  # normalisation
-
-    freqs = np.fft.fftfreq(N, d=1 / sampling_rate)
-
-    idxs = np.where(freqs >= 0)
-    freqs = freqs[idxs]
-    fft_magnitude_1 = fft_magnitude_1[idxs]
-    fft_magnitude_2 = fft_magnitude_2[idxs]
-
-    # Plotting
-    plt.figure(figsize=(10, 5))
-    plt.plot(freqs, fft_magnitude_1)
-    plt.plot(freqs, fft_magnitude_2)
-    plt.title("PSD")
-    plt.xlabel("Frequency")
-    plt.ylabel("Amplitude")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
