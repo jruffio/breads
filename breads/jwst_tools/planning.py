@@ -96,7 +96,7 @@ def visualize_miri_mrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star
     None
     """
     mrs_slice_widths = {'1': 0.7, '2': 0.28, '3': 0.39, '4': 0.64}
-    mrs_mid_wavelengths =  {'1': 6, '2': 9, '3': 14, '4': 22}  # microns
+    mrs_mid_wavelengths = {'1': 6, '2': 9, '3': 14, '4': 22}  # microns
 
     if psf_core_check_radius is None:
         psf_core_check_radius  =  1.2 * mrs_slice_widths[mrs_band[0]]
