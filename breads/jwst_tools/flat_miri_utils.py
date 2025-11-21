@@ -181,7 +181,7 @@ def run_miri_flat_running_mean(flat_path, targetname, output_dir=None, list_band
         print(f"Computing flat for band {band}")
         data_rate_path_band = os.path.join(flat_path, targetname, band, 'stage1')
         output_dir_band = os.path.join(output_dir, band)
-        print("[DEBUG] Writing flat image to {}".format(output_dir_band))
+        print("Writing flat image to {}".format(output_dir_band))
         if not os.path.exists(output_dir_band):
             os.makedirs(output_dir_band)
 
