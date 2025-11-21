@@ -11,6 +11,26 @@ except ImportError:
     # non-JWST BREADS usage
     pass
 
+#  This file is part of the BayesicFitting package.
+#
+#  BayesicFitting is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU Lesser General Public License as published
+#  by the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  BayesicFitting is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#  GNU Lesser General Public License for more details.
+#
+#  You should have received a copy of the GNU Lesser General Public License
+#  along with BayesicFitting. If not, see <http://www.gnu.org/licenses/>.
+#
+#  2016 - 2025 Do Kester
+#  -----------------------------------------------------------------------
+#  Modifications by Alexis Bidot (2025):
+#    - Adding a positive constrain on the finesse parameter of the etalon
+#  -----------------------------------------------------------------------
 
 
 class PositiveEtalonModel( NonLinearModel ):
@@ -40,26 +60,17 @@ class PositiveEtalonModel( NonLinearModel ):
     --------------------------
         npbase, ndim, priors, posIndex, nonZero, tiny, deltaP, parNames
 
-    Examples
-    --------
-    >>> fpm = EtalonModel( )
-    >>> print( fpm.npchain )
-    4
-    >>> pars = [1.0, 30.0, 1.0, 0.0]
-    >>> fpm.parameters = pars
-    >>> print( fpm( numpy.arange( 101, dtype=float ) ) )     # etalon with 10 periods
-
     """
 
     def __init__( self, copy=None, **kwargs ):
         """
-        Etalon model.
+        Positive Etalon model.
 
         Number of parameters is 4.
 
         Parameters
         ----------
-        copy : EtalonModel
+        copy : PositiveEtalonModel
             to be copied
         fixed : None or dictionary of {int:float|Model}
             int         index of parameter to fix permanently.
