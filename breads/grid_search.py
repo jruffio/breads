@@ -24,6 +24,7 @@ def process_chunk(args):
     Process for grid_search()
     """
     nonlin_paras_list, dataobj, fm_func, fm_paras, bounds,computeH0,scale_noise, marginalize_noise_scaling = args
+    out_chunk = None  # define up front for safety
 
     outarr_not_created = True
     for k, nonlin_paras in enumerate(zip(*nonlin_paras_list)):
@@ -68,13 +69,16 @@ def process_chunk(args):
                 out_chunk[k,3:3 + new_N_linpara] = linparas
                 out_chunk[k,3 + new_N_linpara::] = linparas_err
         except Exception as e:
-            print(nonlin_paras,e)
-    try:
-    # if 1:
-        return out_chunk
-    except Exception as e:
-        print(nonlin_paras,e)
+            print(f"[process_chunk] Error for nonlin_paras {nonlin_paras}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    if out_chunk is None:
+        print("[process_chunk] All fits failed for this chunk.")
         return None
+
+    return out_chunk
+
 
 
 def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,computeH0=False,scale_noise=True,marginalize_noise_scaling=False):
@@ -170,6 +174,9 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,c
         mypool.close()
         mypool.join()
 
+        if outarr_not_created:
+            raise RuntimeError("All process_chunk calls returned None. Check for errors in fitfm or the input data.")
+        
     N_linpara = int((out.shape[-1]-3)/2)
     out = np.moveaxis(out, -1, 0)
     log_prob = out[0]

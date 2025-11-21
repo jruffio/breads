@@ -3,6 +3,7 @@ from astropy import constants as const
 
 from breads.utils import get_spline_model, pixgauss2d
 
+from breads.utils import get_spline_model
 
 
 def hc_splinefm(nonlin_paras, cubeobj, planet_f=None, transmission=None, star_spectrum=None,boxw=1, psfw=1.2,nodes=20,

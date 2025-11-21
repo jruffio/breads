@@ -374,6 +374,7 @@ def findbadpix(cube, noisecube=None, badpixcube=None,chunks=20,mypool=None,med_s
 
     x = np.arange(nz)
     x_knots = x[np.linspace(0,nz-1,chunks+1,endpoint=True).astype(int)]
+    x_knots = x[np.linspace(0,nz-1,chunks+1,endpoint=True).astype(int)]
     M_spline = get_spline_model(x_knots,x,spline_degree=3)
 
     N_valid_pix = ny*nx
@@ -932,3 +933,14 @@ def pixgauss2d(p, shape, hdfactor=10, xhdgrid=None, yhdgrid=None):
         -0.5 * ((xA - xhdgrid) ** 2 + (yA - yhdgrid) ** 2) / w ** 2)
     gaussA = np.nanmean(np.reshape(gaussA_hd, (ny, hdfactor, nx, hdfactor)), axis=(1, 3))
     return gaussA + bkg
+
+
+def nonlin_lnprior_func(nonlin_paras, nonlin_paras_mins,nonlin_paras_maxs):
+    """basic function to limit prior ranges for emcee
+
+    If the prior is outside of the range defined by nonlin_paras_mins and nonlin_paras_max, the prior is -infinity
+    """
+    for p, _min, _max in zip(nonlin_paras, nonlin_paras_mins, nonlin_paras_maxs):
+        if p > _max or p < _min:
+            return -np.inf
+    return 0

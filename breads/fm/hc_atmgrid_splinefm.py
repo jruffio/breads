@@ -200,8 +200,8 @@ def hc_atmgrid_splinefm(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None,
         # Technically allows super sampled PSF to account for a true 2d gaussian integration of the area of a pixel.
         # But this is disabled for now with hdfactor=1.
         hdfactor = 1#5
-        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor,
-                                       np.arange(hdfactor * (boxw)).astype(np.float) / hdfactor)
+        xhdgrid, yhdgrid = np.meshgrid(np.arange(hdfactor * (boxw)).astype(float) / hdfactor,
+                                       np.arange(hdfactor * (boxw)).astype(float) / hdfactor)
         psfs += pixgauss2d([1., w+dx, w+dy, psfw, 0.], (boxw, boxw), xhdgrid=xhdgrid, yhdgrid=yhdgrid)[None, :, :]
         psfs = psfs / np.nansum(psfs, axis=(1, 2))[:, None, None]
 

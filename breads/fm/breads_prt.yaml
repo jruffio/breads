@@ -1,0 +1,143 @@
+pressures:
+  - start: -6.
+    stop: 2.
+    num: 100
+    log: True
+
+wavelength_boundaries:
+  - start: 2.2
+    stop: 2.4
+
+line_species:
+  # - H2O
+  # - CO
+  # - CO2
+  # - CH4
+  # - NH3
+  # - HCN
+  # - FeH
+  # - H2S
+  # - Na__NewAllard
+  # - K__Allard
+  # - H2
+  # - He
+  - 1H2-16O
+  - 12C-16O
+  - 13C-16O
+  - 12C-1H4
+
+mass_fractions:
+  - H2O:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+  - CO:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+  - CO2:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+  - CH4:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+  - NH3:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+  - HCN:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+  - FeH:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+  - H2S:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+  - Na__NewAllard:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+  - K__Allard:
+    mass_fraction: 6e-3
+    fit: False
+    range: [0.0, 1e-2]
+
+
+rayleigh_species:
+  - H2
+  - He
+
+continuum_opacities:
+  - H2-H2
+  - H2-He  
+
+parameters:
+  - name: temperature_profile
+    value: 'guillot_global'
+    range: None
+    fit: False
+
+  - name: D_pl
+    value: 40.771 * cst.pc  #this will eval when loaded into the code
+    range: [0.0, 10.0]
+    fit: False
+
+  - name: planet_radius
+    value: 9.342e-01 * cst.r_jup_mean  #this will eval when loaded into the code
+    range: [0.0, 10.0]
+    fit: False
+
+  - name: ir_mean_opacity
+    value: 0.01  #this will eval when loaded into the code
+    range: [0.0, 10.0]
+    fit: True
+
+  - name: gamma
+    value: 0.4  #this will eval when loaded into the code
+    range: [0.0, 10.0]
+    fit: True
+
+  - name: T_int
+    value: 1500.
+    range: [1200., 2500.]
+    fit: True
+
+  - name: T_equ
+    value: 0.
+    range: [1200., 2500.]
+    fit: False
+
+  - name: reference_gravity
+    value: 4.5
+    range: [3.0, 5.5]
+    fit: True 
+
+  - name: reference_pressure
+    value: 0.01  #this will eval when loaded into the code
+    range: [0.0, 10.0]
+    fit: False
+
+  - name: Fe/H
+    value: 0.0
+    range: [-1.0, 1.0]
+    fit: True
+
+  - name: C/O
+    value: 0.55
+    range: [0.1, 1.5]
+    fit: True
+
+astrometric_parameters:
+  - name: radial_velocity
+    range: [-50, 50] #km/s
+    fit: True
+  - name: spin #vsini
+    range: [0, 50.0] #km/s
+    fit: True
+
