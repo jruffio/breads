@@ -52,10 +52,14 @@ docs = [
     "sphinx-astropy",
     "sphinx-automodapi",
     "sphinx-issues",
+    "tomli",
 ]
+
 jwst = [
     "jwst",
-    "stpsf"
+    "stpsf",
+    "lmfit",
+    "BayesicFitting"
 ]
 
 [project.urls]
