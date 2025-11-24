@@ -11,10 +11,20 @@ from astropy.io import fits
 import multiprocessing as mp
 import matplotlib.pyplot as plt
 import datetime
-from scipy.ndimage import generic_filter
+from scipy.ndimage import generic_filter, gaussian_filter
 from scipy.ndimage import convolve1d
 from scipy.interpolate import interp1d
 import matplotlib.tri as tri
+
+try:
+    import jwst
+    _HAS_OPTIONAL_DEPENDENCY_JWST = True
+
+    from jwst.pipeline import Detector1Pipeline, Spec2Pipeline, Spec3Pipeline
+    from jwst.associations import asn_from_list as afl  # Tools for creating association files
+    from jwst.associations.lib.rules_level3_base import DMS_Level3_Base
+except ImportError:
+    _HAS_OPTIONAL_DEPENDENCY_JWST = False
 
 from breads.instruments.instrument import Instrument
 from breads.instruments.jwstnirspec_cal import JWSTNirspec_cal
@@ -28,6 +38,8 @@ from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_ca
 from breads.fit import fitfm
 from breads.utils import get_spline_model
 import breads.jwst_tools.plotting
+
+from collections import defaultdict
 
 
 ###########################################################################
@@ -55,7 +67,7 @@ def find_files_to_process(input_dir, filetype='uncal.fits', exp_numbers=None, ve
         complex regular expression search pattern. This will be used to search the
         input directory for all FITS files matching this pattern.
     exp_numbers :  list or ndarray of ints
-        Optional list of exposure numers. The list of files will be filtered to contiain
+        Optional list of exposure numbers. The list of files will be filtered to contain
         only this subset of exposure numbers.
     verbose : bool
         Be more verbose in outputs
@@ -1185,7 +1197,7 @@ def save_combined_regwvs(regwvs_combdataobj, out_filename):
     hdulist.close()
 
 
-def get_2D_point_cloud_interpolator(regwvs_combdataobj, wv0):
+def get_2D_point_cloud_interpolator(regwvs_combdataobj, wv0, miri=False):
     """
 
     Parameters
@@ -1211,6 +1223,12 @@ def get_2D_point_cloud_interpolator(regwvs_combdataobj, wv0):
         bad_pixels = regwvs_combdataobj.bad_pixels
         wv_sampling = regwvs_combdataobj.wv_sampling
 
+    if miri:
+        data = data.transpose()
+        dra_as_array = dra_as_array.transpose()
+        ddec_as_array = ddec_as_array.transpose()
+        bad_pixels = bad_pixels.transpose()
+
     wv0_index = np.argmin(np.abs(wv_sampling - wv0))
 
     where_good = np.where(np.isfinite(bad_pixels[:, wv0_index]))
@@ -1224,6 +1242,44 @@ def get_2D_point_cloud_interpolator(regwvs_combdataobj, wv0):
     pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, z)
 
     return pointcloud_interp
+
+def get_2D_point_cloud_per_dither(regwvs_combdataobj, wv0, miri=False):
+    if isinstance(regwvs_combdataobj, str):
+        with fits.open(regwvs_combdataobj) as hdulist:
+            data = hdulist["DATA"].data
+            dra_as_array = hdulist["RA"].data
+            ddec_as_array = hdulist["DEC"].data
+            bad_pixels = hdulist["BADPIX"].data
+            wv_sampling = hdulist["WV_SAMPLING"].data
+    else:
+        data = regwvs_combdataobj.data
+        dra_as_array = regwvs_combdataobj.dra_as_array
+        ddec_as_array = regwvs_combdataobj.ddec_as_array
+        bad_pixels = regwvs_combdataobj.bad_pixels
+        wv_sampling = regwvs_combdataobj.wv_sampling
+
+    if miri:
+        data = data.transpose()
+        dra_as_array = dra_as_array.transpose()
+        ddec_as_array = ddec_as_array.transpose()
+        bad_pixels = bad_pixels.transpose()
+        detector_row_size = 1032
+
+    wv0_index = np.argmin(np.abs(wv_sampling - wv0))
+
+    print(data.shape)
+    n_dithers = data.shape[0] // detector_row_size
+
+    print("n_dithers:", n_dithers)
+    x, y, z = [], [], []
+    for i in range(n_dithers):
+        where_good = np.where(np.isfinite(bad_pixels[i*detector_row_size:(i+1)*detector_row_size, wv0_index]))
+        x.append(dra_as_array[i*detector_row_size+where_good[0], wv0_index])
+        y.append(ddec_as_array[i*detector_row_size+where_good[0], wv0_index])
+        z.append(data[i*detector_row_size+where_good[0], wv0_index])
+
+    return x, y, z
+
 
 
 ############################################################################
@@ -1267,3 +1323,710 @@ def run_complete_stage1_2_clean_reduction(input_dir, output_root_dir=None, overw
     cleaned_cal_files = run_stage2(cleaned_rate_files, output_dir=clean_spec2_dir, overwrite=overwrite)
 
     return cleaned_cal_files
+
+###########################################################################
+# Functions for invoking the MIRI/MRS pipeline
+
+def mkdir_miri_files(path):
+    """Short function to create directories for MIRI files"""
+    if type(path) != str:
+        raise TypeError("'path' must be a string")
+
+    if not os.path.exists(path):
+        os.makedirs(path)
+    return path
+
+def sort_by_target_name(input_dir, filetype='uncal.fits'):
+    files = find_files_to_process(input_dir, filetype)
+    targname_groups = defaultdict(list)
+
+    for file in files:
+        header = fits.getheader(file)
+        targname = header.get('TARGNAME', 'UNKNOWN')
+        targname_groups[targname].append(file)
+
+    return dict(targname_groups)
+
+
+def select_miri_output_directory(uncal_path, target_name, channel, band):
+    """Short function to select the right MIRI output directory"""
+
+    if band == 'SHORT':
+        band_alias = 'A'
+    elif band == 'MEDIUM':
+        band_alias = 'B'
+    elif band == 'LONG':
+        band_alias = 'C'
+    else:
+        raise ValueError(f"Band {band} is not supported for stage 1 forward modeling")
+    return os.path.join(uncal_path, target_name, channel + band_alias, 'stage1')
+
+
+def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores="1", skip_dark=False):
+    """Run pipeline stage 1, with some customizations for reductions"""
+
+    if list_bands is None:
+        list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
+
+    dict_files_by_target_names = sort_by_target_name(uncal_path)
+    target_names = list(dict_files_by_target_names.keys())
+    print("DEBUG target_names", target_names)
+
+    time0 = time.perf_counter()
+    print(time0)
+    rate_files = []
+
+    for target_name in target_names:
+        print("DEBUG target_name", target_name)
+        uncal_files = dict_files_by_target_names[target_name]
+
+        for band in list_bands:
+            mkdir_miri_files(os.path.join(uncal_path, target_name, band, 'stage1'))
+
+        rate_files = []
+
+        for i, file in enumerate(uncal_files):
+            print(f"Processing file {i + 1} of {len(uncal_files)}.")
+            hdu_uncal = fits.open(file)
+            band_uncal = hdu_uncal[0].header['BAND']
+            channel_uncal = hdu_uncal[0].header['CHANNEL']
+            output_dir = select_miri_output_directory(uncal_path, target_name, channel_uncal, band_uncal)
+
+            new_name = os.path.basename(file).replace('uncal.fits', 'rate.fits')
+            out_name = os.path.join(output_dir, new_name)
+
+            rate_files.append(out_name)
+
+            if os.path.exists(out_name) and not overwrite:
+                print(f"Output file {out_name} already exists in output dir;\n\tskipping {file}.")
+            else:
+                det1 = Detector1Pipeline()  # Instantiate the pipeline
+                # defining used pipeline steps
+                # This version only shows the step parameters which are changes from defaults.
+                step_parameters = {
+                    # group_scale - run with defaults
+                    # dq_init - run with defaults
+                    'saturation': {'n_pix_grow_sat': 0},
+                    # check for saturated pixels, but do not expand to adjacent pixels
+                    # ipc - run with defaults
+                    # superbias - run with defaults
+                    # linearity - run with defaults
+                    'emicorr': {'skip': False},
+                    'persistence': {'skip': True},
+                    # This step does nothing; there are no nonzero parameters in the reference files yet
+                    'dark_current': {'skip': skip_dark},
+                    'jump': {'maximum_cores': maximum_cores},  # parallelize
+                    'ramp_fit': {'maximum_cores': maximum_cores},  # parallelize
+                    # gain_scale : run with defaults
+                }
+
+                det1.call(file, save_results=True, output_dir=output_dir,
+                          steps=step_parameters)
+
+    # Print out the time benchmark
+    time1 = time.perf_counter()
+
+    print(f"Total Runtime: {time1 - time0:0.4f} seconds")
+
+    return rate_files, target_names
+
+def run_bkg_subtraction(uncal_path, target_name, list_bands=None, overwrite=False):
+    if list_bands is None:
+        list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
+
+    for band in list_bands:
+        output_dir = os.path.join(uncal_path, target_name, band, 'stage1_sub_bkg')
+        mkdir_miri_files(output_dir)
+        background_outputdir = os.path.join(uncal_path, target_name, band, 'master_bkg')
+        mkdir_miri_files(background_outputdir)
+        rate_files_all = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1'), filetype='rate.fits')
+
+        bkg_files = [f for f in rate_files_all if 'BACKGROUND' in fits.getheader(f)['OBSLABEL']
+                     or 'BKG' in fits.getheader(f)['OBSLABEL']]
+        rate_files = [f for f in rate_files_all if f not in bkg_files]
+
+        bkg_master = np.zeros((len(bkg_files), 1024, 1032))
+        for i, bkg_file in enumerate(bkg_files):
+            bkg_master[i, :, :] = fits.getdata(bkg_file)
+        bkg_master = np.nanmedian(bkg_master, axis=0)
+        plt.imshow(bkg_master, origin='lower')
+        plt.show()
+        fits.writeto(os.path.join(background_outputdir,f"background_master_{band}.fits"), bkg_master, overwrite=overwrite)
+
+        for fid, rate_file in enumerate(rate_files):
+            out_name = os.path.join(output_dir, os.path.basename(rate_file))
+            rate = fits.getdata(rate_file)
+            with fits.open(rate_file, mode="readonly") as hdu:
+                hdu_copy = fits.HDUList([hd.copy() for hd in hdu])
+                hdu_copy[1].data = rate - bkg_master
+                hdu_copy[0].header['BKG_SUB'] = 'CUSTOM'
+                hdu_copy.writeto(out_name, overwrite=overwrite)
+
+
+def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=None, flat_extended=False, bkg_sub=False,
+                         overwrite=False):
+    if list_bands is None:
+        list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
+
+    for band in list_bands:
+        mkdir_miri_files(os.path.join(uncal_path, target_name, band, 'stage1_flat'))
+
+    # Start a timer to keep track of runtime
+    time0 = time.perf_counter()
+    print(time0)
+
+    for band in list_bands:
+        if bkg_sub:
+            rate_files = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1_sub_bkg'), filetype='rate.fits')
+        else:
+            rate_files = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1'), filetype='rate.fits')
+        output_dir = os.path.join(uncal_path, target_name, band, 'stage1_flat')
+        rate_filtered_files = []
+        for fid, rate_file in enumerate(rate_files):
+            print(fid, rate_file)
+
+            out_name = os.path.join(output_dir, os.path.basename(rate_file))
+            rate_filtered_files.append(out_name)
+
+            if os.path.exists(out_name) and not overwrite:
+                print(f"Output file {out_name} already exists;\n\tskipping {rate_file}.")
+                continue
+
+            hdr = fits.getheader(rate_file)
+            detector = hdr['DETECTOR']
+            band = hdr['BAND']
+
+            if flat_path is None:
+                flat_path_rate = os.getenv("FLAT_PATH")
+                if output_dir is None:
+                    raise ValueError("No FLAT_PATH specified to apply the fringe flat")
+            else:
+                flat_path_rate = flat_path
+
+            print("Searching fringes flat files in:", flat_path_rate)
+
+            if detector == 'MIRIFUSHORT':
+                if band == 'SHORT':
+                    flat_path_rate = os.path.join(flat_path_rate, '12A')
+                elif band == 'MEDIUM':
+                    flat_path_rate = os.path.join(flat_path_rate, '12B')
+                elif band == 'LONG':
+                    flat_path_rate = os.path.join(flat_path_rate, '12C')
+                else:
+                    raise ValueError(f'Unsupported band for file: {rate_file} must be either SHORT, MEDIUM or LONG')
+                channel = 'CH2'
+
+            else:
+                if band == 'SHORT':
+                    flat_path_rate = os.path.join(flat_path_rate, '34A')
+                elif band == 'MEDIUM':
+                    flat_path_rate = os.path.join(flat_path_rate, '34B')
+                elif band == 'LONG':
+                    flat_path_rate = os.path.join(flat_path_rate, '34C')
+                else:
+                    raise ValueError(f'Unsupported band for file: {rate_file} must be either SHORT, MEDIUM or LONG')
+                channel = 'CH3'
+
+            best_flat, flat_name, std_min = best_flat_selection(rate_file, flat_path_rate, channel,
+                                                                flat_extended=flat_extended)
+            best_flat[np.isnan(best_flat)] = 1
+            rate_file_data = fits.getdata(rate_file)
+
+            with fits.open(rate_file, mode="readonly") as hdu:
+                hdu_copy = fits.HDUList([hd.copy() for hd in hdu])
+                hdu_copy[1].data = rate_file_data / best_flat
+                hdu_copy['ERR'].data /= best_flat
+                hdu_copy[0].header['S_FLAT'] = flat_name
+                hdu_copy[0].header['FLAT_STD_MIN'] = std_min
+
+                hdu_copy.writeto(out_name, overwrite=overwrite)
+                print(f"==> Wrote fringe-corrected file to {out_name}")
+
+def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=True, custom_bkg_sub=False, skip_cubes=True, skip_fringe=False,
+                    skip_residual_fringes=False,
+                    skip_flatfield=False, skip_straylight=True, overwrite=False):
+    if list_bands is None:
+        list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
+
+    for band in list_bands:
+        mkdir_miri_files(os.path.join(uncal_path, target_name, band, 'stage2'))
+
+    time0 = time.perf_counter()
+    print(time0)
+
+    cal_files = []
+    for band in list_bands:
+        if custom_flatted:
+            rate_file_band_path = os.path.join(uncal_path, target_name, band, 'stage1_flat')
+            print(f"Processing the custom flatted rate files in {rate_file_band_path} for stage 2.")
+        else:
+            if custom_bkg_sub:
+                rate_file_band_path = os.path.join(uncal_path, target_name, band, 'stage1_sub_bkg')
+                print(f"Processing the background subtracted rate files in {rate_file_band_path} for stage 2.")
+            else:
+                rate_file_band_path = os.path.join(uncal_path, target_name, band, 'stage1')
+                print(f"Processing the rate files in {rate_file_band_path} for stage 2.")
+
+        rate_files = find_files_to_process(rate_file_band_path, filetype='rate.fits')
+
+        for fid, rate_file in enumerate(rate_files):
+            print(fid, rate_file)
+
+            # Setting up steps and running the Spec2 portion of the pipeline.
+            outputdir = os.path.join(uncal_path, target_name, band, 'stage2')
+            out_name = os.path.join(outputdir, os.path.basename(rate_file).replace('rate.fits', 'cal.fits'))
+            cal_files.append(out_name)
+            if os.path.exists(out_name) and not overwrite:
+                print(f"Output file {out_name} already exists;\n\tskipping {rate_file}.")
+                continue
+
+            spec2 = Spec2Pipeline()
+            # spec2.output_dir = spec2_dir
+            step_parameters = {
+                # spec2.imprint_subtract.skip = False
+                # spec2.msa_flagging.skip = False
+                # # spec2.srctype.source_type = 'POINT'
+                # spec2.flat_field.skip = False
+                # spec2.pathloss.skip = False
+                # spec2.photom.skip = False
+                'straylight': {'skip': skip_straylight},
+                'flat_field': {'skip': skip_flatfield},
+                'fringe': {'skip': skip_fringe},
+                'residual_fringe': {'skip': skip_residual_fringes},
+                'cube_build': {'skip': skip_cubes},  # We do not want or need interpolated cubes
+                'extract_1d': {'skip': True},
+                # spec3.cube_build.coord_system = 'skyalign'
+            }
+            spec2.save_bsub = True
+
+            spec2.call(rate_file, save_results=True, output_dir=outputdir,
+                       steps=step_parameters)
+
+        # Print out the time benchmark
+        time1 = time.perf_counter()
+        print(f"Runtime so far: {time1 - time0:0.4f} seconds")
+
+    time1 = time.perf_counter()
+    print(f"Total Runtime: {time1 - time0:0.4f} seconds")
+    return cal_files
+
+
+def run_stage3_miri(uncal_path, target_name, list_bands=None, overwrite=False):
+    if list_bands is None:
+        list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
+    for band in list_bands:
+        outputdir = mkdir_miri_files(os.path.join(uncal_path, target_name, band, 'stage3'))
+        if os.path.exists(os.path.join(outputdir, f'Level3_ch{band[0]}-short_s3d.fits')) and overwrite is False:
+            print(f"Output file Level3_ch{band[0]}-short_s3d.fits already exists;\n\tskipping.")
+            continue
+
+        inputdir = os.path.join(uncal_path, target_name, band, 'stage2')
+
+        # Start a timer to keep track of runtime
+        time0 = time.perf_counter()
+        print(time0)
+        calfiles = find_files_to_process(inputdir, filetype='mirifushort_cal.fits')
+        sstring = calfiles  # cal_files_dir + '*cal.fits'
+        print(sstring)
+        calfiles = np.array(sorted(sstring))
+        print(calfiles)
+        sortfiles = sort_calfiles(calfiles)  # Split them up into bands
+        print('Found ' + str(len(calfiles)) + ' input files to process for stage 3')
+
+        asnlist = []
+        bands = ['12A', '12B', '12C', '34A', '34B', '34C']
+        for ii in range(0, len(sortfiles)):
+            thesefiles = sortfiles[ii]
+            ninband = len(thesefiles)
+            if (ninband > 0):
+                filename = 'l3asn-' + bands[ii] + '.json'
+                asnlist.append(filename)
+                writel3asn(thesefiles, filename, 'Level3')
+        print("asnlist", asnlist)
+
+        runspec3(asnlist[0], outputdir)
+
+
+def run_full_miri_default_pipeline(uncal_path, target_name, list_bands=None, overwrite=False):
+    run_stage1_miri(uncal_path, list_bands=list_bands, overwrite=overwrite, maximum_cores="1", skip_dark=False)
+    run_stage2_miri(uncal_path, target_name, list_bands=list_bands, custom_flatted=False, skip_cubes=False,
+                    skip_fringe=False, skip_residual_fringes=True, skip_flatfield=False, skip_straylight=False,
+                    overwrite=overwrite)
+    run_stage3_miri(uncal_path, target_name, list_bands=list_bands, overwrite=overwrite)
+
+    return 1
+
+
+# Define a useful function to write out a Lvl3 association file from an input list
+def writel3asn(files, asnfile, prodname, **kwargs):
+    # Define the basic association of science files
+    asn = afl.asn_from_list(files, rule=DMS_Level3_Base, product_name=prodname)
+    # Add any background files to the association
+    if ('bg' in kwargs):
+        print("bg in kwargs")
+        for bgfile in kwargs['bg']:
+            asn['products'][0]['members'].append({'expname': bgfile, 'exptype': 'background'})
+    # Write the association to a json file
+    _, serialized = asn.dump()
+    with open(asnfile, 'w') as outfile:
+        outfile.write(serialized)
+
+
+def sort_calfiles(files):
+    channel = []
+    band = []
+
+    for file in files:
+        hdr = (fits.open(file))[0].header
+        channel.append(hdr['CHANNEL'])
+        band.append(hdr['BAND'])
+    channel = np.array(channel)
+    band = np.array(band)
+
+    indx = np.where((channel == '12') & (band == 'SHORT'))
+    files12A = files[indx]
+    indx = np.where((channel == '12') & (band == 'MEDIUM'))
+    files12B = files[indx]
+    indx = np.where((channel == '12') & (band == 'LONG'))
+    files12C = files[indx]
+    indx = np.where((channel == '34') & (band == 'SHORT'))
+    files34A = files[indx]
+    indx = np.where((channel == '34') & (band == 'MEDIUM'))
+    files34B = files[indx]
+    indx = np.where((channel == '34') & (band == 'LONG'))
+    files34C = files[indx]
+
+    return files12A, files12B, files12C, files34A, files34B, files34C
+
+
+def runspec3(filename, outputdir):
+    # This initial setup is just to make sure that we get the latest parameter reference files
+    # pulled in for our files.  This is a temporary workaround to get around an issue with
+    # how this pipeline calling method works.
+    crds_config = Spec3Pipeline.get_config_from_reference('l3asn-12A.json')  # The exact asn file used doesn't matter
+    spec3 = Spec3Pipeline.from_config_section(crds_config)
+
+    spec3.output_dir = outputdir
+    spec3.save_results = True
+
+    spec3.master_background.skip = True  # Computes and subtracts a master background signal
+    spec3.outlier_detection.skip = False  # Identifies and flags any pixels with values that produce outliers in overlapping regions of cube space
+    spec3.mrs_imatch.skip = False  # Ensure that there are no jumps in the background between individual exposures
+    spec3.cube_build.skip = False  # Build the composite data cubes
+    spec3.extract_1d.skip = False  # Extract 1d spectra from the composite data cubes
+
+    spec3.process(filename)
+
+
+def best_flat_selection(cal_file, flat_dir, channel, flat_extended=False, save_png=True, full_output=False):
+    """ For MIRI, look at a selection of possible fringe flats and find the best match for a given science file
+
+    Parameters
+    ----------
+    cal_file
+    flat_dir
+    channel
+    flat_extended : bool
+        use the FLAT_EXTENDED extension, instead of regular FLAT?
+    save_png : bool
+        Save a PNG showing the fringes used to determine the best match
+    full_output : bool
+    """
+    hdu = fits.open(cal_file)
+    data = hdu[1].data
+
+    hdr = hdu[0].header
+    pattern_type = hdr['PATTTYPE']
+    dither_direction = hdr['DITHDIRC']
+    dither_numero = hdr['PATT_NUM']
+    band = hdr['BAND']
+
+    print(f"Band: {band}")
+
+    filenames = os.listdir(flat_dir)
+
+    std = []
+    file = []
+
+    brightest_col = column_median_max_channel(data, channel=channel)
+    print(f"Brightest column for Channel {channel}: {brightest_col}")
+    if save_png:
+        xlim = [450, 500]
+        plt.title(f"Best fringes flat pattern selection\nFor channel {channel} {band}, using brighest column: {brightest_col} ")
+        plt.xlabel("Row index")
+        plt.ylabel("Fringes transmission")
+        plt.xlim(*xlim)
+        plt.ylim([0.5, 1.5])
+        file_name = hdr['FILENAME']
+        col_data = data[:, brightest_col]
+        while np.any(np.isnan(col_data)):
+            import astropy
+            col_data = astropy.convolution.interpolate_replace_nans(col_data, kernel=[1,1,1])
+        continuum = gaussian_filter(col_data, sigma=8)
+        fringe_data = col_data / continuum
+        plt.plot(fringe_data, label='data')
+
+    for filename in filenames:
+        if filename.endswith(".fits"):
+            flat_hdu = fits.open(os.path.join(flat_dir, filename))
+            hdr_flat = flat_hdu[0].header
+
+            if flat_extended:
+                flat = flat_hdu['FLAT_EXTENDED'].data
+            else:
+                flat = flat_hdu['FLAT'].data
+
+            if hdr_flat['PATT_NUM'] == dither_numero and hdr_flat['PATTTYPE'] == pattern_type and hdr_flat[
+                'DITHDIRC'] == dither_direction and hdr_flat['BAND'] == band:
+                d_f = data[:, brightest_col] / flat[:, brightest_col]
+                d_f_hf = d_f - gaussian_filter(d_f, sigma=8)
+                fringe_residuals_std = np.nanstd(d_f_hf)
+                std.append(fringe_residuals_std)
+                file.append(filename)
+                print(filename, fringe_residuals_std)
+
+                if save_png:
+                    if std[-1] < 40:
+                        plt.plot(flat[:, brightest_col], label=filename)
+            flat_hdu.close()
+
+    idx = np.nanargmin(std)
+    std_min = np.nanmin(std)
+    flat_name = file[idx]
+    print("Flat selected:", flat_name)
+
+    if save_png:
+        plt.text(0.05, 0.05, "Flat selected: "+flat_name, transform=plt.gca().transAxes)
+        plt.legend()
+        plt.tight_layout()
+        out_name = f"./fig_fringes_{os.path.splitext(os.path.basename(file_name))[0]}.png"
+
+        plt.savefig(out_name)
+        print(f"==> Plot saved to {out_name}")
+        plt.close()
+
+    hdu_best_flat = fits.open(os.path.join(flat_dir, flat_name))
+    if flat_extended:
+        best_flat = hdu_best_flat['FLAT_EXTENDED'].data
+    else:
+        best_flat = hdu_best_flat['FLAT'].data
+    if full_output:
+        return best_flat, flat_name, std_min, file, std
+    else:
+        return best_flat, flat_name, std_min
+
+def column_median_max(mat):
+    medianes = np.nanmedian(mat, axis=0)
+    col_index = np.nanargmax(medianes)
+    return col_index
+
+
+def column_median_max_channel(data, channel='CH1'):
+    if channel == 'CH1' or channel == 'CH4':
+        brightest_col = column_median_max(data[:, :500])
+    elif channel == 'CH2' or channel == 'CH3':
+        brightest_col = column_median_max(data[:, 500:]) + 500
+    else:
+        raise ValueError('Channel must be CH1, CH2, CH3 or CH4')
+
+    return brightest_col
+
+## Breads function functions for miri
+
+def compute_coordinates_offset(path_cal_files, channel, utils_dir, target_name=None, IWA=None, OWA=None):
+    from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+    from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
+    from breads.instruments.jwstmiri_cal import get_contnorm_spec_miri
+
+    if not os.path.exists(utils_dir):
+        os.makedirs(utils_dir)
+
+    def find_observation_numbers(cal_files):
+        observation_numbers = []
+        for filename in cal_files:
+            base = os.path.basename(filename).split('_')[0]
+            observation_number = base[-6:-3]
+            if observation_number not in observation_numbers:
+                observation_numbers.append(observation_number)
+        return observation_numbers
+
+    cal_files = find_files_to_process(path_cal_files, filetype="cal.fits")
+    observation_numbers = find_observation_numbers(cal_files)
+
+    print('Observation numbers:', observation_numbers)
+    coords_offset = []
+    for observation_number in observation_numbers:
+        dataobj_list = []
+        for filename in cal_files:
+            base = os.path.basename(filename).split('_')[0]
+            obs_number_file = base[-6:-3]
+            print(filename, 'Observation number:', obs_number_file)
+            if obs_number_file == observation_number:
+                print('yes', filename)
+
+                preproc_task_list = []
+                preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 10, "mad_threshold": 20}, True, True])
+                if target_name is not None:
+                    preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}])
+                else:
+                    preproc_task_list.append(["compute_coordinates_arrays"])
+                preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
+                preproc_task_list.append(["compute_quick_webbpsf_model"])
+
+                dataobj = JWSTMiri_cal(filename, channel_reduction=channel, utils_dir=utils_dir,
+                                       save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
+
+                dataobj_list.append(dataobj)
+        dataobj_combined = JWSTMiri_multiple_cals(dataobj_list)
+        ra_offset, dec_offset = dataobj_combined.compute_new_coords_from_webbPSFfit(IWA=IWA, OWA=OWA)
+        print(observation_number, ra_offset, dec_offset)
+        coords_offset.append([observation_number, ra_offset, dec_offset])
+
+    return coords_offset
+
+
+def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coords_offset=(0, 0),
+                                             wv_nodes=None, target_name=None,
+                                             star_hf_subtraction=True, mppool=None,
+                                             ra_dec_point_sources=None, overwrite=False):
+    from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+    from breads.instruments.jwstmiri_cal import get_contnorm_spec_miri
+
+    if not os.path.exists(utils_dir):
+        os.makedirs(utils_dir)
+
+    hdulist_sc = fits.open(cal_files[0])
+    detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
+
+    hdulist_sc.close()
+
+    splitbasename = os.path.basename(cal_files[0]).split("_")
+    combined_contnorm_spec_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[
+        1] + "_" + detector + "_starspec_contnorm_combined_1dspline.fits")
+
+    if not overwrite:
+        if len(glob(combined_contnorm_spec_filename)):
+            with fits.open(combined_contnorm_spec_filename) as hdulist:
+                new_wavelengths = hdulist[0].data
+                combined_fluxes = hdulist[1].data
+                combined_errors = hdulist[2].data
+                combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False,
+                                              fill_value=1)
+            return combined_star_func
+
+    dataobj_list = []
+    for filename in cal_files:
+        print(filename)
+
+        preproc_task_list = []
+        preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 10, "mad_threshold": 20}, True, True])
+        if target_name is not None:
+            preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}])
+        else:
+            preproc_task_list.append(["compute_coordinates_arrays"])
+        preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
+        preproc_task_list.append(["compute_quick_webbpsf_model"])
+        preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
+        preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
+                                                                    "threshold_badpix": 100,
+                                                                    "mppool": mppool, "star_hf_subtraction":star_hf_subtraction}, True, True])
+        preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d",
+                                                              "threshold_badpix": 10,
+                                                              "mppool": mppool}, True, True])
+
+        dataobj = JWSTMiri_cal(filename, channel_reduction=channel, utils_dir=utils_dir,
+                               save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
+
+        # mask planets before computing the star spectrum
+        if ra_dec_point_sources is not None:
+            for ra_pl, dec_pl in ra_dec_point_sources:
+                where_pl = where_point_source(dataobj, [ra_pl / 1000., dec_pl / 1000.], 0.16)
+                dataobj.bad_pixels[where_pl] = np.nan
+
+        dataobj_list.append(dataobj)
+
+    new_wavelengths, combined_fluxes, combined_errors = get_contnorm_spec_miri(dataobj_list, spline2d=False,
+                                                                               load_utils=False,
+                                                                               out_filename=combined_contnorm_spec_filename,
+                                                                               spec_R_sampling=2700 * 4,
+                                                                               interpolation="linear")
+    if star_hf_subtraction:
+        combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+    else:
+        combined_star_func = interp1d(np.arange(0, 30, 100), np.ones_like(np.arange(0, 30, 100)), kind="linear",
+                                  bounds_error=False, fill_value=1)
+
+    return combined_star_func
+
+def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, wv_nodes=None, target_name=None,
+                                       combined_star_func=None, star_hf_subtraction=True, coords_offset=(0, 0), mppool=None):
+    from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+
+    dataobj_list = []
+    for filename in cal_files[0::]:
+        print(filename)
+
+        preproc_task_list = []
+        preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
+        preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}])
+        preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
+        preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
+        if combined_star_func is None:
+            preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
+                                                                        "threshold_badpix": 100,
+                                                                        "mppool": mppool, "star_hf_subtraction":star_hf_subtraction}, True, True])
+
+        dataobj = JWSTMiri_cal(filename, channel_reduction=channel, utils_dir=utils_dir,
+                               save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
+
+        if combined_star_func is not None:
+            if star_hf_subtraction:
+                dataobj.reload_starspectrum_contnorm()
+            else:
+                combined_star_func = interp1d(np.arange(0,30,100), np.ones_like(np.arange(0,30,100)), kind="linear", bounds_error=False, fill_value=1)
+            dataobj.star_func = combined_star_func
+
+        outputs = dataobj.reload_starsubtraction()
+
+        if outputs is None:
+            outputs = dataobj.compute_starsubtraction(save_utils=True, starsub_dir="starsub1d",
+                                                      threshold_badpix=10, mppool=mppool)
+        dataobj_list.append(dataobj)
+
+    return dataobj_list
+
+def get_combined_regwvs_miri(dataobj_list, channel, wv_sampling=None, use_starsub1d=False, reload=False):
+    from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+    from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
+
+    regwvs_dataobj_list = []
+    for dataobj in dataobj_list:
+
+        if use_starsub1d:
+            starsub_filename = os.path.join(dataobj.utils_dir, "starsub1d", os.path.basename(dataobj.filename))
+            print("starsub1d path for combined regwvs miri:", starsub_filename)
+            starsub_dataobj = JWSTMiri_cal(starsub_filename, channel_reduction=channel, utils_dir=dataobj.utils_dir)
+            if dataobj.data_unit == 'MJy':
+                replace_data = dataobj.convert_MJy_per_sr_to_MJy(data_in_MJy_per_sr=starsub_dataobj.data)
+            elif dataobj.data_unit == "MJy/sr":
+                replace_data = starsub_dataobj.data
+            regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"].replace("_regwvs.fits",
+                                                                                             "_starsub1d_regwvs.fits")
+        else:
+            replace_data = None
+            regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"]
+        print("regwvs path for combined regwvs miri:", regwvs_filename)
+        if reload == True:
+            regwvs_dataobj = dataobj.reload_interpdata_regwvs(load_filename=regwvs_filename)
+        else:
+            regwvs_dataobj = None
+
+        if regwvs_dataobj is None:
+            print("[DEBUG] get combined regwvs miri checking wv_sampling", wv_sampling.shape)
+            regwvs_dataobj = dataobj.compute_interpdata_regwvs(save_utils=regwvs_filename, wv_sampling=wv_sampling,
+                                                               replace_data=replace_data)
+        regwvs_dataobj_list.append(regwvs_dataobj)
+
+    regwvs_combdataobj = JWSTMiri_multiple_cals(regwvs_dataobj_list)
+
+    return regwvs_combdataobj
