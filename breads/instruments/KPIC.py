@@ -298,14 +298,16 @@ def get_fib_labels(header):
 #     else:
 #         return np.array(sf_id_list)[np.array(sf_num_list,dtype=np.float).argsort()]
 
-def prepare_all_data(date, file_numbers, fiber_list, datadir, trace_filename, wvs_filename, orders, bkgdsub=True):
+
+def prepare_all_data(date, file_numbers, fiber_list, datadir, trace_filename,
+                     wvs_filename, orders, bkgdsub=True):
     """
     Prepares KPIC data objects segregated by science fiber number.
-    
+
     This function identifies all discrete science fiber numbers from the fiber_list,
     groups the corresponding file numbers, and creates separate data objects for each fiber.
     Science fibers are indexed from 0.
-    
+
     Parameters
     ----------
     date : str
@@ -326,20 +328,20 @@ def prepare_all_data(date, file_numbers, fiber_list, datadir, trace_filename, wv
     bkgdsub : bool, optional
         If True, use background-subtracted files (bkgdsub), else use nodding subtraction (nodsub).
         Default is True.
-    
+
     Returns
     -------
     dict
         Dictionary of KPIC data objects keyed by fiber number (0–3).
         Only fibers with associated files are included.
-    
+
     Examples
     --------
     >>> # Example with files for fibers 0 and 2
     >>> fiber_list = [0, 0, 2, 2, 0]
     >>> file_numbers = [100, 101, 102, 103, 104]
-    >>> data_objects = prepare_all_data('20210101', file_numbers, fiber_list, 
-    ...                                  '/data/', 'trace.fits', 'wvs.fits', [5,6,7])
+    >>> data_objects = prepare_all_data('20210101', file_numbers, fiber_list,
+    ...                                  '/data/', 'trace.fits', 'wvs.fits', [5, 6, 7])
     >>> # Returns: {0: <KPIC obj with files 100,101,104>, 2: <KPIC obj with files 102,103>}
     """
     fiber_dataobjs = {}
@@ -349,7 +351,7 @@ def prepare_all_data(date, file_numbers, fiber_list, datadir, trace_filename, wv
 
     # Identify all discrete science fiber numbers present in the data
     unique_fibers = np.unique(fiber_list)
-    
+
     for fiber in unique_fibers:
         # Find all indices corresponding to this science fiber
         indices = np.where(fiber_list == fiber)[0]
@@ -366,7 +368,8 @@ def prepare_all_data(date, file_numbers, fiber_list, datadir, trace_filename, wv
 
         # Create data object for this fiber with all its associated files
         fiber_goal_list = [fiber] * len(filelist)
-        dataobj = KPIC(filelist, trace_filename, wvs_filename, combine_mode="companion", fiber_goal_list=fiber_goal_list)
+        dataobj = KPIC(filelist, trace_filename, wvs_filename,
+                       combine_mode="companion", fiber_goal_list=fiber_goal_list)
         dataobj = dataobj.selec_order(orders)
         fiber_dataobjs[fiber] = dataobj
 
@@ -374,15 +377,19 @@ def prepare_all_data(date, file_numbers, fiber_list, datadir, trace_filename, wv
 
 
 # Backward compatibility alias
-def prep_data_object(date, file_numbers, fiber_list, datadir, trace_filename, wvs_filename, orders, bkgdsub=True):
+def prep_data_object(date, file_numbers, fiber_list, datadir, trace_filename,
+                     wvs_filename, orders, bkgdsub=True):
     """
     Deprecated: Use prepare_all_data() instead.
-    
+
     This function is kept for backward compatibility and simply calls prepare_all_data().
     """
-    return prepare_all_data(date, file_numbers, fiber_list, datadir, trace_filename, wvs_filename, orders, bkgdsub)
+    return prepare_all_data(date, file_numbers, fiber_list, datadir,
+                            trace_filename, wvs_filename, orders, bkgdsub)
 
-def prep_host_object(date, file_numbers, fiber_list, datadir, trace_filename, wvs_filename, orders, bkgdsub = True):
+
+def prep_host_object(date, file_numbers, fiber_list, datadir, trace_filename,
+                     wvs_filename, orders, bkgdsub=True):
     """
     Prepares a data object for the given file numbers and fiber.
     """
@@ -392,11 +399,13 @@ def prep_host_object(date, file_numbers, fiber_list, datadir, trace_filename, wv
             filelist.append(os.path.join(datadir, f"nspec{date}_{filenum:04d}_bkgdsub_spectra.fits"))
         else:
             filelist.append(os.path.join(datadir, f"nspec{date}_{filenum:04d}_nodsub_spectra.fits"))
-    
+
     dataobj = KPIC(filelist, trace_filename, wvs_filename, combine_mode="star", fiber_goal_list=fiber_list)
     return dataobj.selec_order(orders)
 
-def prep_A0_object(date, file_numbers, fiber_list, datadir, trace_filename, wvs_filename, orders, bkgdsub = True):
+
+def prep_A0_object(date, file_numbers, fiber_list, datadir, trace_filename,
+                   wvs_filename, orders, bkgdsub=True):
     """
     Prepares a data object for the given file numbers and fiber.
     """
@@ -406,6 +415,6 @@ def prep_A0_object(date, file_numbers, fiber_list, datadir, trace_filename, wvs_
             filelist.append(os.path.join(datadir, f"nspec{date}_{filenum:04d}_bkgdsub_spectra.fits"))
         else:
             filelist.append(os.path.join(datadir, f"nspec{date}_{filenum:04d}_nodsub_spectra.fits"))
-    
+
     dataobj = KPIC(filelist, trace_filename, wvs_filename, combine_mode="star", fiber_goal_list=fiber_list)
     return dataobj.selec_order(orders)
