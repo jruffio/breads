@@ -355,8 +355,6 @@ def prepare_all_data(date, file_numbers, fiber_list, datadir, trace_filename,
     for fiber in unique_fibers:
         # Find all indices corresponding to this science fiber
         indices = np.where(fiber_list == fiber)[0]
-        if len(indices) == 0:
-            continue
 
         print(f"Science fiber {fiber} has {len(indices)} files")
         filelist = []

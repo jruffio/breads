@@ -30,31 +30,27 @@ def test_fiber_segregation_logic():
     # Fiber 1: files 105, 106
     # Fiber 2: files 102, 103
 
-    # We can verify the fiber list to array conversion works
-    fiber_list_converted = np.array(fiber_list)
-    file_numbers_converted = np.array(file_numbers)
-
     # Check unique fibers
-    unique_fibers = np.unique(fiber_list_converted)
+    unique_fibers = np.unique(fiber_list)
     assert len(unique_fibers) == 3
     assert 0 in unique_fibers
     assert 1 in unique_fibers
     assert 2 in unique_fibers
 
     # Check fiber 0 indices
-    indices_fiber_0 = np.where(fiber_list_converted == 0)[0]
+    indices_fiber_0 = np.where(fiber_list == 0)[0]
     assert len(indices_fiber_0) == 3
-    assert np.array_equal(file_numbers_converted[indices_fiber_0], [100, 101, 104])
+    assert np.array_equal(file_numbers[indices_fiber_0], [100, 101, 104])
 
     # Check fiber 1 indices
-    indices_fiber_1 = np.where(fiber_list_converted == 1)[0]
+    indices_fiber_1 = np.where(fiber_list == 1)[0]
     assert len(indices_fiber_1) == 2
-    assert np.array_equal(file_numbers_converted[indices_fiber_1], [105, 106])
+    assert np.array_equal(file_numbers[indices_fiber_1], [105, 106])
 
     # Check fiber 2 indices
-    indices_fiber_2 = np.where(fiber_list_converted == 2)[0]
+    indices_fiber_2 = np.where(fiber_list == 2)[0]
     assert len(indices_fiber_2) == 2
-    assert np.array_equal(file_numbers_converted[indices_fiber_2], [102, 103])
+    assert np.array_equal(file_numbers[indices_fiber_2], [102, 103])
 
 
 def test_fiber_indexing_from_zero():
@@ -91,7 +87,7 @@ def test_single_fiber_single_file():
     assert len(unique_fibers) == 1
     assert unique_fibers[0] == 0
 
-    indices = np.where(np.array(fiber_list) == 0)[0]
+    indices = np.where(fiber_list == 0)[0]
     assert len(indices) == 1
     assert file_numbers[indices[0]] == 100
 
@@ -105,6 +101,6 @@ def test_all_files_same_fiber():
     assert len(unique_fibers) == 1
     assert unique_fibers[0] == 2
 
-    indices = np.where(np.array(fiber_list) == 2)[0]
+    indices = np.where(fiber_list == 2)[0]
     assert len(indices) == 4
     assert np.array_equal(file_numbers[indices], [100, 101, 102, 103])
