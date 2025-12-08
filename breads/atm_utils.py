@@ -171,7 +171,7 @@ class miniRGI():
         fnu = flam * (self.wavelength * u.um)**2 / const.c
         fMJy = fnu.to(u.MJy).value
         bandflux, _ = self.synphot.spectrum_to_flux(self.wavelength,fMJy.reshape(-1))
-        normflux = fMJy/bandflux
+        normflux = flam.value/bandflux
         
         return normflux
         
