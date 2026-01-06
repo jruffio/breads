@@ -39,6 +39,42 @@ def open_fm_outputs_miri(uncaldir, targetname, n_nodes, list_bands=None, compani
         plot_snr_maps(targetname, band, flux_dithers_array, noise_dithers_array, flux_combined, flux_error_combined, decs, ras, rvs, companion_offsets=companion_offsets, savefig=True)
         plot_chi2_maps(targetname, band, rchi2_dithers_array, decs, ras, rvs, companion_offsets=companion_offsets)
 
+def open_fm_outputs_nirspec(uncaldir, targetname, n_nodes, companion_offsets=None):
+    fm_outputs_path = os.path.join(uncaldir, targetname, f'fm_outputs_{n_nodes}_nodes')
+    print(fm_outputs_path)
+    list_fm_outputs = sort_by_dither_number(os.listdir(fm_outputs_path))
+    print(list_fm_outputs)
+    flux_dithers_array = []
+    noise_dithers_array = []
+    rchi2_dithers_array = []
+    for fm_output in list_fm_outputs:
+        if fm_output.endswith('.hdf5') or fm_output.endswith('.h5'):
+            flux_p, flux_error, rchi2, decs, ras, rvs = read_fm_outputs(os.path.join(fm_outputs_path, fm_output))
+
+            flux_dithers_array.append(flux_p)
+            noise_dithers_array.append(flux_error)
+            rchi2_dithers_array.append(rchi2)
+
+            flux_p[np.isnan(flux_p)] = 0
+            flux_error[np.isnan(flux_error)] = 0
+
+            plt.imshow(flux_p[0] / flux_error[0])
+            plt.show()
+            print(flux_p[0])
+            print(ras)
+
+    flux_dithers_array = np.array(flux_dithers_array)
+    noise_dithers_array = np.array(noise_dithers_array)
+    rchi2_dithers_array = np.array(rchi2_dithers_array)
+
+
+
+    flux_combined, flux_error_combined = combined_outputs(flux_dithers_array, noise_dithers_array, weighted=True)
+
+    plot_snr_maps_nirspec(targetname, flux_dithers_array, noise_dithers_array, flux_combined, flux_error_combined, decs,
+                  ras, rvs, companion_offsets=companion_offsets, savefig=True)
+    #plot_chi2_maps(targetname, band, rchi2_dithers_array, decs, ras, rvs, companion_offsets=companion_offsets)
+
 
 def sort_by_dither_number(file_list):
     """
@@ -333,3 +369,83 @@ def plot_ccf(ra_0, dec_0, ras, decs, rvs, flux_combined, flux_error_combined):
 
     plt.plot(rvs, corr_value)
     plt.show()
+
+
+def plot_snr_maps_nirspec(targetname, flux_p, flux_error, flux_combined, flux_error_combined, decs,
+                  ras, rvs, companion_offsets=None, vmin=-2, vmax=7, savefig=True, mark_star=True):
+    for k, rv in enumerate(rvs):
+        n_dithers = flux_p.shape[0]
+
+        ncols = 2
+        nrows = math.ceil(n_dithers / ncols)
+
+        fig, axes = plt.subplots(nrows, ncols, figsize=(10, 8))
+        fig.suptitle(f"{targetname} SNR maps, \n rv = {rv} km/s")
+
+        # Mettre axes en 1D pour itérer facilement
+        axes = np.atleast_1d(axes).ravel()
+
+        for index in range(n_dithers):
+            ax = axes[index]
+            snr_map = (flux_p[index, k] / flux_error[index, k]).T
+            im = ax.pcolormesh(ras, decs, snr_map, cmap='viridis', vmin=vmin, vmax=vmax)
+            ax.invert_xaxis()
+            ax.set_aspect('equal')
+            ax.set_title(f"dither #{index+1}")  # optional titles
+            # Add colorbar
+            cbar = fig.colorbar(im, ax=ax, shrink=1)
+            cbar.set_label('SNR', rotation=270, labelpad=10)
+
+            # Custom format_coord to display x,y,z
+            def format_coord(x_val, y_val, ras=ras, decs=decs, Z=snr_map):
+                col = np.searchsorted(ras, x_val) - 1
+                row = np.searchsorted(decs, y_val) - 1
+                if 0 <= col < Z.shape[1] and 0 <= row < Z.shape[0]:
+                    z = Z[row, col]
+                    return f"RA={x_val:.2f}, DEC={y_val:.2f}, SNR={z:.2f}"
+                else:
+                    return f"RA={x_val:.2f}, DEC={y_val:.2f}"
+            ax.format_coord = format_coord
+
+            annotate_plot_star_and_companions(ax, companion_offsets, mark_star)
+
+        # Set axis labels
+        axes = np.atleast_2d(axes)
+
+        # X label
+        for a in axes[-1, :]:
+            a.set_xlabel('Delta RA (")')
+
+        # Y label
+        for a in axes[:, 0]:
+            a.set_ylabel('Delta DEC (")')
+
+        plt.tight_layout()
+        plt.show()
+
+        # === Combined map ===
+        fig, ax = plt.subplots()
+        plt.xlabel('Delta RA (")')
+        plt.ylabel('Delta DEC (")')
+        plt.title(f"{targetname} combined SNR map, \n rv = {rv} km/s")
+        plt.gca().invert_xaxis()
+        snr_combined = (flux_combined[k] / flux_error_combined[k]).T
+        img = plt.pcolormesh(ras, decs, snr_combined, cmap='viridis')
+        ax.set_aspect('equal')
+        cbar = plt.colorbar()
+        cbar.set_label('SNR', rotation=270)
+
+        # Custom format_coord for combined
+        def format_coord(x_val, y_val, ras=ras, decs=decs, Z=snr_combined):
+            col = np.searchsorted(ras, x_val) - 1
+            row = np.searchsorted(decs, y_val) - 1
+            if 0 <= col < Z.shape[1] and 0 <= row < Z.shape[0]:
+                z = Z[row, col]
+                return f"RA={x_val:.2f}, DEC={y_val:.2f}, SNR={z:.2f}"
+            else:
+                return f"RA={x_val:.2f}, DEC={y_val:.2f}"
+        ax.format_coord = format_coord
+
+        annotate_plot_star_and_companions(ax, companion_offsets, mark_star)
+
+        plt.show()
