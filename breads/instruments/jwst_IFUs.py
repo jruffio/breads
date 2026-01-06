@@ -9,54 +9,37 @@ import astropy.io.fits as pyfits
 import matplotlib.pyplot as plt
 import matplotlib.tri as tri
 import numpy as np
-import scipy.linalg as la
-import stpsf as webbpsf
+
 from astropy import constants as const
 from astropy import units as u
 from astropy.stats import sigma_clip
 from scipy.interpolate import CloughTocher2DInterpolator, LinearNDInterpolator
 from scipy.interpolate import interp1d, splev, splrep
-from scipy.ndimage import generic_filter, median_filter
+from scipy.ndimage import generic_filter
 from scipy.optimize import minimize, curve_fit, lsq_linear
 from scipy.signal import convolve2d
 from scipy.stats import median_abs_deviation
 from tqdm import tqdm
 
 import breads.utils as utils
-from breads.instruments.instrument import Instrument
 from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_elements
 from breads.utils import get_spline_model
 
 
-class JWSTNirspec_cal(Instrument):
-    def __init__(self, filename=None, crds_dir=None, utils_dir=None, save_utils=True,
-                 load_utils=True,
-                 preproc_task_list = None,
-                 verbose=True, wv_ref=None):
-        """JWST NIRSpec 2D calibrated data.
+class JWST_IFUs:
+    def __init__(self, filename=None, utils_dir=None, verbose=True):
+        """JWST IFU 2D calibrated data class.
 
         #TODO write param docs
 
         Parameters
         ----------
         filename : str
-            Filename of a JWST cal file to load
-        crds_dir : str
-            Path to CRDS references directory
+            Filename of a single JWST cal file to load
         utils_dir : str
             Path to a "utils" directory to write intermediate data products
-        save_utils : bool
-            Save outputs into utils directory?
-        load_utils : bool
-            load [something??] from utils directory?
-        preproc_task_list : list of strings
-            Very complex. List of tasks to run on the data. See further docs below.
         verbose : bool
             Be more verbose in output?
-        wv_ref : float
-            Reference wavelength. If not set, the shortest wavelength will be used by default.
-
-
 
         About the "preproc_task_list" parameter. Each task should be a list containing:
             task[0] = the name of the class method
@@ -69,114 +52,129 @@ class JWSTNirspec_cal(Instrument):
                 Default to class load_utils if not defined for the task.
 
         """
-        super().__init__('jwstnirspec_cal', verbose=verbose)
+        self.bad_pixels = None
 
-        if filename is None:
+        self.dra_as_array = None
+        self.ddec_as_array = None
+        self.wavelengths = None
+        self.area2d = None
+        self.trace_id_map = None
+        self.coords = None
+
+
+        self.wv_sampling = None
+        self.opmode = None
+        self.webbpsf_spaxel_area = None
+        self.webbpsf_im = None
+        self.webbpsf_X = None
+        self.webbpsf_Y = None
+        self.webbpsf_wv0 = None
+        self.webbpsf_interp = None
+
+        self.leftnright_wavelengths = None
+
+        if filename is not None:
+            self.verbose = verbose
+            if self.verbose:
+                print(f"Reading data from {filename}")
+            self.filename = filename
+
+            if utils_dir is None:
+                self.utils_dir = os.path.dirname(self.filename)
+            else:
+                self.utils_dir = utils_dir
+
+            self.crds_dir = os.getenv('CRDS_PATH')
+            self.bary_RV = 0
+            self._init_read_fits()
+            self._init_default_names()
+            self._init_wcs(filename)
+        else:
             warning_text = "No data file provided. " + \
                            "Please manually add data or use JWSTNirspec.read_data_file()"
             warn(warning_text)
-        else:
-            self.read_data_file(filename, crds_dir=crds_dir, utils_dir=utils_dir, save_utils=save_utils,
-                                load_utils=load_utils,
-                                preproc_task_list=preproc_task_list, wv_ref=wv_ref)
 
-    def read_data_file(self, filename, crds_dir=None, utils_dir=None, save_utils=True,load_utils=True,
-                       preproc_task_list=None,wv_ref=None):
-        """Read JWST NIRSpec IFU 2D Cal file.  Also checks validity at the end
 
-        Parameters
-        ----------
-        wv_ref
-        filename
-        crds_dir
-        utils_dir
-        save_utils
-        load_utils
-        preproc_task_list
 
-        Returns
-        -------
 
+    def _init_read_fits(self):
         """
-        if self.verbose:
-            print(f"Reading data from {filename}")
-        self.filename = filename
-        if utils_dir is None:
-            self.utils_dir = os.path.dirname(self.filename)
-        else:
-            self.utils_dir = utils_dir
-        self.crds_dir = crds_dir
-
-        ## Part 1: Loading information from the FITS file and its header metadata
+        Init the JWST_IFUs class with reading the fits file
+        """
+        ## Part 1: Loading information from the FITS header metadata
         hdulist_sc = pyfits.open(self.filename)
         self.priheader = hdulist_sc[0].header
         self.extheader = hdulist_sc[1].header
-        self.data_unit = self.extheader["BUNIT"].strip() #MJy/sr or MJy
-        #high level decision flag
-        self.opmode = self.priheader["OPMODE"].strip() #"FIXEDSLIT" or "IFU"
+        self.data_unit = self.extheader["BUNIT"].strip()  # MJy/sr or MJy
+
+        ## Part 2: Loading information from the FITS data
         self.data = hdulist_sc["SCI"].data
-        rnoise_var = hdulist_sc["VAR_RNOISE"].data
-        pnoise_var = hdulist_sc["VAR_POISSON"].data
-        self.noise = np.sqrt(rnoise_var+pnoise_var)
+        readout_noise_var = hdulist_sc["VAR_RNOISE"].data
+        photon_noise_var = hdulist_sc["VAR_POISSON"].data
+        self.noise = np.sqrt(readout_noise_var + photon_noise_var)
         dq = hdulist_sc["DQ"].data
-        self.wavelengths = hdulist_sc["WAVELENGTH"].data
-        if wv_ref is not None:
-            self.wv_ref = wv_ref
-        else:
-            self.wv_ref = np.nanmin(self.wavelengths)
-        ny, nx = self.data.shape
         hdulist_sc.close()
 
+        ## Part 3: Creating bad pixels maps
         # Simplifying bad pixel map following convention in this package as: nan = bad, 1 = good
-        self.bad_pixels = np.ones((ny, nx))
+        self.bad_pixels = np.ones_like(self.data)
         # Pixels marked as "do not use" are marked as bad (nan = bad, 1 = good):
         self.bad_pixels[np.where(untangle_dq(dq, verbose=self.verbose)[0, :, :])] = np.nan
         self.bad_pixels[np.where(np.isnan(self.data))] = np.nan
-
-        if self.opmode == "FIXEDSLIT":  # and "S200A1" in self.priheader["FXD_SLIT"].strip():#self.priheader["DETECTOR"].strip() == "NRS2":
-            self.bad_pixels[np.where(self.wavelengths>5.125)] = np.nan
-
         # Removing any data with zero noise
         where_zero_noise = np.where(self.noise == 0)
         self.noise[where_zero_noise] = np.nan
         self.bad_pixels[where_zero_noise] = np.nan
 
         self.east2V2_deg = -(float(self.extheader["ROLL_REF"]) + float(self.extheader["V3I_YANG"]))
-        self.bary_RV = 0  # Already corrected in wavecal for JWST. float(self.extheader["VELOSYS"])/1000 # in km/s
-        self.R = 2700
+
+        try:
+            self.opmode = self.priheader["OPMODE"].strip()
+        except Exception:
+            print() #do nothing
 
 
+    def _init_default_names(self):
+        """
+        Init the JWST_IFUs class with default names for saving the intermediate outputs.
+        """
+        ## Part 4: Defining the default filenames for each intermediate output
         self.default_filenames = {}
+        basename = os.path.basename(self.filename)
         self.default_filenames["compute_med_filt_badpix"] = \
-                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_roughbadpix.fits"))
+            os.path.join(self.utils_dir, basename.replace(".fits", "_roughbadpix.fits"))
         self.default_filenames["compute_coordinates_arrays"] = \
-                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_relcoords.fits"))
-        splitbasename = os.path.basename(filename).split("_")
+            os.path.join(self.utils_dir, basename.replace(".fits", "_relcoords.fits"))
+        splitbasename = os.path.basename(self.filename).split("_")
         self.default_filenames["compute_webbpsf_model"] = \
-                os.path.join(self.utils_dir, splitbasename[0]+"_"+splitbasename[1]+"_"+splitbasename[3]+"_webbpsf.fits")
+            os.path.join(self.utils_dir,
+                         splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3] + "_webbpsf.fits")
         self.default_filenames["compute_quick_webbpsf_model"] = \
-                os.path.join(self.utils_dir, splitbasename[0]+"_"+splitbasename[1]+"_"+splitbasename[3]+"_quick_webbpsf.fits")
+            os.path.join(self.utils_dir,
+                         splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3] + "_quick_webbpsf.fits")
         self.default_filenames["compute_new_coords_from_webbPSFfit"] = \
-                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_newcen_wpsf.fits"))
-        self.default_filenames["compute_charge_bleeding_mask"] = \
-                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_barmask.fits"))
+            os.path.join(self.utils_dir, basename.replace(".fits", "_newcen_wpsf.fits"))
         self.default_filenames["compute_starspectrum_contnorm"] = \
-                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_starspec_contnorm.fits"))
-        self.default_filenames["compute_starspectrum_contnorm_2dspline"] = \
-                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_starspec_2dcontnorm.fits"))
+            os.path.join(self.utils_dir, basename.replace(".fits", "_starspec_contnorm.fits"))
         self.default_filenames["compute_starsubtraction"] = \
-                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_starsub.fits"))
-        self.default_filenames["compute_starsubtraction_2dspline"] = \
-                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_2dstarsub.fits"))
+            os.path.join(self.utils_dir, basename.replace(".fits", "_starsub.fits"))
         self.default_filenames["compute_interpdata_regwvs"] = \
-                os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_regwvs.fits"))
+            os.path.join(self.utils_dir, basename.replace(".fits", "_regwvs.fits"))
 
+    def _init_pipeline(self, save_utils=True, load_utils=True, preproc_task_list=None):
+        """
+        Init the JWST_IFUs class with pipeline tasks.
 
-        # Mini "pipeline-like" sequence, running a list of task (ie, methods) specified in preproc_task_list
-        if preproc_task_list is None:
-            preproc_task_list = []
-        for task in preproc_task_list:
-            # Each task should be a list containning:
+        Parameters
+        ----------
+
+        save_utils: bool
+            if True, save the intermediate outputs for each step in the preproc_task_list as a FITS file
+        load_utils: bool
+            if True, load the intermediate outputs, if it exists, for each step in the preproc_task_list
+        preproc_task_list:
+           prepocessing list of task to execute.
+            # Each task should be a list containing:
             # task[0] = the name of the class method
             # task[1] = a dictionary with any relevant method arguments (but not including save_utils, see task[2])
             # If not defined, it assumes no parameters are needed (task[1] = {}).
@@ -185,36 +183,53 @@ class JWSTNirspec_cal(Instrument):
             # If it is a string instead, it will be saved with the string as the filename.
             # task[3] = a boolean saying if we should attempt to load the data from the utils folder.
             # Default to class load_utils if not defined for the task.
+        """
+
+        # Mini "pipeline-like" sequence, running a list of task (ie, methods) specified in preproc_task_list
+        if preproc_task_list is None:
+            preproc_task_list = []
+        for task in preproc_task_list:
+
             task_name = task[0]
-            if len(task) >1:
+            if len(task) > 1:
                 dict_paras = task[1]
             else:
                 dict_paras = {}
-            if len(task) >2:
+            if len(task) > 2:
                 save_task = task[2]
             else:
                 save_task = save_utils
-            if len(task) >3:
+            if len(task) > 3:
                 load_task = task[3]
             else:
                 load_task = load_utils
 
-            #If save_task is not a string, the default filename is assumed
-            if isinstance(save_task,str):
+            # If save_task is not a string, the default filename is assumed
+            if isinstance(save_task, str):
                 task_out_filename = save_task
             else:
                 if task_name in self.default_filenames.keys():
                     task_out_filename = self.default_filenames[task_name]
                 else:
                     task_out_filename = None
+            if "compute_" in task_name:
+                if load_task and task_out_filename is not None and os.path.exists(task_out_filename):
+                    # Loading data instead because this task has already been done and it is available in the utils folder.
+                    if self.verbose:
+                        print(f"Loading data for {task_name} cached in {task_out_filename}")
 
-            if load_task and task_out_filename is not None and os.path.exists(task_out_filename):
-                # Loading data instead because this task has already been done and it is available in the utils folder.
-                if self.verbose:
-                    print(f"Loading data for {task_name} cached in {task_out_filename}")
+                    func = getattr(self, task_name.replace("compute_", "reload_"))
+                    func(load_filename=task_out_filename)
+                else:
+                    # Run task
+                    if self.verbose:
+                        print(f"Running {task_name} with parameters:")
+                        print(f"\t save_utils: {save_task}")
+                        for para_name in dict_paras.keys():
+                            print(f"\t {para_name}: {dict_paras[para_name]}")
 
-                func = getattr(self, task_name.replace("compute_","reload_"))
-                func(load_filename=task_out_filename)
+                    func = getattr(self, task_name)
+                    func(save_utils=save_task, **dict_paras)
             else:
                 # Run task
                 if self.verbose:
@@ -224,10 +239,12 @@ class JWSTNirspec_cal(Instrument):
                         print(f"\t {para_name}: {dict_paras[para_name]}")
 
                 func = getattr(self, task_name)
-                func(save_utils=save_task, **dict_paras)
+                func(**dict_paras)
 
-        self.valid_data_check()
-        return
+    def _init_wcs(self, filename):
+        """Hook to be implemented by subclasses"""
+        raise NotImplementedError
+
 
     def compute_med_filt_badpix(self, save_utils=False, window_size=50, mad_threshold=50, crop_Npix_from_trace_edges=0):
         """ Quick bad pixel identification.
@@ -268,31 +285,35 @@ class JWSTNirspec_cal(Instrument):
 
         if crop_Npix_from_trace_edges != 0:
             if hasattr(self, "trace_id_map"):
-                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges,trace_id_map=self.trace_id_map)
+                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges, trace_id_map=self.trace_id_map)
             else:
                 self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges)
 
         if save_utils:
-            if isinstance(save_utils, str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_med_filt_badpix"]
+            self._save_med_filt_badpix(save_utils, new_badpix)
 
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=new_badpix))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
-            if self.verbose:
-                print(f"  Saved the quick bad pixel map to {out_filename}")
         return new_badpix
+
+    def _save_med_filt_badpix(self, save_utils, new_badpix):
+        if isinstance(save_utils, str):
+            out_filename = save_utils
+        else:
+            out_filename = self.default_filenames["compute_med_filt_badpix"]
+
+        hdulist = pyfits.HDUList()
+        hdulist.append(pyfits.PrimaryHDU(data=new_badpix))
+        hdulist.writeto(out_filename, overwrite=True)
+        hdulist.close()
+        if self.verbose:
+            print(f"  Saved the quick bad pixel map to {out_filename}")
 
     def reload_med_filt_badpix(self, load_filename=None):
         """ Reload and apply bad pixel map from med_filt_badpix.
 
         Parameters
         ----------
-        load_filename
-
+        load_filename : str or None
+            Loading directory. If None, will use self.default_filenames["compute_med_filt_badpix"]
         Returns
         -------
         new_badpix : np.array
@@ -301,107 +322,53 @@ class JWSTNirspec_cal(Instrument):
         """
         if load_filename is None:
             load_filename = self.default_filenames["compute_med_filt_badpix"]
-        if len(glob(load_filename)) ==0:
+        if len(glob(load_filename)) == 0:
             return None
+
         with pyfits.open(load_filename) as hdulist:
             new_badpix = hdulist[0].data
+
         self.bad_pixels *= new_badpix
+
         return new_badpix
 
-    def compute_coordinates_arrays(self, save_utils=False, center_with_targname=True, from_other_filename =None, targname=None):
+    def compute_coordinates_arrays(self, save_utils=False, center_with_targname=True, from_other_filename=None, targname=None):
         """ Determine the relative coordinates in the focal plane relative to the target.
-        Compute the coordinates {wavelen, delta_ra, delta_dec, area} for each pixel in a 2D image
+        Compute the coordinates {wave, delta_ra, delta_dec, area2d} for each pixel in a 2D image
 
         Parameters
         ----------
-        targname
-        from_other_filename
-        center_with_targname
         save_utils : bool
             Save the computed coordinates into the utils directory
+        center_with_targname : bool
+            if True, compute the star relative coordinates.
+        from_other_filename : str or None
+            TODO : Is it still useful to keep this optional args? It feels like it was for testing purposes...
+        targname : str or None (optional)
+            The star name recognized by SIMBAD query.
+            if None, the target name is set accordingly to the "TARGNAME" keyword in .fits header
 
         Returns
         -------
-        wavelen_array: in microns
-        dra_as_array: in arcsec
-        ddec_as_array: in arcsec
-        area2d: in arcsec^2
+        wave_array: 2d array
+            Wavelength coordinate in detector space (microns)
+        dra_as_array: 2d array
+            Star relative RA coordinate in detector space (arcsec)
+        ddec_as_array: 2d array
+            Star relative DEC coordinate in detector space (arcsec)
+        area2d: 2d array
+            2D mapping of the pixel area (arcsec^2)
 
         """
-        from stdatamodels.jwst import datamodels
-        import jwst.assign_wcs
-        from jwst.photom.photom import DataSet
-        from gwcs import wcstools
+
         if self.verbose:
             print(f"Computing coordinates arrays.")
-
 
         if from_other_filename is None:
             hdulist = pyfits.open(self.filename) #open file
         else:
             hdulist = pyfits.open(from_other_filename) #open file
-
-        calfile = jwst.datamodels.open(hdulist) #save time opening by passing the already opened file
-        photom_dataset = DataSet(calfile)
-
-        # Compute 2D wavelength and pixel area arrays for the whole image
-        # Use WCS to compute RA, Dec for each pixel
-
-        self.trace_id_map = np.zeros(self.data.shape)+np.nan
-
-        if self.opmode == "FIXEDSLIT":
-            print('Using FixedSlit methods...')
-
-            pxarea_as2 = calfile.slits[0].meta.photometry.pixelarea_arcsecsq
-            area2d = np.ones(self.data.shape)*pxarea_as2 #constant area
-
-            if len(calfile.slits) != 1:
-                raise Exception("Multiple slits in data model not implemented.")
-            slitwcs = calfile.slits[0].meta.wcs
-            x, y = wcstools.grid_from_bounding_box(slitwcs.bounding_box, step=(1, 1), center=True)
-            ra_array, dec_array, wavelen_array = slitwcs(x, y)
-
-            self.trace_id_map[np.where(np.isfinite(ra_array))] = 0
-
-        elif self.opmode == "IFU":
-            ## Determine pixel areas for each pixel, retrieved from a CRDS reference file
-            area_fname = hdulist[0].header["R_AREA"].replace("crds://", os.path.join(self.crds_dir, "references", "jwst",
-                                                                                  "nirspec") + os.path.sep)
-            # Load the pixel area table for the IFU slices
-            area_model = datamodels.open(area_fname)
-            area_data = area_model.area_table
-
-            wave2d, area2d, dqmap = photom_dataset.calc_nrs_ifu_sens2d(area_data)
-            area2d[np.where(area2d == 1)] = np.nan
-            wcses = jwst.assign_wcs.nrs_ifu_wcs(calfile)  # returns a list of 30 WCSes, one per slice. This is slow.
-
-            #change this hardcoding?
-            ra_array = np.zeros(self.data.shape) + np.nan
-            dec_array = np.zeros(self.data.shape) + np.nan
-            wavelen_array = np.zeros(self.data.shape) + np.nan
-
-            print(f"Computing coords for {len(wcses)} slices...")
-            for i in tqdm(range(len(wcses)), total=len(wcses), ncols=100):
-
-                # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
-                xmin = max(int(np.round(wcses[i].bounding_box.intervals[0][0])), 0)
-                xmax = int(np.round(wcses[i].bounding_box.intervals[0][1]))
-                ymin = max(int(np.round(wcses[i].bounding_box.intervals[1][0])), 0)
-                ymax = int(np.round(wcses[i].bounding_box.intervals[1][1]))
-
-                x = np.arange(xmin, xmax)
-                x = x.reshape(1, x.shape[0]) * np.ones((ymax - ymin, 1))
-                y = np.arange(ymin, ymax)
-                y = y.reshape(y.shape[0], 1) * np.ones((1, xmax - xmin))
-
-                # Transform all those pixels to RA, Dec, wavelength
-                skycoords, speccoord = wcses[i](x, y, with_units=True)
-
-                ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
-                dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
-                wavelen_array[ymin:ymax, xmin:xmax] = speccoord
-
-                self.trace_id_map[ymin:ymax, xmin:xmax][np.where(np.isfinite(ra_array[ymin:ymax, xmin:xmax]))] = i
+            self._init_wcs(from_other_filename)
 
         if center_with_targname:
             # Calculate the updated SkyCoord object for the desired date
@@ -411,31 +378,49 @@ class JWSTNirspec_cal(Instrument):
             host_ra_deg = host_coord.ra.deg
             host_dec_deg = host_coord.dec.deg
 
-            dra_as_array = (ra_array - host_ra_deg) * 3600 * np.cos(np.radians(dec_array))
-            ddec_as_array = (dec_array - host_dec_deg) * 3600
+            dra_as_array = (self.ra_array - host_ra_deg) * 3600 * np.cos(np.radians(self.dec_array))
+            ddec_as_array = (self.dec_array - host_dec_deg) * 3600
         else:
-            dra_as_array = ra_array
-            ddec_as_array = dec_array
+            dra_as_array = self.ra_array
+            ddec_as_array = self.dec_array
+
+        self.dra_as_array = dra_as_array
+        self.ddec_as_array = ddec_as_array
+        self.coords = "sky"
 
         if save_utils:
-            if isinstance(save_utils,str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_coordinates_arrays"]
+            self._save_coordinates_arrays(save_utils)
 
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=wavelen_array))
-            hdulist.append(pyfits.ImageHDU(data=dra_as_array, name='DELTA_RA'))
-            hdulist.append(pyfits.ImageHDU(data=ddec_as_array, name='DELTA_DEC'))
-            hdulist.append(pyfits.ImageHDU(data=area2d, name='AREA2D'))
-            hdulist.append(pyfits.ImageHDU(data=self.trace_id_map, name='TRACE_ID_MAP'))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
-            if self.verbose:
-                print(f"  Saved the computed coordinates arrays to {out_filename}")
-        self.dra_as_array, self.ddec_as_array, self.area2d = dra_as_array, ddec_as_array, area2d
-        self.coords = "sky"
-        return wavelen_array, dra_as_array, ddec_as_array, area2d
+        return self.wavelengths, self.dra_as_array, self.ddec_as_array, self.area2d
+
+    def _compute_wcs(self, hdulist):
+        "Hook to be implemented by subclasses"
+        raise NotImplementedError
+
+    def _save_coordinates_arrays(self, save_utils):
+        """ Save the computed coordinates into the save utils directory.
+        This will save in a fits the relative coordinates in arcsec, the 2D pixelscale in arcsec^2 and the ID of the traces
+
+        Parameters
+        ----------
+        save_utils : str or None
+            directory to save the computed coordinates. If None, the coordinates are saved in default utils directory.
+        """
+        if isinstance(save_utils, str):
+            out_filename = save_utils
+        else:
+            out_filename = self.default_filenames["compute_coordinates_arrays"]
+
+        hdulist = pyfits.HDUList()
+        hdulist.append(pyfits.PrimaryHDU(data=self.wavelengths))
+        hdulist.append(pyfits.ImageHDU(data=self.dra_as_array, name='DELTA_RA'))
+        hdulist.append(pyfits.ImageHDU(data=self.ddec_as_array, name='DELTA_DEC'))
+        hdulist.append(pyfits.ImageHDU(data=self.area2d, name='AREA2D'))
+        hdulist.append(pyfits.ImageHDU(data=self.trace_id_map, name='TRACE_ID_MAP'))
+        hdulist.writeto(out_filename, overwrite=True)
+        hdulist.close()
+        if self.verbose:
+            print(f"  Saved the computed coordinates arrays to {out_filename}")
 
     def reload_coordinates_arrays(self, load_filename=None):
         """ Reload coordinates arrays
@@ -446,14 +431,15 @@ class JWSTNirspec_cal(Instrument):
         Parameters
         ----------
         load_filename : str or None
-            Filename to load coordiantes from. If not set, will use a default filena,e.
+            Filename to load coordinates from. If None, will use a default filename.
         """
         if load_filename is None:
             load_filename = self.default_filenames["compute_coordinates_arrays"]
         if len(glob(load_filename)) ==0:
             return None
+
         with pyfits.open(load_filename) as hdulist:
-            wavelen_array = hdulist[0].data
+            wave_array = hdulist[0].data
             dra_as_array = hdulist['DELTA_RA'].data
             ddec_as_array = hdulist['DELTA_DEC'].data
             area2d = hdulist['AREA2D'].data
@@ -461,16 +447,24 @@ class JWSTNirspec_cal(Instrument):
                 self.trace_id_map = hdulist['TRACE_ID_MAP'].data
             except KeyError:
                 print("Old reduction of coordinates. Could not find hdulist['TRACE_ID_MAP'].data. Please reprocess.")
+
         self.dra_as_array, self.ddec_as_array, self.area2d = dra_as_array, ddec_as_array, area2d
         self.coords = "sky"
-        return wavelen_array, dra_as_array, ddec_as_array, area2d
+        return wave_array, dra_as_array, ddec_as_array, area2d
 
     def set_coords2ifu(self):
         """ Set coordinate frame to IFU
         This is similar to the jwst pipeline 'ifualign' frame, with
         delta position in arcseconds in the IFU instrument axes frame
+
+        Returns
+        -------
+        ifuX : 2d array
+            X-Coordinate in IFU coordinates (arcsec)
+        ifuY
+            Y-Coordinate in IFU coordinates (arcsec)
         """
-        ifuX, ifuY = self.getifucoords()
+        ifuX, ifuY = self.get_ifu_coords()
         self.dra_as_array, self.ddec_as_array = ifuX, ifuY
         if "regwvs" in self.coords:
             self.coords = "ifu regwvs"
@@ -482,8 +476,15 @@ class JWSTNirspec_cal(Instrument):
         """ Set coordinate frame to sky
         This is similar to the jwst pipeline 'skyalign' frame, with
         delta position in arcseconds relative to the sky in ICRS RA, Dec coords.
+
+        Returns
+        -------
+        dra_as_array : 2d array
+            Star relative RA coordinates (arcsec)
+        ddec_as_array : 2d array
+            Star relative Dec coordinates (arcsec)
         """
-        dra_as_array, ddec_as_array = self.getskycoords()
+        dra_as_array, ddec_as_array = self.get_sky_coords()
         self.dra_as_array, self.ddec_as_array = dra_as_array, ddec_as_array
         if "regwvs" in self.coords:
             self.coords = "sky regwvs"
@@ -491,37 +492,36 @@ class JWSTNirspec_cal(Instrument):
             self.coords = "sky"
         return dra_as_array, ddec_as_array
 
-    def convert_MJy_per_sr_to_MJy(self, data_in_MJy_per_sr=None, save_utils=None, load_utils=None):
+    def convert_MJy_per_sr_to_MJy(self, data_in_MJy_per_sr=None):
         """
+        Convert MJy/steradian to MJy.
 
         Parameters
         ----------
         data_in_MJy_per_sr : ndarray, or None
-            Optional dta to convert. If provided, this will be converted.
+            Optional data to convert. If provided, this will be converted.
             If not provided, the self.data, self.noise, and self.data_unit attributes will be updated.
-        save_utils : None, unused
-            Unused, but present for API compatibility
-        load_utils : None, unused
-            Unused, but present for API compatibility
 
         Returns
         -------
-
+        TODO: is it still necessary to have data_in_MJy_per_sr as an argument? It feels like this not useful to convert data which doesn't belong to this class...
+        .data : 2d array
+            Data converted in MJy.
+        .noise: 2d array
+            Flux noise converted in MJy.
         """
         if data_in_MJy_per_sr is not None:
-            arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
-            return data_in_MJy_per_sr*(self.area2d*arcsec2_to_sr)
+            return data_in_MJy_per_sr * self.area2d
         else:
             if self.data_unit != "MJy/sr":
                 raise Exception("Data should in MJy/sr to be converted from MJy/sr to MJy")
 
-            arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
-            self.data = self.data*(self.area2d*arcsec2_to_sr)
-            self.noise = self.noise*(self.area2d*arcsec2_to_sr)
-            self.data_unit = "MJy"  # MJy/sr or MJy
-            return self.data,self.noise
+            self.data *= self.area2d
+            self.noise *= self.area2d
+            self.data_unit = "MJy"
+            return self.data, self.noise
 
-    def apply_coords_offset(self, coords_offset=None, save_utils=None, load_utils=None):
+    def apply_coords_offset(self, coords_offset=None):
         """ Offset coordinates in the class:
         self.dra_as_array -= coords_offset[0]
         self.ddec_as_array -= coords_offset[1]
@@ -534,10 +534,7 @@ class JWSTNirspec_cal(Instrument):
         ----------
         coords_offset: List
             (offset ra, offset dec) in arcsec
-        save_utils : bool
-            Unused, but needed for some reason for API compatibility when this gets called somewhere???
-        load_utils : bool
-            ditto??
+
 
         Returns
         -------
@@ -560,55 +557,8 @@ class JWSTNirspec_cal(Instrument):
         return self.dra_as_array, self.ddec_as_array
 
 
-    def reload_webbpsf_model(self, load_filename=None):
-        """ Reload a previously-computed WebbPSF model PSF from a FITS file
-
-        Parameters
-        ----------
-        load_filename : str
-            Optional filename to load. If not provided, a default filename will be used.
-
-        Returns
-        -------
-        wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
-
-        Also sets a whole bunch of object attributes.
-        """
-        if load_filename is None:
-            load_filename = self.default_filenames["compute_webbpsf_model"]
-        if len(glob(load_filename)) ==0:
-            return None
-
-        hdulist = pyfits.open(load_filename)
-
-        wpsfs = hdulist[0].data
-        wpsfs_header = hdulist[0].header
-        wepsfs = hdulist[1].data
-        webbpsf_wvs = hdulist[2].data
-        webbpsf_X = hdulist[3].data
-        webbpsf_Y = hdulist[4].data
-        wpsf_pixelscale = wpsfs_header["PIXELSCL"]
-        wpsf_oversample = wpsfs_header["oversamp"]
-
-        if not hasattr(self, "wv_sampling"):
-            self.wv_sampling = webbpsf_wvs
-
-        hdulist.close()
-        # Need to return a bunch of stuff here:
-
-        self.webbpsf_spaxel_area = wpsf_pixelscale ** 2
-        psf_wv0_id = np.argmin(np.abs(webbpsf_wvs-np.nanmedian(self.wavelengths)))
-        self.webbpsf_im = wepsfs[psf_wv0_id]#/np.nanmax(wepsfs[psf_wv0_id,:,:])
-        self.webbpsf_X = webbpsf_X
-        self.webbpsf_Y = webbpsf_Y
-        self.webbpsf_wv0 = webbpsf_wvs[psf_wv0_id]
-        wX, wY = rotate_coordinates(self.webbpsf_X.flatten(), self.webbpsf_Y.flatten(), -self.east2V2_deg, flipx=True)
-        self.webbpsf_interp = CloughTocher2DInterpolator((wX, wY), self.webbpsf_im.flatten(),fill_value=0.0)
-
-        return wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
-
-    def compute_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, parallelize=False, wv_sampling=None, save_utils=False, mppool=None):
-        """ Compute WebbPSF simulated PSFs for the NIRSpec IFU
+    def compute_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, fov_arcsec=6, parallelize=False, wv_sampling=None, save_utils=False, mppool=None):
+        """ Compute WebbPSF simulated PSFs for JWST IFU
 
         Parameters
         ----------
@@ -654,43 +604,41 @@ class JWSTNirspec_cal(Instrument):
         self.wv_sampling = wv_sampling
 
         nwavelen = np.size(wv_sampling)
-        nrs = webbpsf.NIRSpec()
-        nrs.load_wss_opd_by_date(self.priheader["DATE-BEG"])  # Load telescope state as of our observation date
-        nrs.image_mask = image_mask  # optional: model opaque field stop outside of the IFU aperture
-        nrs.pixelscale = pixelscale  # Optional: set this manually to match the drizzled cube sampling, rather than the default
-        # nrs.options["source_offset_x"] = source_offset_x
-        # nrs.options["source_offset_x"] = source_offset_y
+        IFU = self._get_webbpsf_model_inputs(image_mask, pixelscale)
+
         if not parallelize:
-            # wv_sampling = wv_sampling[0:10]
             if self.verbose:
                 print(f"\tPerforming serial calculation of PSF at {nwavelen} wavelengths.")
 
             outarr_not_created = True
             for wv_id, wv in tqdm(enumerate(wv_sampling), total=nwavelen, ncols=100):
-                paras = nrs, wv, oversample, self.opmode, parallelize
-                out = _get_wpsf_task(paras)
+                paras = IFU, wv, oversample, self.opmode, parallelize
+                out = _get_wpsf_task(paras, fov_arcsec=fov_arcsec)
                 if outarr_not_created:
                     wpsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
                     wepsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
                     outarr_not_created = False
                 wpsfs[wv_id, :, :] = out[0]
                 wepsfs[wv_id, :, :] = out[1]
+                if wv_id == 0:
+                    wpsfs_header = out[2] #save the webbpsf header of the first wavelength
+
         else: # Parallelized version
             if self.verbose:
                 print(f"\tPerforming parallelized calculation of PSF at {nwavelen} wavelengths.")
-            #we must prepare the nrs.pupilopd object to get pickled
+            #we must prepare the IFU.pupilopd object to get pickled
             import tempfile
             fp = tempfile.NamedTemporaryFile()
             temp_filename = fp.name
             print('Writing pupilopd tempfile : {}'.format(temp_filename))
-            nrs.pupilopd.writeto(temp_filename)  # save that FITS to disk
-            nrs.pupilopd = temp_filename         # the object is now a pickle-able string
+            IFU.pupilopd.writeto(temp_filename)  # save that FITS to disk
+            IFU.pupilopd = temp_filename         # the object is now a pickle-able string
 
             print('preparing parameter list...')
             paras_list = []
             for wv_id, wv in enumerate(wv_sampling):
                 rprint('{},{},{}'.format(wv_id, wv, nwavelen))
-                paras = nrs, wv, oversample, self.opmode, parallelize
+                paras = IFU, wv, oversample, self.opmode, parallelize
                 paras_list.append(paras)
             print('')
 
@@ -707,8 +655,9 @@ class JWSTNirspec_cal(Instrument):
 
             print('collating pool outputs...')
             out = pool_out[0]
-            wpsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
-            wepsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
+            wpsfs = np.zeros((nwavelen, *out[0].shape))
+            wepsfs = np.zeros((nwavelen, *out[0].shape))
+            wpsfs_header = out[2] #save the webbpsf header of the first wavelength
             for ind,out in enumerate(pool_out):
                 rprint(ind)
                 wpsfs[ind, :, :] = out[0]
@@ -724,29 +673,17 @@ class JWSTNirspec_cal(Instrument):
         y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[1], endpoint=True)
         webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
 
-        # TODO header needs fixing! Should save and include the actual webbpsf FITS header in the output.
-        wpsfs_header = {"PIXELSCL": pixelscale, "im_mask": image_mask,
+        wpsfs_additional_header = {"PIXELSCL": pixelscale, "im_mask": image_mask,
                         "oversamp": oversample, "DATE-BEG": self.priheader["DATE-BEG"]}
-        if save_utils:
-            if isinstance(save_utils,str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_webbpsf_model"]
+        wpsfs_header.update(wpsfs_additional_header)
 
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=wpsfs, header=pyfits.Header(cards=wpsfs_header)))
-            hdulist.append(pyfits.ImageHDU(data=wepsfs, name='EPSFS'))
-            hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WAVELEN'))
-            hdulist.append(pyfits.ImageHDU(data=webbpsf_X, name='X'))
-            hdulist.append(pyfits.ImageHDU(data=webbpsf_Y, name='Y'))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
-            if self.verbose:
-                print(f"  Saved the computed PSFs to {out_filename}")
+        if save_utils:
+            self._save_webbpsf_model(save_utils, wpsfs, wpsfs_header, wepsfs, wv_sampling, webbpsf_X, webbpsf_Y,
+                            quick=False)
 
         self.webbpsf_spaxel_area = pixelscale ** 2
         psf_wv0_id = np.argmin(np.abs(wv_sampling-np.nanmedian(self.wavelengths)))
-        self.webbpsf_im = wepsfs[psf_wv0_id]#/np.nanmax(wepsfs[psf_wv0_id,:,:])
+        self.webbpsf_im = wepsfs[psf_wv0_id]
         self.webbpsf_X = webbpsf_X
         self.webbpsf_Y = webbpsf_Y
         self.webbpsf_wv0 = wv_sampling[psf_wv0_id]
@@ -755,17 +692,184 @@ class JWSTNirspec_cal(Instrument):
 
         return wpsfs, wpsfs_header, wepsfs, wv_sampling, webbpsf_X, webbpsf_Y, oversample, pixelscale
 
+    def _save_webbpsf_model(self, save_utils, wpsfs, wpsfs_header, wepsfs, wv_sampling, webbpsf_X, webbpsf_Y,
+                            quick=False):
+        if isinstance(save_utils, str):
+            out_filename = save_utils
+        else:
+            if quick:
+                out_filename = self.default_filenames["compute_quick_webbpsf_model"]
+            else:
+                out_filename = self.default_filenames["compute_webbpsf_model"]
+
+        hdulist = pyfits.HDUList()
+        hdulist.append(pyfits.PrimaryHDU(data=wpsfs, header=pyfits.Header(cards=wpsfs_header)))
+        hdulist.append(pyfits.ImageHDU(data=wepsfs, name='EPSFS'))
+        if not quick:
+            hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WAVELEN'))
+        hdulist.append(pyfits.ImageHDU(data=webbpsf_X, name='X'))
+        hdulist.append(pyfits.ImageHDU(data=webbpsf_Y, name='Y'))
+        hdulist.writeto(out_filename, overwrite=True)
+        hdulist.close()
+        if self.verbose:
+            print(f"  Saved the computed PSFs to {out_filename}")
+
+    def reload_webbpsf_model(self, load_filename=None):
+        """ Reload a previously-computed WebbPSF model PSF from a FITS file
+
+        Parameters
+        ----------
+        load_filename : str
+            Optional filename to load. If not provided, a default filename will be used.
+
+        Returns
+        -------
+        wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
+
+        Also sets a whole bunch of object attributes.
+        """
+        if load_filename is None:
+            load_filename = self.default_filenames["compute_webbpsf_model"]
+        if len(glob(load_filename)) ==0:
+            return None
+
+        hdulist = pyfits.open(load_filename)
+
+        wpsfs = hdulist[0].data
+        wpsfs_header = hdulist[0].header
+        wepsfs = hdulist[1].data
+        webbpsf_wvs = hdulist[2].data
+        webbpsf_X = hdulist[3].data
+        webbpsf_Y = hdulist[4].data
+        wpsf_pixelscale = wpsfs_header["PIXELSCL"]
+        wpsf_oversample = wpsfs_header["oversamp"]
+
+        if not hasattr(self, "wv_sampling"):
+            self.wv_sampling = webbpsf_wvs
+
+        hdulist.close()
+        # Need to return a bunch of stuff here:
+
+        self.webbpsf_spaxel_area = wpsf_pixelscale ** 2
+        psf_wv0_id = np.argmin(np.abs(webbpsf_wvs-np.nanmedian(self.wavelengths)))
+        self.webbpsf_im = wepsfs[psf_wv0_id]
+        self.webbpsf_X = webbpsf_X
+        self.webbpsf_Y = webbpsf_Y
+        self.webbpsf_wv0 = webbpsf_wvs[psf_wv0_id]
+        wX, wY = rotate_coordinates(self.webbpsf_X.flatten(), self.webbpsf_Y.flatten(), -self.east2V2_deg, flipx=True)
+        self.webbpsf_interp = CloughTocher2DInterpolator((wX, wY), self.webbpsf_im.flatten(),fill_value=0.0)
+
+        return wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
+
+    def _get_webbpsf_model_inputs(self, image_mask, pixelscale):
+        """Hook to be implemented by subclasses"""
+        raise NotImplementedError
+
+    def _get_webbpsf_fit_inputs(self):
+        """
+        Hook to override if necessary, returns input for webbPSF fit
+        """
+        return (
+            np.copy(self.bad_pixels),
+            np.copy(self.data),
+            np.copy(self.noise),
+            np.copy(self.dra_as_array),
+            np.copy(self.ddec_as_array),
+            np.copy(np.abs(self.wavelengths - self.webbpsf_wv0)),
+        )
+
+    def compute_quick_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, fov_arcsec=6, save_utils=False):
+        """ Compute WebbPSF simulated PSFs at the MEDIAN WAVELENGTH ONLY for the JWST IFU.
+
+        Parameters
+        ----------
+        image_mask : str or None
+            image mask to use in webbpsf calculations. Default is None since we generally do not wish the edges of the
+            IFU aperture in the simulated PSF
+        pixelscale : float
+            Pixelscale to use for simulated PSF
+        oversample : int (default is 10)
+            Oversampling factor
+        fov_arcsec : float (default is 6)
+            Size of the FoV (arcsec)
+        save_utils : bool
+            Save in the utils directory
+
+        Returns
+        -------
+        wpsfs : 2d numpy array
+            OVERSAMP extension of the simulated webbPSF
+        wepsfs_header : fits.header
+            FITS header of the OVERSAMP webbPSF
+        wepsfs : 2d numpy array
+            OVERSAMP webbPSF smoothed by a gaussian kernel
+        webbpsf_X : 2d numpy array
+            X spatial coordinate of the webbPSF
+        webbpsf_Y : 2d numpy array
+            Y spatial coordinate of the webbPSF
+        oversample : int
+            Oversampling factor
+        IFU.pixelscale : float
+            Pixelscale used for simulated PSF
+
+        """
+
+        if self.verbose:
+            print("Computing PSFs. This has to iterate over many wavelengths, so is slow.")
+
+        self.webbpsf_wv0 = np.nanmedian(self.wavelengths)
+
+        IFU = self._get_webbpsf_model_inputs(image_mask, pixelscale)
+
+        paras = IFU, self.webbpsf_wv0, oversample, self.opmode, None
+        out = _get_wpsf_task(paras, fov_arcsec=fov_arcsec)
+        wpsfs = out[0] #webbpsf oversampled
+        wepsfs = out[1] #webbpsf oversampled + smoothing
+        wepsfs_header = out[2] #webbpsf header
+
+        wepsfs *= oversample ** 2
+
+        halffov_x = IFU.pixelscale / oversample * wpsfs.shape[1] / 2.0
+        halffov_y = IFU.pixelscale / oversample * wpsfs.shape[0] / 2.0
+        x = np.linspace(-halffov_x, halffov_x, wpsfs.shape[1], endpoint=True)
+        y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[0], endpoint=True)
+        webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
+
+        wepsfs_additional_header = {"PIXELSCL": IFU.pixelscale, "im_mask": image_mask,
+                        "oversamp": oversample, "DATE-BEG": self.priheader["DATE-BEG"],
+                        "WAVE": self.webbpsf_wv0}
+        wepsfs_header.update(wepsfs_additional_header)
+
+        if save_utils:
+            self._save_webbpsf_model(save_utils, wpsfs, wepsfs_header, wepsfs, self.webbpsf_wv0, webbpsf_X, webbpsf_Y,
+                            quick=True)
+
+        self.webbpsf_spaxel_area = IFU.pixelscale ** 2
+        self.webbpsf_im = wepsfs
+        self.webbpsf_X = webbpsf_X
+        self.webbpsf_Y = webbpsf_Y
+        wX, wY = rotate_coordinates(self.webbpsf_X.flatten(), self.webbpsf_Y.flatten(), -self.east2V2_deg, flipx=True)
+        self.webbpsf_interp = CloughTocher2DInterpolator((wX, wY), self.webbpsf_im.flatten(),fill_value=0.0)
+
+        return wpsfs, wepsfs_header, wepsfs, webbpsf_X, webbpsf_Y, oversample, IFU.pixelscale
 
     def reload_quick_webbpsf_model(self, load_filename=None):
         """ Reload a previously-computed quick WebbPSF model PSF from a FITS file
 
         Parameters
         ----------
-        load_filename
+        load_filename : str or None
+            FITS file name to reload the PSF from. If None, reloads the corresponding file in the default filenames.
 
         Returns
         -------
-
+            wpsfs
+            wpsfs_header
+            wepsfs
+            webbpsf_X
+            webbpsf_Y
+            wpsf_oversample
+            wpsf_pixelscale
         """
         if load_filename is None:
             load_filename = self.default_filenames["compute_quick_webbpsf_model"]
@@ -794,80 +898,6 @@ class JWSTNirspec_cal(Instrument):
         self.webbpsf_interp = CloughTocher2DInterpolator((wX, wY), self.webbpsf_im.flatten(),fill_value=0.0)
 
         return wpsfs, wpsfs_header, wepsfs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
-
-
-    def compute_quick_webbpsf_model(self, image_mask=None, pixelscale=0.1, oversample=10, save_utils=False):
-        """ Compute WebbPSF simulated PSFs at the MEDIAN WAVELENGTH ONLY for the NIRSpec IFU
-
-        Parameters
-        ----------
-        image_mask : str or None
-            image mask to use in webbpsf calculations. Default is None since we generally do not wish the edges of the
-            IFU aperture in the simulated PSF
-        pixelscale : float
-            Pixelscale to use for simulated PSF
-        oversample : int
-            Oversampling factor
-        save_utils : bool
-            Save in the utils directory
-
-        Returns
-        -------
-
-        """
-
-        if self.verbose:
-            print("Computing PSFs. This has to iterate over many wavelengths, so is slow.")
-
-        self.webbpsf_wv0 = np.nanmedian(self.wavelengths)
-
-        nrs = webbpsf.NIRSpec()
-        nrs.load_wss_opd_by_date(self.priheader["DATE-BEG"])  # Load telescope state as of our observation date
-        nrs.image_mask = image_mask  # optional: model opaque field stop outside of the IFU aperture
-        nrs.pixelscale = pixelscale  # Optional: set this manually to match the drizzled cube sampling, rather than the default
-        # nrs.options["source_offset_x"] = source_offset_x
-        # nrs.options["source_offset_x"] = source_offset_y
-
-        paras = nrs, self.webbpsf_wv0, oversample, self.opmode,None
-        out = _get_wpsf_task(paras)
-        wpsfs = out[0]
-        wepsfs = out[1]
-
-        wepsfs *= oversample ** 2
-
-        halffov_x = pixelscale / oversample * wpsfs.shape[1] / 2.0
-        halffov_y = pixelscale / oversample * wpsfs.shape[0] / 2.0
-        x = np.linspace(-halffov_x, halffov_x, wpsfs.shape[1], endpoint=True)
-        y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[0], endpoint=True)
-        webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
-
-        wpsfs_header = {"PIXELSCL": pixelscale, "im_mask": image_mask,
-                        "oversamp": oversample, "DATE-BEG": self.priheader["DATE-BEG"],
-                        "WAVE": self.webbpsf_wv0}
-        if save_utils:
-            if isinstance(save_utils,str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_quick_webbpsf_model"]
-
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=wpsfs, header=pyfits.Header(cards=wpsfs_header)))
-            hdulist.append(pyfits.ImageHDU(data=wepsfs, name='EPSFS'))
-            hdulist.append(pyfits.ImageHDU(data=webbpsf_X, name='X'))
-            hdulist.append(pyfits.ImageHDU(data=webbpsf_Y, name='Y'))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
-            if self.verbose:
-                print(f"  Saved the computed PSFs to {out_filename}")
-
-        self.webbpsf_spaxel_area = pixelscale ** 2
-        self.webbpsf_im = wepsfs
-        self.webbpsf_X = webbpsf_X
-        self.webbpsf_Y = webbpsf_Y
-        wX, wY = rotate_coordinates(self.webbpsf_X.flatten(), self.webbpsf_Y.flatten(), -self.east2V2_deg, flipx=True)
-        self.webbpsf_interp = CloughTocher2DInterpolator((wX, wY), self.webbpsf_im.flatten(),fill_value=0.0)
-
-        return wpsfs, wpsfs_header, wepsfs, webbpsf_X, webbpsf_Y, oversample, pixelscale
 
     def insert_psf_model(self, save_utils=False,centroid = None,OWA=None,spectrum_func=None,out_folder = "insert_psf",
                          mode=None):
@@ -903,8 +933,6 @@ class JWSTNirspec_cal(Instrument):
         model_im = np.full(self.data.shape,np.nan)
         model_im[where_finite] = model_vec
 
-        arcsec2_to_sr = (2. * np.pi / (360. * 3600.)) ** 2
-
         if save_utils:
             if isinstance(save_utils,str):
                 out_filename = save_utils
@@ -918,14 +946,14 @@ class JWSTNirspec_cal(Instrument):
             if bu == 'MJy':
                 hdulist_sc["SCI"].data = model_im
             if bu == 'MJy/sr':
-                hdulist_sc["SCI"].data = model_im/ (self.area2d * arcsec2_to_sr)
+                hdulist_sc["SCI"].data = model_im/ self.area2d
             hdulist_sc.writeto(out_filename, overwrite=True)
             hdulist_sc.close()
 
         if self.data_unit == 'MJy':
             return model_im
         elif self.data_unit == 'MJy/sr':
-            return model_im/ (self.area2d * arcsec2_to_sr)
+            return model_im/ self.area2d
 
     def compute_new_coords_from_webbPSFfit(self, save_utils=False,IWA=None,OWA=None,apply_offset=True):
         """ Update coordinates after fitting a webbPSF at the median wavelength of the data.
@@ -935,15 +963,22 @@ class JWSTNirspec_cal(Instrument):
 
         Parameters
         ----------
-        apply_offset
-        OWA
-        IWA
         save_utils : bool
-            Save in the utils directory
+            If True, save in the utils directory.
+        apply_offset : bool
+            If True, this applies the centroid offset estimated by the webbPSF fit to the RA and DEC coordinates.
+        IWA : float
+            Inner Working Angle, in arcsec. This boundary excludes the PSF core for the webbPSF fit. Useful if the PSF core is saturated.
+        OWA : float
+            Outer Working Angle, in arcsec. This boundary excludes the PSF wings for the webbPSF fit. Useful if the PSF wings are too noisy.
+
 
         Returns
         -------
-
+        ra_offset : float
+            returns the RA centroid offset (arcsec)
+        dec_offset : float
+            returns the DEC centroid offset (arcsec)
         """
         if IWA is None:
             IWA = 0
@@ -955,57 +990,80 @@ class JWSTNirspec_cal(Instrument):
         linear_interp=True
         init_paras = np.array([0,0])
 
-        mask = copy(self.bad_pixels)
-        diff_wv_map =  np.abs(self.wavelengths-self.webbpsf_wv0)
-        mask[np.where(diff_wv_map>np.nanmedian(self.wavelengths)/self.R)] = np.nan
-        allnans_rows = np.where(np.nansum(np.isfinite(diff_wv_map),axis=1)==0)
-        diff_wv_map[allnans_rows,:] = 0
-        # diff_wv_map[np.where(np.isnan(diff_wv_map))] = 0
-        argmin_ids = np.nanargmin(diff_wv_map,axis=1)
-        print(argmin_ids)
+        # HOOK
+        mask, data, noise, dra_as_array, ddec_as_array, diff_wv_map = self._get_webbpsf_fit_inputs()
 
-        paras = linear_interp, self.webbpsf_im, self.webbpsf_X, self.webbpsf_Y, self.east2V2_deg, True, \
-            self.dra_as_array[np.arange(self.data.shape[0]),argmin_ids] ,\
-            self.ddec_as_array[np.arange(self.data.shape[0]),argmin_ids], \
-            self.data[np.arange(self.data.shape[0]),argmin_ids],\
-            self.noise[np.arange(self.data.shape[0]),argmin_ids], \
-            mask[np.arange(self.data.shape[0]),argmin_ids], \
-            IWA, OWA, fit_cen, fit_angle, init_paras
+        mask[np.where(diff_wv_map > np.nanmedian(self.wavelengths) / self.R)] = np.nan
+
+        allnans_rows = np.where(np.nansum(np.isfinite(diff_wv_map), axis=1) == 0)
+        diff_wv_map[allnans_rows, :] = 0
+
+        argmin_ids = np.nanargmin(diff_wv_map, axis=1)
+
+        paras = (
+            linear_interp,
+            self.webbpsf_im,
+            self.webbpsf_X,
+            self.webbpsf_Y,
+            self.east2V2_deg,
+            True,
+            dra_as_array[:, argmin_ids],
+            ddec_as_array[:, argmin_ids],
+            data[:, argmin_ids],
+            noise[:, argmin_ids],
+            mask[:, argmin_ids],
+            IWA,
+            OWA,
+            fit_cen,
+            fit_angle,
+            init_paras,
+        )
+
         out, _ = _fit_wpsf_task(paras)
         ra_offset, dec_offset, angle_offset = out[0, 2::]
 
 
         if save_utils:
-            if isinstance(save_utils,str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_new_coords_from_webbPSFfit"]
-
-            wpsfs_header = {"RA_CEN": ra_offset, "DEC_CEN": dec_offset,"ANGLE": angle_offset}
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(header=pyfits.Header(cards=wpsfs_header)))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
-            if self.verbose:
-                print(f"  Saved the computed PSFs to {out_filename}")
+            self._save_new_coords_from_webbPSFfit(save_utils, ra_offset, dec_offset, angle_offset)
 
         if apply_offset:
             self.dra_as_array -= ra_offset
             self.ddec_as_array -= dec_offset
         return ra_offset, dec_offset
 
+    def _save_new_coords_from_webbPSFfit(self, save_utils, ra_offset, dec_offset, angle_offset):
+        """Save the estimated centroid of the PSF from the webbPSF fit."""
+
+        if isinstance(save_utils, str):
+            out_filename = save_utils
+        else:
+            out_filename = self.default_filenames["compute_new_coords_from_webbPSFfit"]
+
+        wpsfs_header = {"RA_CEN": ra_offset, "DEC_CEN": dec_offset, "ANGLE": angle_offset}
+        hdulist = pyfits.HDUList()
+        hdulist.append(pyfits.PrimaryHDU(header=pyfits.Header(cards=wpsfs_header)))
+        hdulist.writeto(out_filename, overwrite=True)
+        hdulist.close()
+        if self.verbose:
+            print(f"  Saved the computed PSFs to {out_filename}")
+
+
     def reload_new_coords_from_webbPSFfit(self, load_filename=None,apply_offset=True):
         """ Reapply a previously-computed centroid shift based a WebbPSF fit.
 
         Parameters
         ----------
-        apply_offset
         load_filename : str
             Filename of fits file to load
+        apply_offset : Boolean
+            If True, this applies the centroid offset to the RA and DEC coordinates.
 
         Returns
         -------
-
+        ra_offset : float
+            returns the RA centroid offset (arcsec)
+        dec_offset : float
+            returns the DEC centroid offset (arcsec)
         """
         if load_filename is None:
             load_filename = self.default_filenames["compute_new_coords_from_webbPSFfit"]
@@ -1022,113 +1080,68 @@ class JWSTNirspec_cal(Instrument):
             self.ddec_as_array -= dec_offset
         return ra_offset, dec_offset
 
-    def compute_charge_bleeding_mask(self, save_utils=False, threshold2mask=0.15):
-        """ Compute charge bleeding mask
-
-        Parameters
-        ----------
-        save_utils
-        threshold2mask
-
-        Returns
-        -------
-
-        """
-        if self.verbose:
-            print(f"Computing charge bleeding mask. Will save to {0}".format(self.default_filenames['compute_charge_bleeding_mask']))
-        ifuX, ifuY = self.getifucoords()
-
-        bar_mask = np.ones(self.bad_pixels.shape)
-        bar_mask[np.where(np.abs(ifuX) < threshold2mask)] = np.nan
-        if save_utils:
-            if isinstance(save_utils,str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_charge_bleeding_mask"]
-
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=bar_mask))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
-
-        self.bad_pixels *= bar_mask
-        return bar_mask
-
-    def reload_charge_bleeding_mask(self, load_filename=None):
-        """ Reload charge bleeding mask
-
-        Parameters
-        ----------
-        load_filename : str or None
-            Filename to load mask data from, or leave None to use default filename
-
-        Returns
-        -------
-        bar_mask : ndarray
-
-        Also modifies self.badpixels, by multiplying that times the bar_mask
-
-        """
-        if load_filename is None:
-            load_filename = self.default_filenames["compute_charge_bleeding_mask"]
-        if len(glob(load_filename)) ==0:
-            return None
-
-        hdulist = pyfits.open(load_filename)
-        bar_mask = hdulist[0].data
-        hdulist.close()
-
-        self.bad_pixels *= bar_mask
-        return bar_mask
-
-    def compute_starspectrum_contnorm(self,  save_utils=False,im=None, im_wvs=None, err=None, mppool=None,
+    def compute_starspectrum_contnorm(self,  save_utils=False, im=None, im_wvs=None, err=None, mppool=None,
                                       spec_R_sampling=None, threshold_badpix=10, x_nodes=None, N_nodes=40, iterative=True):
-        """ Compute star spectrum nurmalized by the continuum
+        """ Compute star spectrum normalized by the continuum
 
         Parameters
         ----------
-        save_utils
-        im
-        im_wvs
-        err
-        mppool
-        spec_R_sampling
-        threshold_badpix
-        x_nodes
-        N_nodes
-        iterative
+        save_utils : Boolean
+            Save the intermediate star subtraction step products.
+        im : str or None
+        TODO : Is it still useful to keep those optional args? It feels like it was for testing purposes...
+        im_wvs : str or None
+        TODO : same
+        err : str or None
+        TODO : same
+        mppool : multiprocessing.Pool or None (optional)
+            If None, the computation is done without parallelization.
+        spec_R_sampling : float or None (optional)
+            Spectral resolution to sample the continuum-normalized star spectrum
+            If None, the spectral resolution will be set to 4 times the instrumental spectral resolution of the IFU.
+        threshold_badpix : float (optional)
+            Hard threshold for bad pixel flagging. Thresholding is done by comparing the continuum normalized row with its median standard deviation.
+        x_nodes : 1d array or None (optional)
+            If x_nodes is specified, this wavelength spacing (in micron) will be used to do the splines fitting.
+            If None, N_nodes will set an evenly nodes spacing.
+        N_nodes : int or None (optional, default is 40)
+            Number of nodes to use for fitting splines for the continuum star spectrum estimation.
+        iterative : Boolean (optional)
+            If True, the fitting procedure is iteratively applied. It helps identifies potential additional bad pixels flagging and to have a better regularization.
 
         Returns
         -------
-        new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,x_nodes
+        new_wavelengths : 1d numpy array (N_wavelengths)
+            New wavelengths axis of the combined high-frequency star spectrum (micron)
+        combined_fluxes : 1d numpy array (N_wavelengths)
+            Combined high-frequency star spectrum (MJy or MJy/sr)
+        combined_errors : 1d numpy array (N_wavelengths)
+            Combined flux errors (MJy or MJy/sr)
+        spline_cont0 : 2d numpy array (N_detector_rows, N_detector_cols)
+            Star continuum fitted by splines for each spectral trace of the detector.
+        spline_paras0 : 2d numpy array (N_nodes, N_traces)
+            Linear parameters returned by the continuum spline fitting routine for each spectral trace of the detector.
+        x_nodes : 1d numpy array (N_nodes)
+            Nodes spacing in the wavelength dimension (in micron).
 
         """
-        if im is None:
-            im = self.data
-        if im_wvs is None:
-            im_wvs = self.wavelengths
-        if err is None:
-            err = self.noise
-        if spec_R_sampling is None:
-            spec_R_sampling = self.R*4
-        if x_nodes is None:
-            x_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), N_nodes, endpoint=True)
+        im, im_wvs, err, bad_pixels, spec_R_sampling, x_nodes = self._get_starspectrum_input(im, im_wvs, err, spec_R_sampling, x_nodes, N_nodes)
 
         if self.verbose:
             print(f"Computing stellar spectrum (continuum normalized)")
 
-        if 1:
-            reg_mean_map0 = np.zeros((self.data.shape[0], np.size(x_nodes)))
-            reg_std_map0 = np.zeros((self.data.shape[0], np.size(x_nodes)))
-            for rowid, row in enumerate(self.data):
-                row_bp = self.bad_pixels[rowid, :]
-                if np.nansum(np.isfinite(row * row_bp)) == 0:
-                    continue
-                reg_mean_map0[rowid, :] = np.nanmedian(row * row_bp)
-                reg_std_map0[rowid, :] = reg_mean_map0[rowid, :]
+
+        reg_mean_map0 = np.zeros((im.shape[0], np.size(x_nodes)))
+        reg_std_map0 = np.zeros((im.shape[0], np.size(x_nodes)))
+        for rowid, row in enumerate(im):
+            row_bp = bad_pixels[rowid, :]
+            if np.nansum(np.isfinite(row * row_bp)) == 0:
+                continue
+            reg_mean_map0[rowid, :] = np.nanmedian(row * row_bp)
+            reg_std_map0[rowid, :] = reg_mean_map0[rowid, :]
 
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
-                                                                              badpixs=self.bad_pixels,
+                                                                              badpixs=bad_pixels,
                                                                               x_nodes=x_nodes, mypool=mppool,
                                                                               threshold=threshold_badpix,
                                                                               use_set_nans=False,
@@ -1137,6 +1150,7 @@ class JWSTNirspec_cal(Instrument):
                                                                               reg_std_map=reg_std_map0)
         if iterative:
             reg_mean_map1 = copy(spline_paras0)
+            print(reg_mean_map0.shape, reg_mean_map1.shape)
             where_nan = np.where(np.isnan(reg_mean_map1))
             reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
             reg_std_map1 = np.abs(reg_mean_map1)
@@ -1148,38 +1162,105 @@ class JWSTNirspec_cal(Instrument):
                                                                                   reg_mean_map=reg_mean_map1,
                                                                                   reg_std_map=reg_std_map1)
 
-        continuum = copy(spline_cont0)
-        continuum[np.where(continuum / err < 5)] = np.nan
-        continuum[np.where(continuum < np.median(continuum))] = np.nan
-        continuum[np.where(np.isnan(self.bad_pixels))] = np.nan
-        normalized_im = im / continuum
-        normalized_err = err / continuum
+        continuum, normalized_im, normalized_err = self._get_masked_normalized_object(spline_cont0, im, err)
 
         new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
                                                                              normalized_im.flatten(),
                                                                              normalized_err.flatten(),
                                                                              np.nanmedian(im_wvs) / spec_R_sampling)
-
         if save_utils:
-            if isinstance(save_utils,str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_starspectrum_contnorm"]
-
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=new_wavelengths))
-            hdulist.append(pyfits.ImageHDU(data=combined_fluxes, name='COM_FLUXES'))
-            hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
-            hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
-            hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
-            hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
+            self._save_starspectrum_contnorm(save_utils, new_wavelengths, combined_fluxes, combined_errors,
+                                             spline_cont0, spline_paras0, x_nodes)
 
 
         self.x_nodes = x_nodes
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+
         return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,x_nodes
+
+
+    def _save_starspectrum_contnorm(self, save_utils, new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes):
+        """Save the continuum normalized star spectrum in a fits file.
+
+        Parameters
+        ----------
+        save_utils : str or None
+            Path to save the fits file. If None, the default directory will be used.
+        new_wavelengths : 1d array
+            Wavelength array in micron of the continuum normalized star spectrum.
+        combined_fluxes : 1d array
+            Flux array of the continuum normalized star spectrum. (without unit)
+        combined_errors : 1d array
+            Flux errors array of the continuum normalized star spectrum. (without unit)
+        spline_cont0 : 2d array (Nrows x Ncols)
+            Continuum fitted by splines for each trace.
+        spline_paras0 : 2d array (Nrows x N_nodes)
+            Splines best fit parameters for each trace.
+        x_nodes : 1d array
+            Nodes spacing in the wavelength dimension (in micron).
+
+        """
+        if isinstance(save_utils, str):
+            out_filename = save_utils
+        else:
+            out_filename = self.default_filenames["compute_starspectrum_contnorm"]
+
+        hdulist = pyfits.HDUList()
+        hdulist.append(pyfits.PrimaryHDU(data=new_wavelengths))
+        hdulist.append(pyfits.ImageHDU(data=combined_fluxes, name='COM_FLUXES'))
+        hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
+        hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
+        hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
+        hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
+        hdulist.writeto(out_filename, overwrite=True)
+        hdulist.close()
+
+    def _get_starspectrum_input(self, im, im_wvs, err, spec_R_sampling, x_nodes, N_nodes):
+        """Get inputs to compute the continuum normalized star spectrum."""
+
+        if im is None:
+            im = np.copy(self.data)
+        if im_wvs is None:
+            im_wvs = np.copy(self.wavelengths)
+        if err is None:
+            err = np.copy(self.noise)
+        if spec_R_sampling is None:
+            spec_R_sampling = self.R*4
+        if x_nodes is None:
+            x_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), N_nodes, endpoint=True)
+        bad_pixels = self.bad_pixels
+
+        return im, im_wvs, err, bad_pixels, spec_R_sampling, x_nodes
+
+    def _get_masked_normalized_object(self, continuum, im, err):
+        """Get the continuum normalized star spectrum.
+
+        Parameters
+        ----------
+        continuum : 2d array (Nrows x Ncols)
+            Fitted continuum for each trace.
+        im : 2d array (Nrows x Ncols)
+            Flux in MJy or MJy/sr.
+        err : 2d array (Nrows x Ncols)
+            Flux errors in MJy or MJy/sr.
+
+        Returns
+        -------
+        continuum : 2d array (Nrows x Ncols)
+            Fitted continuum for each trace with bad pixels and SNR mask.
+        normalized_spectrum : 2d array (Nrows x Ncols)
+            Continuum normalized 2d flux image.
+        normalized_errors : 2d array (Nrows x Ncols)
+            Continuum normalized 2d flux error image.
+         """
+
+        continuum = copy(continuum)
+        continuum[np.where(continuum / err < 5)] = np.nan
+        continuum[np.where(continuum < np.median(continuum))] = np.nan
+        continuum[np.where(np.isnan(self.bad_pixels))] = np.nan
+        normalized_im = im / continuum
+        normalized_err = err / continuum
+        return continuum, normalized_im, normalized_err
 
     def reload_starspectrum_contnorm(self, load_filename=None):
         """ Reload star spectrum normalized by continuum
@@ -1191,9 +1272,20 @@ class JWSTNirspec_cal(Instrument):
 
         Returns
         -------
-        new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,x_nodes
+        new_wavelengths : 1d numpy array (N_wavelengths)
+            New wavelengths axis of the combined high-frequency star spectrum (micron)
+        combined_fluxes : 1d numpy array (N_wavelengths)
+            Combined high-frequency star spectrum (MJy or MJy/sr)
+        combined_errors : 1d numpy array (N_wavelengths)
+            Combined flux errors (MJy or MJy/sr)
+        spline_cont0 : 2d numpy array (N_detector_rows, N_detector_cols)
+            Star continuum fitted by splines for each spectral trace of the detector.
+        spline_paras0 : 2d numpy array (N_nodes, N_traces)
+            Linear parameters returned by the continuum spline fitting routine for each spectral trace of the detector.
+        x_nodes : 1d numpy array (N_nodes)
+            Nodes spacing in the wavelength dimension (in micron).
 
-        Also modifies self.x_nodes and self.star_func
+        Also sets self.x_nodes and self.star_func according to values in the reloaded file headers.
 
         """
         if load_filename is None:
@@ -1203,11 +1295,11 @@ class JWSTNirspec_cal(Instrument):
 
         hdulist = pyfits.open(load_filename)
         new_wavelengths = hdulist[0].data
-        combined_fluxes = hdulist[1].data
-        combined_errors = hdulist[2].data
-        spline_cont0 = hdulist[3].data
-        spline_paras0 = hdulist[4].data
-        x_nodes = hdulist[5].data
+        combined_fluxes = hdulist["COM_FLUXES"].data
+        combined_errors = hdulist["COM_ERRORS"].data
+        spline_cont0 = hdulist["SPLINE_CONT0"].data
+        spline_paras0 = hdulist["SPLINE_PARAS0"].data
+        x_nodes = hdulist["X_NODES"].data
         hdulist.close()
 
         self.x_nodes = x_nodes
@@ -1215,255 +1307,118 @@ class JWSTNirspec_cal(Instrument):
         return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,x_nodes
 
 
-    #herenow
-    def compute_starspectrum_contnorm_2dspline(self,  save_utils=False,im=None, im_wvs=None, err=None, mppool=None,
-                                               spec_R_sampling=None, threshold_badpix=10,
-                                               wv_nodes=None,N_wvs_nodes=20,ifuy_nodes=None,delta_ifuy=0.05,
-                                               apply_new_bad_pixels = False, iterative = True,independent_trace = True):
-        """ Compute star spectrum continuum normalized by 2d spline
-
-        Parameters
-        ----------
-        save_utils
-        im
-        im_wvs
-        err
-        mppool
-        spec_R_sampling
-        threshold_badpix
-        wv_nodes
-        N_wvs_nodes
-        ifuy_nodes
-        delta_ifuy
-        apply_new_bad_pixels
-        iterative
-        independent_trace
-
-        Returns
-        -------
-
-        """
-        if im is None:
-            im = self.data
-        if im_wvs is None:
-            im_wvs = self.wavelengths
-        if err is None:
-            err = self.noise
-        if spec_R_sampling is None:
-            spec_R_sampling = self.R*4
-        if wv_nodes is None:
-            wv_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), N_wvs_nodes, endpoint=True)
-
-        _, im_ifuy = self.getifucoords()
-
-        if ifuy_nodes is None:
-            ifuy_min, ifuy_max = np.nanmin(im_ifuy), np.nanmax(im_ifuy)
-            ifuy_min, ifuy_max = np.floor(ifuy_min * 10) / 10, np.ceil(ifuy_max * 10) / 10
-            ifuy_nodes = np.arange(ifuy_min, ifuy_max + 0.1, delta_ifuy)
-
-        if self.verbose:
-            print(f"Computing stellar spectrum with 2d spline (continuum normalized)")
-
-        if independent_trace:
-            _trace_id_map = self.trace_id_map
-        else:
-            _trace_id_map = np.zeros(self.trace_id_map.shape)
-
-        if 1:
-            unique_trace_ids = np.unique(_trace_id_map[np.where(np.isfinite(_trace_id_map))])
-
-            ifuy_nodes_grid, wv_nodes_grid = np.meshgrid(ifuy_nodes, wv_nodes, indexing="ij")
-
-            # Define the window size
-            w = 10
-            window_size = (1, w)
-            # Apply median filter
-            data_all_LPF = median_filter(self.data * self.bad_pixels, size=window_size, mode='constant', cval=np.nan)
-
-            reg_mean_map0 = np.zeros((np.size(unique_trace_ids),np.size(ifuy_nodes),np.size(wv_nodes))) + np.nan
-            for traceid in range(np.size(unique_trace_ids)):
-
-                where_good = np.where((_trace_id_map == traceid) *np.isfinite(data_all_LPF) * np.isfinite(im_ifuy) * np.isfinite(self.wavelengths))
-                X = im_ifuy[where_good]
-                Y = self.wavelengths[where_good]
-                Z = data_all_LPF[where_good]
-                filtered_triangles = filter_big_triangles(X * self.wv_ref / Y, Y, 0.2)
-                # Create filtered triangulation
-                filtered_tri = tri.Triangulation(X * self.wv_ref / Y, Y, triangles=filtered_triangles)
-                # Perform LinearTriInterpolator for filtered triangulation
-                pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
-
-                reg_mean_map0[traceid,:,:] = pointcloud_interp(ifuy_nodes_grid, wv_nodes_grid)
-
-            # replace nans in horizontal rows by extending the last value
-            for traceid in range(reg_mean_map0.shape[0]):
-                for k in range(reg_mean_map0.shape[1]):
-                    row = reg_mean_map0[traceid,k, :]
-                    finite_indices = np.where(np.isfinite(row))[0]
-                    if len(finite_indices) == 0:
-                        continue
-                    min_id = np.min(finite_indices)
-                    max_id = np.max(finite_indices)
-                    reg_mean_map0[traceid,k, 0:min_id] = reg_mean_map0[traceid,k, min_id]
-                    reg_mean_map0[traceid,k, max_id + 1::] = reg_mean_map0[traceid,k, max_id]
-
-            # replace nans in  vertical columns by extending the last value
-            for traceid in range(reg_mean_map0.shape[0]):
-                for l in range(reg_mean_map0.shape[2]):
-                    col = reg_mean_map0[traceid,:, l]
-                    finite_indices = np.where(np.isfinite(col))[0]
-                    if len(finite_indices) == 0:
-                        continue
-                    min_id = np.min(finite_indices)
-                    max_id = np.max(finite_indices)
-                    reg_mean_map0[traceid,0:min_id, l] = reg_mean_map0[traceid,min_id, l]
-                    reg_mean_map0[traceid,max_id + 1::, l] = reg_mean_map0[traceid,max_id, l]
-
-            reg_std_map0 = np.abs(reg_mean_map0)#/2
-
-        spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_slices_2dspline(im,
-                                                                                         im_wvs,
-                                                                                         im_ifuy,
-                                                                                         noise=err,
-                                                                                         badpixs=self.bad_pixels,
-                                                                                         trace_id_map = _trace_id_map,
-                                                                                         wv_nodes = wv_nodes,
-                                                                                         ifuy_nodes=ifuy_nodes,
-                                                                                         threshold=threshold_badpix,
-                                                                                         use_set_nans=False,
-                                                                                         reg_mean_map=reg_mean_map0,
-                                                                                         reg_std_map=reg_std_map0,
-                                                                                         wv_ref=self.wv_ref,
-                                                                                         mypool=mppool)
-        if iterative:
-            reg_mean_map1 = copy(spline_paras0)
-            where_nan = np.where(np.isnan(reg_mean_map1))
-            reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
-            reg_std_map1 = np.abs(reg_mean_map1)/2
-            spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_slices_2dspline(im,
-                                                                                             im_wvs,
-                                                                                             im_ifuy,
-                                                                                             noise=err,
-                                                                                             badpixs=self.bad_pixels*new_badpixs,
-                                                                                             trace_id_map = _trace_id_map,
-                                                                                             wv_nodes = wv_nodes,
-                                                                                             ifuy_nodes=ifuy_nodes,
-                                                                                             threshold=threshold_badpix,
-                                                                                             use_set_nans=False,
-                                                                                             reg_mean_map=reg_mean_map1,
-                                                                                             reg_std_map=reg_std_map1,
-                                                                                             wv_ref=self.wv_ref,
-                                                                                             mypool=mppool)
-        continuum = copy(spline_cont0)
-        continuum[np.where(continuum / err < 5)] = np.nan
-        continuum[np.where(continuum < np.median(continuum))] = np.nan
-        continuum[np.where(np.isnan(self.bad_pixels))] = np.nan
-        normalized_im = im / continuum
-        normalized_err = err / continuum
-
-        new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
-                                                                             normalized_im.flatten(),
-                                                                             normalized_err.flatten(),
-                                                                             np.nanmedian(im_wvs) / spec_R_sampling)
-
-        if apply_new_bad_pixels:
-            self.bad_pixels *= new_badpixs
-
-        if save_utils:
-            if isinstance(save_utils,str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_starspectrum_contnorm_2dspline"]
-
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=new_wavelengths))
-            hdulist.append(pyfits.ImageHDU(data=combined_fluxes, name='COM_FLUXES'))
-            hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
-            hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
-            hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
-            hdulist.append(pyfits.ImageHDU(data=new_badpixs, name='NEW_BADPIX'))
-            hdulist.append(pyfits.ImageHDU(data=wv_nodes, name='wv_nodes'))
-            hdulist.append(pyfits.ImageHDU(data=ifuy_nodes, name='ifuy_nodes'))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
-
-        self.wv_nodes = wv_nodes
-        self.ifuy_nodes = ifuy_nodes
-        self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-        return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes,ifuy_nodes
-
-    def reload_starspectrum_contnorm_2dspline(self, load_filename=None, apply_new_bad_pixels = False):
-        """ Reload star spectrum continuum normalized by 2d spline
-
-        Parameters
-        ----------
-        load_filename : str or None
-            Filename to load spectrum data from, or leave None to use default filename
-        apply_new_bad_pixels : bool
-            If set, multiply self.badpixels times the NEW_BADPIX extension of the spectrum
-
-
-        Returns
-        -------
-        new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes,ifuy_nodes
-
-        """
-        if load_filename is None:
-            load_filename = self.default_filenames["compute_starspectrum_contnorm_2dspline"]
-        if len(glob(load_filename)) ==0:
-            return None
-
-        hdulist = pyfits.open(load_filename)
-        new_wavelengths = hdulist[0].data
-        combined_fluxes = hdulist['COM_FLUXES'].data
-        combined_errors = hdulist['COM_ERRORS'].data
-        spline_cont0 = hdulist['SPLINE_CONT0'].data
-        spline_paras0 = hdulist['SPLINE_PARAS0'].data
-        new_badpixs = hdulist['NEW_BADPIX'].data
-        wv_nodes = hdulist['wv_nodes'].data
-        ifuy_nodes = hdulist['ifuy_nodes'].data
-        hdulist.close()
-
-        if apply_new_bad_pixels:
-            self.bad_pixels *= new_badpixs
-
-        self.wv_nodes = wv_nodes
-        self.ifuy_nodes = ifuy_nodes
-        self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-        return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes,ifuy_nodes
-
-
     def compute_starsubtraction(self,  save_utils=False, im=None, im_wvs=None, err=None, threshold_badpix=10,
-                                mppool=None,starsub_dir="starsub1d",load_starspectrum_contnorm = None):
-        """ Compute Star Subctraction
+                                mppool=None, starsub_dir="starsub1d", load_starspectrum_contnorm = None):
+        """ Compute Star Subtraction
 
         Parameters
         ----------
-        save_utils
-        im
-        im_wvs
-        err
-        threshold_badpix
-        mppool
-        starsub_dir
-        load_starspectrum_contnorm
+        save_utils : Boolean
+            Save the intermediate star subtraction step products.
+        im : str or None
+        TODO : Is it still useful to keep those optional args? It feels like it was for testing purposes...
+        im_wvs : str or None
+        TODO : same
+        err : str or None
+        TODO : same
+        threshold_badpix : float (optional)
+            Hard threshold for bad pixel flagging. Thresholding is done by comparing the continuum normalized row with its median standard deviation.
+        mppool : multiprocessing.Pool or None (optional)
+            If None, the computation is done without parallelization.
+        starsub_dir : str or None (optional)
+            Name of the subdirectory to save a copy of the original fits file and replace the cal image with the star-subtracted image.
+            If None, those files won't be saved
+        load_starspectrum_contnorm : str or None (optional)
+            Filename to load spectrum data from.
+            If None, the default filename is used.
 
         Returns
         -------
-        subtracted_im, star_model, spline_paras0, self.x_nodes
+        subtracted_im : ndarray
+            Star subtracted image.
+        star_model : 1d numpy array
+            1D Star model used for the star subtraction.
+        spline_paras0 : ndarray (N_nodes x N_traces)
+            Linear parameters returned by the spline fitting routine for each spectral trace of the detector.
+        self.x_nodes : 1d numpy array (N_nodes)
+            Splines nodes spacing in the wavelengths dimension (micron).
         """
         if self.verbose:
             print(f"Computing star subtraction.")
 
-        if load_starspectrum_contnorm is None:
-            load_filename = self.default_filenames["compute_starspectrum_contnorm"]
-            hdulist = pyfits.open(load_filename)
-            spline_paras0 = hdulist[4].data
-            hdulist.close()
+
+        im, im_wvs, err, bad_pixels, reg_mean_map, reg_std_map = self._get_starsub_inputs(load_starspectrum_contnorm, im, im_wvs, err)
+
+        for i in range(2):
+            star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
+                                                                                  badpixs=bad_pixels,
+                                                                                  x_nodes=self.x_nodes,
+                                                                                  star_model=self.star_func(im_wvs),
+                                                                                  threshold=threshold_badpix,
+                                                                                  use_set_nans=False,
+                                                                                  mypool=mppool,
+                                                                                  regularization=True,
+                                                                                  reg_mean_map=reg_mean_map,
+                                                                                  reg_std_map=reg_std_map)
+            bad_pixels = bad_pixels * new_badpixs
+
+        self._set_bad_pixels(bad_pixels)
+        subtracted_im[np.where(np.isnan(subtracted_im))] = 0
+
+        if save_utils:
+            self._save_starsubtraction(save_utils, subtracted_im, im, star_model, spline_paras0, starsub_dir)
+
+        return subtracted_im, star_model, spline_paras0, self.x_nodes
+
+    def _save_starsubtraction(self, save_utils, subtracted_im, im, star_model, spline_paras0, starsub_dir):
+        """Save the star subtraction product in a fits file."""
+
+        if isinstance(save_utils, str):
+            out_filename = save_utils
         else:
-            hdulist = pyfits.open(load_starspectrum_contnorm)
-            spline_paras0 = hdulist[4].data
-            hdulist.close()
+            out_filename = self.default_filenames["compute_starsubtraction"]
+
+        hdulist = pyfits.HDUList()
+        hdulist.append(pyfits.PrimaryHDU(data=subtracted_im))
+        hdulist.append(pyfits.ImageHDU(data=im, name='IM'))
+        hdulist.append(pyfits.ImageHDU(data=star_model, name='STARMODEL'))
+        hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='BADPIX'))
+        hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
+        hdulist.append(pyfits.ImageHDU(data=self.x_nodes, name='x_nodes'))
+        hdulist.writeto(out_filename, overwrite=True)
+
+        if starsub_dir is not None:
+            if not os.path.exists(os.path.join(self.utils_dir, starsub_dir)):
+                os.makedirs(os.path.join(self.utils_dir, starsub_dir))
+            hdulist_sc = pyfits.open(self.filename)
+            du = self.data_unit
+            bu = self.extheader["BUNIT"].strip()
+            if du == 'MJy' and bu == 'MJy':
+                hdulist_sc["SCI"].data = subtracted_im
+            if du == 'MJy/sr' and bu == 'MJy/sr':
+                hdulist_sc["SCI"].data = subtracted_im
+            if du == 'MJy/sr' and bu == 'MJy':
+                hdulist_sc["SCI"].data = subtracted_im * self.area2d
+            if du == 'MJy' and bu == 'MJy/sr':
+                hdulist_sc["SCI"].data = subtracted_im / self.area2d
+            hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
+            hdulist_sc.writeto(os.path.join(self.utils_dir, starsub_dir, os.path.basename(self.filename)),
+                               overwrite=True)
+            hdulist_sc.close()
+
+    def _set_bad_pixels(self, bad_pixels):
+        """Set bad pixels map"""
+        self.bad_pixels = bad_pixels
+
+    def _get_starsub_inputs(self, load_starspectrum_contnorm, im, im_wvs, err):
+        """ Get the inputs for the star subtraction routine """
+        if load_starspectrum_contnorm is None:
+            load_starspectrum_contnorm = self.default_filenames["compute_starspectrum_contnorm"]
+
+        hdulist = pyfits.open(load_starspectrum_contnorm)
+        spline_paras0 = hdulist["SPLINE_PARAS0"].data
+        hdulist.close()
+
         wherenan = np.where(np.isnan(spline_paras0))
         reg_mean_map = copy(spline_paras0)
         reg_mean_map[wherenan] = np.tile(np.nanmedian(spline_paras0, axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
@@ -1473,68 +1428,15 @@ class JWSTNirspec_cal(Instrument):
         reg_std_map = np.clip(reg_std_map, 1e-11, np.inf)
 
         if im is None:
-            im = self.data
+            im = np.copy(self.data)
         if im_wvs is None:
-            im_wvs = self.wavelengths
+            im_wvs = np.copy(self.wavelengths)
         if err is None:
-            err = self.noise
+            err = np.copy(self.noise)
 
-        star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
-                                                                                  badpixs=self.bad_pixels,
-                                                                                  x_nodes=self.x_nodes,
-                                                                                  star_model=self.star_func(im_wvs),
-                                                                                  threshold=threshold_badpix,
-                                                                                  use_set_nans=False,
-                                                                                  mypool=mppool,
-                                                                                  regularization=True,
-                                                                                  reg_mean_map=reg_mean_map,
-                                                                                  reg_std_map=reg_std_map)
-        self.bad_pixels = self.bad_pixels * new_badpixs
-        star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=self.bad_pixels,
-                                                                      x_nodes=self.x_nodes,
-                                                                      star_model=self.star_func(im_wvs),
-                                                                      threshold=threshold_badpix, use_set_nans=False,
-                                                                      mypool=mppool,
-                                                                      regularization=True, reg_mean_map=reg_mean_map,
-                                                                      reg_std_map=reg_std_map)
-        self.bad_pixels = self.bad_pixels * new_badpixs
+        bad_pixels = np.copy(self.bad_pixels)
 
-        subtracted_im[np.where(np.isnan(subtracted_im))] = 0
-
-        if save_utils:
-            if isinstance(save_utils,str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_starsubtraction"]
-
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=subtracted_im))
-            hdulist.append(pyfits.ImageHDU(data=im, name='IM'))
-            hdulist.append(pyfits.ImageHDU(data=star_model, name='STARMODEL'))
-            hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='BADPIX'))
-            hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
-            hdulist.append(pyfits.ImageHDU(data=self.x_nodes, name='x_nodes'))
-            hdulist.writeto(out_filename, overwrite=True)
-
-            if starsub_dir is not None:
-                if not os.path.exists(os.path.join(self.utils_dir,starsub_dir)):
-                    os.makedirs(os.path.join(self.utils_dir,starsub_dir))
-                hdulist_sc = pyfits.open(self.filename)
-                du = self.data_unit
-                bu = self.extheader["BUNIT"].strip()
-                arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
-                if du == 'MJy'    and bu == 'MJy':
-                    hdulist_sc["SCI"].data = subtracted_im
-                if du == 'MJy/sr' and bu == 'MJy/sr':
-                    hdulist_sc["SCI"].data = subtracted_im
-                if du == 'MJy/sr' and bu == 'MJy':
-                    hdulist_sc["SCI"].data = subtracted_im*(self.area2d*arcsec2_to_sr)
-                if du == 'MJy' and bu == 'MJy/sr':
-                    hdulist_sc["SCI"].data = subtracted_im/(self.area2d*arcsec2_to_sr)
-                hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
-                hdulist_sc.writeto(os.path.join(self.utils_dir, starsub_dir, os.path.basename(self.filename)), overwrite=True)
-                hdulist_sc.close()
-        return subtracted_im, star_model, spline_paras0, self.x_nodes
+        return im, im_wvs, err, bad_pixels, reg_mean_map, reg_std_map
 
 
     def reload_starsubtraction(self, load_filename=None):
@@ -1559,219 +1461,15 @@ class JWSTNirspec_cal(Instrument):
 
         hdulist = pyfits.open(load_filename)
         subtracted_im = hdulist[0].data
-        star_model = hdulist[2].data
-        fmderived_bad_pixels = hdulist[3].data
-        spline_paras0 = hdulist[4].data
-        x_nodes = hdulist[5].data
+        star_model = hdulist["STARMODEL"].data
+        fmderived_bad_pixels = hdulist["BADPIX"].data
+        spline_paras0 = hdulist["SPLINE_PARAS0"].data
+        x_nodes = hdulist["X_NODES"].data
         hdulist.close()
 
         self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
         return subtracted_im, star_model, spline_paras0, x_nodes
 
-
-    def compute_starsubtraction_2dspline(self,  save_utils=False, im=None, im_wvs=None, err=None, threshold_badpix=10,
-                                mppool=None,starsub_dir="starsub2d", iterative = True,independent_trace = True):
-        """ Compute Star Subtraction with 2D Spline
-
-        Parameters
-        ----------
-        save_utils
-        im
-        im_wvs
-        err
-        threshold_badpix
-        mppool
-        starsub_dir
-        iterative
-        independent_trace
-
-        Returns
-        -------
-        subtracted_im, star_model, spline_paras0, self.wv_nodes, self.ifuy_nodes
-
-        """
-
-        if self.verbose:
-            print(f"Computing star subtraction 2d spline.")
-
-        if im is None:
-            im = self.data
-        if im_wvs is None:
-            im_wvs = self.wavelengths
-        if err is None:
-            err = self.noise
-
-        _, im_ifuy = self.getifucoords()
-
-        if independent_trace:
-            _trace_id_map = self.trace_id_map
-        else:
-            _trace_id_map = np.zeros(self.trace_id_map.shape)
-
-        if 1:
-            unique_trace_ids = np.unique(_trace_id_map[np.where(np.isfinite(_trace_id_map))])
-
-            ifuy_nodes_grid, wv_nodes_grid = np.meshgrid(self.ifuy_nodes, self.wv_nodes, indexing="ij")
-
-            # Define the window size
-            w = 10
-            window_size = (1, w)
-            # Apply median filter
-            data_all_LPF = median_filter(self.data * self.bad_pixels, size=window_size, mode='constant', cval=np.nan)
-
-            reg_mean_map0 = np.zeros((np.size(unique_trace_ids),np.size(self.ifuy_nodes),np.size(self.wv_nodes))) + np.nan
-            for traceid in range(np.size(unique_trace_ids)):
-
-                where_good = np.where((_trace_id_map == traceid) *np.isfinite(data_all_LPF) * np.isfinite(im_ifuy) * np.isfinite(self.wavelengths))
-                X = im_ifuy[where_good]
-                Y = self.wavelengths[where_good]
-                Z = data_all_LPF[where_good]
-                filtered_triangles = filter_big_triangles(X * self.wv_ref / Y, Y, 0.2)
-                # Create filtered triangulation
-                filtered_tri = tri.Triangulation(X * self.wv_ref / Y, Y, triangles=filtered_triangles)
-                # Perform LinearTriInterpolator for filtered triangulation
-                pointcloud_interp = tri.LinearTriInterpolator(filtered_tri, Z)
-
-                reg_mean_map0[traceid,:,:] = pointcloud_interp(ifuy_nodes_grid, wv_nodes_grid)
-
-            # replace nans in horizontal rows by extending the last value
-            for traceid in range(reg_mean_map0.shape[0]):
-                for k in range(reg_mean_map0.shape[1]):
-                    row = reg_mean_map0[traceid,k, :]
-                    finite_indices = np.where(np.isfinite(row))[0]
-                    if len(finite_indices) == 0:
-                        continue
-                    min_id = np.min(finite_indices)
-                    max_id = np.max(finite_indices)
-                    reg_mean_map0[traceid,k, 0:min_id] = reg_mean_map0[traceid,k, min_id]
-                    reg_mean_map0[traceid,k, max_id + 1::] = reg_mean_map0[traceid,k, max_id]
-
-            # replace nans in  vertical columns by extending the last value
-            for traceid in range(reg_mean_map0.shape[0]):
-                for l in range(reg_mean_map0.shape[2]):
-                    col = reg_mean_map0[traceid,:, l]
-                    finite_indices = np.where(np.isfinite(col))[0]
-                    if len(finite_indices) == 0:
-                        continue
-                    min_id = np.min(finite_indices)
-                    max_id = np.max(finite_indices)
-                    reg_mean_map0[traceid,0:min_id, l] = reg_mean_map0[traceid,min_id, l]
-                    reg_mean_map0[traceid,max_id + 1::, l] = reg_mean_map0[traceid,max_id, l]
-
-            reg_std_map0 = np.abs(reg_mean_map0)/2
-
-        if self.verbose:
-            print(f"Running 2d spline fit for the first time")
-        star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_slices_2dspline(im,
-                                                                                         im_wvs,
-                                                                                         im_ifuy,
-                                                                                         noise=err,
-                                                                                         badpixs=self.bad_pixels,
-                                                                                         star_model=self.star_func(im_wvs),
-                                                                                         trace_id_map = _trace_id_map,
-                                                                                         wv_nodes = self.wv_nodes,
-                                                                                         ifuy_nodes=self.ifuy_nodes,
-                                                                                         threshold=threshold_badpix,
-                                                                                         use_set_nans=False,
-                                                                                         reg_mean_map=reg_mean_map0,
-                                                                                         reg_std_map=reg_std_map0,
-                                                                                         wv_ref=self.wv_ref,
-                                                                                         mypool=mppool)
-        if iterative:
-            reg_mean_map1 = copy(spline_paras0)
-            where_nan = np.where(np.isnan(reg_mean_map1))
-            reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
-            reg_std_map1 = np.abs(reg_mean_map1)/2
-            if self.verbose:
-                print(f"Running 2d spline fit for the second time after removing outliers")
-            star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_slices_2dspline(im,
-                                                                                             im_wvs,
-                                                                                             im_ifuy,
-                                                                                             noise=err,
-                                                                                             badpixs=self.bad_pixels*new_badpixs,
-                                                                                             star_model=self.star_func(im_wvs),
-                                                                                             trace_id_map = _trace_id_map,
-                                                                                             wv_nodes = self.wv_nodes,
-                                                                                             ifuy_nodes=self.ifuy_nodes,
-                                                                                             threshold=threshold_badpix,
-                                                                                             use_set_nans=False,
-                                                                                             reg_mean_map=reg_mean_map1,
-                                                                                             reg_std_map=reg_std_map1,
-                                                                                             wv_ref=self.wv_ref,
-                                                                                             mypool=mppool)
-        self.bad_pixels = self.bad_pixels * new_badpixs
-
-
-        subtracted_im[np.where(np.isnan(subtracted_im))] = 0
-
-        if save_utils:
-            if isinstance(save_utils,str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_starsubtraction_2dspline"]
-
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=subtracted_im))
-            hdulist.append(pyfits.ImageHDU(data=im, name='IM'))
-            hdulist.append(pyfits.ImageHDU(data=star_model, name='STARMODEL'))
-            hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='BADPIX'))
-            hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
-            hdulist.append(pyfits.ImageHDU(data=self.wv_nodes, name='wv_nodes'))
-            hdulist.append(pyfits.ImageHDU(data=self.ifuy_nodes, name='ifuy_nodes'))
-            hdulist.writeto(out_filename, overwrite=True)
-
-            if starsub_dir is not None:
-                if not os.path.exists(os.path.join(self.utils_dir,starsub_dir)):
-                    os.makedirs(os.path.join(self.utils_dir,starsub_dir))
-                hdulist_sc = pyfits.open(self.filename)
-                du = self.data_unit
-                bu = self.extheader["BUNIT"].strip()
-                arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
-                if du == 'MJy'    and bu == 'MJy':
-                    hdulist_sc["SCI"].data = subtracted_im
-                if du == 'MJy/sr' and bu == 'MJy/sr':
-                    hdulist_sc["SCI"].data = subtracted_im
-                if du == 'MJy/sr' and bu == 'MJy':
-                    hdulist_sc["SCI"].data = subtracted_im*(self.area2d*arcsec2_to_sr)
-                if du == 'MJy' and bu == 'MJy/sr':
-                    hdulist_sc["SCI"].data = subtracted_im/(self.area2d*arcsec2_to_sr)
-                hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
-                hdulist_sc.writeto(os.path.join(self.utils_dir,starsub_dir, os.path.basename(self.filename)), overwrite=True)
-                hdulist_sc.close()
-        return subtracted_im, star_model, spline_paras0, self.wv_nodes, self.ifuy_nodes
-
-
-    def reload_starsubtraction_2dspline(self, load_filename=None):
-        """ Reload Star Subtractoin with 2D spline
-
-        Parameters
-        ----------
-        load_filename : str or None
-            Filename to load PSF subtracted data from, or leave None to use default filename
-
-        Returns
-        -------
-        subtracted_im, star_model, spline_paras0, wv_nodes, ifuy_nodes
-
-        """
-        if load_filename is None:
-            load_filename = self.default_filenames["compute_starsubtraction_2dspline"]
-        if len(glob(load_filename)) ==0:
-            return None
-
-        hdulist = pyfits.open(load_filename)
-        subtracted_im = hdulist[0].data
-        star_model = hdulist[2].data
-        fmderived_bad_pixels = hdulist[3].data
-        spline_paras0 = hdulist[4].data
-        wv_nodes = hdulist[5].data
-        ifuy_nodes = hdulist[6].data
-        hdulist.close()
-
-        self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
-        self.wv_nodes = wv_nodes
-        self.ifuy_nodes = ifuy_nodes
-        return subtracted_im, star_model, spline_paras0, wv_nodes, ifuy_nodes
 
     def compute_interpdata_regwvs(self, save_utils=False, wv_sampling=None, replace_data=None):
         """Interpolate onto a regular wavelength sampling.
@@ -1797,49 +1495,24 @@ class JWSTNirspec_cal(Instrument):
             wv_sampling = self.wv_sampling
         else:
             self.wv_sampling = wv_sampling
-        Nwv = np.size(wv_sampling)
 
         regwvs_dataobj = deepcopy(self)
-
-        regwvs_dataobj.coords = self.coords + " regwvs"
+        regwvs_dataobj.coords = self.coords + " regwvs" #TODO
 
         if replace_data is not None:
             _data = replace_data
         else:
             _data = self.data
 
-        regwvs_dataobj.dra_as_array = np.zeros((_data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.ddec_as_array = np.zeros((_data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.wavelengths = np.zeros((_data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.leftnright_wavelengths = np.zeros((2,_data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.data = np.zeros((_data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.noise = np.zeros((_data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.bad_pixels = np.zeros((_data.shape[0], Nwv))+np.nan
-        regwvs_dataobj.area2d = np.zeros((_data.shape[0], Nwv))+np.nan
+        Ntraces, Nwv = self._get_interpdata_shapes(_data, wv_sampling)
+        self._init_regwvs_obj(regwvs_dataobj, Ntraces, Nwv)
 
-        for rowid in range(_data.shape[0]):
-            wvs_finite = np.where(np.isfinite(self.wavelengths[rowid, :]))
-            if np.size(wvs_finite[0]) == 0:
+        for trace_id in range(Ntraces):
+            wvs_finite, where_finite = self._get_where_finite(trace_id)
+            if np.size(wvs_finite[0]) == 0 or np.size(where_finite[0]) == 0:
                 continue
-            regwvs_dataobj.dra_as_array[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, wvs_finite[0]], self.dra_as_array[rowid, wvs_finite[0]], left=np.nan,right=np.nan)
-            regwvs_dataobj.ddec_as_array[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, wvs_finite[0]], self.ddec_as_array[rowid, wvs_finite[0]], left=np.nan,right=np.nan)
-            regwvs_dataobj.wavelengths[rowid, :] = wv_sampling
-            regwvs_dataobj.area2d[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, wvs_finite[0]], self.area2d[rowid, wvs_finite[0]], left=np.nan,right=np.nan)
-            badpix_mask = np.isfinite(self.bad_pixels[rowid, :]).astype(float)
-            regwvs_dataobj.bad_pixels[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, wvs_finite[0]], badpix_mask[wvs_finite], left=0, right=0)
 
-            # following little section written by chatgpt to find the left and right wavelengths in the original data
-            v_left, v_right = find_closest_leftnright_elements(self.wavelengths[rowid, wvs_finite[0]],wv_sampling)
-
-            regwvs_dataobj.leftnright_wavelengths[0,rowid,:]=v_left
-            regwvs_dataobj.leftnright_wavelengths[1,rowid,:]=v_right
-
-            where_finite = np.where(np.isfinite(self.bad_pixels[rowid, :]))
-            if np.size(where_finite[0]) == 0:
-                continue
-            regwvs_dataobj.data[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], _data[rowid, where_finite[0]], left=np.nan,right=np.nan)
-            regwvs_dataobj.noise[rowid, :] = np.interp(wv_sampling, self.wavelengths[rowid, where_finite[0]], self.noise[rowid, where_finite[0]], left=np.nan, right=np.nan)
-
+            self._interpdata_regwvs_trace(regwvs_dataobj, wv_sampling, _data, wvs_finite, where_finite, trace_id)
 
         where_bad = np.where(regwvs_dataobj.bad_pixels != 1.0)
         regwvs_dataobj.data[where_bad] = np.nan
@@ -1847,24 +1520,74 @@ class JWSTNirspec_cal(Instrument):
         regwvs_dataobj.bad_pixels[where_bad] = np.nan
 
         if save_utils:
-            if isinstance(save_utils, str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_interpdata_regwvs"]
-
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=regwvs_dataobj.data))
-            hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.noise, name='INTERP_ERR'))
-            hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.dra_as_array, name='INTERP_RA'))
-            hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.ddec_as_array, name='INTERP_DEC'))
-            hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.wavelengths, name='INTERP_WAVE'))
-            hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.bad_pixels, name='INTERP_BADPIX'))
-            hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.area2d, name='INTERP_AREA2D'))
-            hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.leftnright_wavelengths, name='INTERP_LEFTNRIGHT'))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
+            self._save_interpdata_regwvs(save_utils, regwvs_dataobj)
 
         return regwvs_dataobj
+
+    def _get_interpdata_shapes(self, _data, wv_sampling):
+        """ Get the shape of the interpolated data"""
+        Ntraces, Nwv = _data.shape[0], np.size(wv_sampling)
+        return Ntraces, Nwv
+
+    def _get_where_finite(self, trace_id):
+        """ Get the mask for the traces"""
+        wvs_finite = np.where(np.isfinite(self.wavelengths[trace_id, :]))
+        where_finite = np.where(np.isfinite(self.bad_pixels[trace_id, :]))
+        return wvs_finite, where_finite
+
+    def _interpdata_regwvs_trace(self, regwvs_dataobj, wv_sampling, _data, wvs_finite, where_finite, trace_id):
+        regwvs_dataobj.dra_as_array[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
+                                                      self.dra_as_array[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
+        regwvs_dataobj.ddec_as_array[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
+                                                       self.ddec_as_array[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
+        regwvs_dataobj.wavelengths[trace_id, :] = wv_sampling
+        regwvs_dataobj.area2d[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
+                                                self.area2d[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
+        badpix_mask = np.isfinite(self.bad_pixels[trace_id, :]).astype(float)
+        regwvs_dataobj.bad_pixels[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
+                                                    badpix_mask[wvs_finite], left=0, right=0)
+
+        # following little section written by chatgpt to find the left and right wavelengths in the original data
+        v_left, v_right = find_closest_leftnright_elements(self.wavelengths[trace_id, wvs_finite[0]], wv_sampling)
+
+        regwvs_dataobj.leftnright_wavelengths[0, trace_id, :] = v_left
+        regwvs_dataobj.leftnright_wavelengths[1, trace_id, :] = v_right
+
+        regwvs_dataobj.data[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, where_finite[0]],
+                                              _data[trace_id, where_finite[0]], left=np.nan, right=np.nan)
+        regwvs_dataobj.noise[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, where_finite[0]],
+                                               self.noise[trace_id, where_finite[0]], left=np.nan, right=np.nan)
+
+    def _init_regwvs_obj(self, regwvs_dataobj, Ntraces, Nwv):
+        """ Initialize the arrays for the interpolation on a regular wavelength grid"""
+        regwvs_dataobj.dra_as_array = np.full((Ntraces, Nwv), np.nan)
+        regwvs_dataobj.ddec_as_array = np.full((Ntraces, Nwv), np.nan)
+        regwvs_dataobj.wavelengths = np.full((Ntraces, Nwv), np.nan)
+        regwvs_dataobj.leftnright_wavelengths = np.full((2, Ntraces, Nwv), np.nan)
+        regwvs_dataobj.data = np.full((Ntraces, Nwv), np.nan)
+        regwvs_dataobj.noise = np.full((Ntraces, Nwv), np.nan)
+        regwvs_dataobj.bad_pixels = np.full((Ntraces, Nwv), np.nan)
+        regwvs_dataobj.area2d = np.full((Ntraces, Nwv), np.nan)
+
+
+    def _save_interpdata_regwvs(self, save_utils, regwvs_dataobj):
+        """ Save the interpolation data in a fits file. """
+        if isinstance(save_utils, str):
+            out_filename = save_utils
+        else:
+            out_filename = self.default_filenames["compute_interpdata_regwvs"]
+
+        hdulist = pyfits.HDUList()
+        hdulist.append(pyfits.PrimaryHDU(data=regwvs_dataobj.data))
+        hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.noise, name='INTERP_ERR'))
+        hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.dra_as_array, name='INTERP_RA'))
+        hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.ddec_as_array, name='INTERP_DEC'))
+        hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.wavelengths, name='INTERP_WAVE'))
+        hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.bad_pixels, name='INTERP_BADPIX'))
+        hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.area2d, name='INTERP_AREA2D'))
+        hdulist.append(pyfits.ImageHDU(data=regwvs_dataobj.leftnright_wavelengths, name='INTERP_LEFTNRIGHT'))
+        hdulist.writeto(out_filename, overwrite=True)
+        hdulist.close()
 
     def reload_interpdata_regwvs(self, load_filename=None):
         """ Reload interpolated data onto regular wavelengths
@@ -1922,12 +1645,12 @@ class JWSTNirspec_cal(Instrument):
         """
         if "regwvs" not in self.coords:
             raise Exception("'regwvs' in self.coords. This data object needs to be interpolated first.")
-        dist_to_bin_edges = np.nanmin(np.abs(self.leftnright_wavelengths-self.wavelengths),axis=0)
+        dist_to_bin_edges = np.nanmin(np.abs(self.leftnright_wavelengths - self.wavelengths), axis=0)
         mask = dist_to_bin_edges>dwv_threshold
         self.bad_pixels[np.where(mask)] = np.nan
         return mask
 
-    def getifucoords(self, ras=None, decs=None):
+    def get_ifu_coords(self, ras=None, decs=None):
         """ Get IFU coordinates
 
         Parameters
@@ -1941,16 +1664,30 @@ class JWSTNirspec_cal(Instrument):
 
         """
 
+        ifuX = None
+        ifuY = None
+
+        print("debug", self.coords)
+
         if ras is not None and decs is not None:
             ifuX, ifuY = rotate_coordinates(ras, decs, self.east2V2_deg, flipx=False)
         else:
             if "ifu" in self.coords:
                 ifuX, ifuY =  self.dra_as_array, self.ddec_as_array
             elif "sky" in self.coords:
+                print("debug good", self.east2V2_deg)
                 ifuX, ifuY = rotate_coordinates(self.dra_as_array, self.ddec_as_array, self.east2V2_deg, flipx=False)
+            else:
+                raise ValueError(f"coords type must be either 'ifu' or 'sky' not {self.coords}")
+
+        if ifuX is None or ifuY is None:
+            raise ValueError(
+                "Error trying to get IFU coordinates"
+            )
+
         return ifuX, ifuY
 
-    def getskycoords(self, ifux=None, ifuy=None):
+    def get_sky_coords(self, ifux=None, ifuy=None):
         """ Get sky coordinates
 
         Parameters
@@ -1963,6 +1700,9 @@ class JWSTNirspec_cal(Instrument):
         dra_as_array, ddec_as_array : arrays
 
         """
+        dra_as_array = None
+        ddec_as_array = None
+
         if ifux is not None and ifuy is not None:
             dra_as_array, ddec_as_array = rotate_coordinates(ifux, ifuy, -self.east2V2_deg, flipx=False)
         else:
@@ -1970,6 +1710,12 @@ class JWSTNirspec_cal(Instrument):
                 dra_as_array, ddec_as_array =  self.dra_as_array, self.ddec_as_array
             elif "ifu" in self.coords:
                 dra_as_array, ddec_as_array = rotate_coordinates(self.dra_as_array, self.ddec_as_array, -self.east2V2_deg, flipx=False)
+
+        if dra_as_array is None or ddec_as_array is None:
+            raise ValueError(
+                "Error trying to get sky coordinates"
+            )
+
         return dra_as_array, ddec_as_array
 
     def broaden(self, wvs, spectrum, loc=None, mppool=None):
@@ -2015,18 +1761,14 @@ class JWSTNirspec_cal(Instrument):
         wv_sampling = np.arange(wv_min, wv_max, sampling_dw)
         return wv_sampling
 
-    def where_point_source(self, radec_as, rad_as):
-        # TODO what is the purpose of this, this just looks like unnecessary duplication code?!?
-        return where_point_source(self, radec_as, rad_as)
-
-
-def _get_wpsf_task(paras):
+#### Functions
+def _get_wpsf_task(paras, fov_arcsec=6):
     """ Run WebbPSF for a single wavelength. Utility function for compute_webbpsf_model.
 
     Arguments
     ---------
     paras : tuple containing all arguments (TODO why is this set up this way?!?)
-        Must contain nrs, center_wv, wpsf_oversample, opmode, parallelize
+        Must contain IFU, center_wv, wpsf_oversample, opmode, parallelize
 
     Returns
     --------
@@ -2034,10 +1776,12 @@ def _get_wpsf_task(paras):
         the OVERSAMP extension only from the computed PSF
     smoothed_im : ndarray cube
         The OVERSAMP extension, after smoothing by a Gaussian kernel based on the oversampling
+    webbpsf_header : fits.header
+        WebbPSF header corresponding to the OVERSAMP extension
 
     #TODO this should be updated to use OVERDIST probably!! Instead of the smoothing here. TBD.
     """
-    nrs, center_wv, wpsf_oversample, opmode, parallelize = paras
+    IFU, center_wv, wpsf_oversample, opmode, parallelize = paras
     if opmode=='FIXEDSLIT':
         if not parallelize:
             print('FixedSlit webbpsf kernel...')
@@ -2050,14 +1794,15 @@ def _get_wpsf_task(paras):
         raise Exception('OPMODE unknown')
 
     ext = 'OVERSAMP'
-    slicepsf_wv0 = nrs.calc_psf(monochromatic=center_wv * 1e-6,  # Wavelength, in **METERS**
-                                fov_arcsec=6,  # angular size to simulate PSF over
+    webbpsf_wv0_hdulist = IFU.calc_psf(monochromatic=center_wv * 1e-6,  # Wavelength, in **METERS**
+                                fov_arcsec=fov_arcsec,  # angular size to simulate PSF over
                                 oversample=wpsf_oversample,
                                 # output pixel scale relative to the pixelscale set above
                                 add_distortion=False)  # skip an extra computation step that's not relevant for IFU
-    webbpsfim = slicepsf_wv0[ext].data
+    webbpsfim = webbpsf_wv0_hdulist[ext].data
+    webbpsf_header = webbpsf_wv0_hdulist[ext].header
     smoothed_im = convolve2d(webbpsfim, kernel, mode='same') / wpsf_oversample ** 2
-    return webbpsfim, smoothed_im
+    return webbpsfim, smoothed_im, webbpsf_header
 
 
 def untangle_dq(arr, verbose=True):
@@ -2146,8 +1891,8 @@ def crop_trace_edges(im, N_pix, trace_id_map=None):
         ???
     """
     if trace_id_map is None:
-        trace_id_map = np.zeros(im.shape)
-    im_out = np.zeros(im.shape) + np.nan
+        trace_id_map = np.zeros_like(im)
+    im_out = np.full(im.shape, np.nan)
     unique_trace_ids = np.unique(trace_id_map[np.where(np.isfinite(trace_id_map))])
     for trace_id in unique_trace_ids:
         where_trace = np.where(trace_id_map==trace_id)
@@ -2181,15 +1926,25 @@ def _task_normrows(paras, plot=False):
     new_im_rows = np.array(copy(im_rows), '<f4')  # .byteswap().newbyteorder()
     new_noise_rows = copy(noise_rows)
     new_badpix_rows = copy(badpix_rows)
-    res = np.zeros(im_rows.shape) + np.nan
-    paras_out = np.zeros((im_rows.shape[0],np.size(x_nodes))) + np.nan
+    res = np.full(im_rows.shape, np.nan)
+    paras_out = np.full((im_rows.shape[0],np.size(x_nodes)), np.nan)
     for k in range(im_rows.shape[0]):
 
         M_spline = get_spline_model(x_nodes, im_wvs_rows[k, :], spline_degree=3)
 
-        where_data_finite = np.where(np.isfinite(badpix_rows[k, :]) * np.isfinite(im_rows[k, :]) * \
-                                     np.isfinite(noise_rows[k, :]) * (noise_rows[k, :] != 0) * \
-                                     np.isfinite(star_model[k, :]))
+        finite_mask = (
+            np.isfinite(im_rows[k, :])
+            & np.isfinite(badpix_rows[k, :])
+            & np.isfinite(noise_rows[k, :])
+            & np.isfinite(star_model[k, :])
+        )
+
+        valid_mask = (
+            finite_mask
+            & (noise_rows[k, :] != 0)
+        )
+
+        where_data_finite = np.where(valid_mask)
 
         if np.size(where_data_finite[0]) == 0:
             res[k, :] = np.nan
@@ -2206,6 +1961,10 @@ def _task_normrows(paras, plot=False):
             validpara = np.where(np.nansum(M > np.nanmax(M) * 0.01, axis=0) != 0)
         M = M[:, validpara[0]]
 
+        if len(validpara[0]) == 0:
+            res[k, :] = np.nan
+            continue
+
         if regularization:
             d_reg, s_reg = reg_mean_map[k,:],reg_std_map[k,:]
             s_reg = s_reg[validpara]
@@ -2219,7 +1978,7 @@ def _task_normrows(paras, plot=False):
             d4fit = np.concatenate([d, d_reg])
             s4fit = np.concatenate([d_err, s_reg])
         else:
-            d4fit,M4fit,s4fit = d,M,d_err
+            d4fit, M4fit, s4fit = d, M, d_err
 
         # bounds_min = [0, ]* M.shape[1]
         bounds_min = [-np.inf, ] * M.shape[1]
@@ -2230,7 +1989,7 @@ def _task_normrows(paras, plot=False):
         res[k, where_data_finite[0]] = d - m
         new_im_rows[k, where_data_finite[0]] = m
         new_noise_rows[k, where_data_finite[0]] = d_err
-        norm_res_row = np.zeros(im_rows.shape[1]) + np.nan
+        norm_res_row = np.full(im_rows.shape[1], np.nan)
         norm_res_row[where_data_finite] = (d - m) / d_err
 
         meddev = median_abs_deviation(norm_res_row[where_data_finite])
@@ -2255,7 +2014,7 @@ def _task_normrows(paras, plot=False):
             plt.plot(ratio)
             plt.show()
 
-    return new_im_rows, new_noise_rows, new_badpix_rows, res,paras_out
+    return new_im_rows, new_noise_rows, new_badpix_rows, res, paras_out
 
 
 def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nodes=40, mypool=None, threshold=10, star_sub_mode=False, use_set_nans=False, x_nodes=None, regularization=True, reg_mean_map=None, reg_std_map=None):
@@ -2298,8 +2057,8 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
         new_image = set_nans(image, 40)
     new_noise = copy(noise)
     new_badpixs = copy(badpixs)
-    new_res = np.zeros(image.shape) + np.nan
-    new_spline_paras = np.zeros((image.shape[0],np.size(x_nodes)))
+    new_res = np.full(image.shape, np.nan)
+    new_spline_paras = np.zeros((image.shape[0], np.size(x_nodes)))
 
     #if chunk is too small, don't parallelize
     parallel_flag = True
@@ -2400,215 +2159,6 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
 
     return new_image, new_noise, new_badpixs, new_res,new_spline_paras
 
-
-def _task_normslice_2dspline(paras):
-    """ Worker function for normalizing slices via 2d spline, for use in parallelized calculations
-
-    Parameters
-    ----------
-    paras : tuple containing many values
-        im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map
-
-    Returns
-    -------
-
-    """
-    im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map = paras
-
-    new_im = np.zeros(im.shape)+np.nan#np.array(copy(im), '<f4')  # .byteswap().newbyteorder()
-    new_noise = copy(noise)
-    new_badpix = copy(badpix)
-    res = np.zeros(im.shape) + np.nan
-
-    bool_map = np.isfinite(new_badpix) * np.isfinite(im) * np.isfinite(noise) * (noise != 0) * np.isfinite(star_model) * np.isfinite(im_ifuy)
-    where_data_finite = np.where(bool_map)
-    if np.size(where_data_finite[0]) != 0:
-        ravel_im_ifuy = im_ifuy[where_data_finite]
-    ravel_im_wvs = im_wvs[where_data_finite]
-    # M_spline_ifuy = get_spline_model(ifuy_nodes, ravel_im_ifuy, spline_degree=3)
-    M_spline_ifuy = get_spline_model(ifuy_nodes, ravel_im_ifuy/ravel_im_wvs*wv_ref, spline_degree=3)
-    M_spline_wvs = get_spline_model(wv_nodes, ravel_im_wvs, spline_degree=3)
-    M_spline_ifuy_repeated = np.repeat(M_spline_ifuy, np.size(wv_nodes), axis=1)
-    M_spline_wvs_tiled = np.tile(M_spline_wvs, (1, np.size(ifuy_nodes)))
-    M_2dspline = M_spline_ifuy_repeated * M_spline_wvs_tiled
-
-    d = im[where_data_finite]
-    d_err = noise[where_data_finite]
-
-    M = M_2dspline * star_model[where_data_finite][:, None]
-
-    validpara = np.where(np.nansum(M > np.nanmax(M) * 0.005, axis=0) != 0)
-    M = M[:, validpara[0]]
-
-    if 1:
-        d_reg, s_reg = np.ravel(reg_mean_map), np.ravel(reg_std_map)
-        s_reg = s_reg[validpara]
-        d_reg = d_reg[validpara]
-        where_reg = np.where(np.isfinite(s_reg))
-        s_reg = s_reg[where_reg]
-        d_reg = d_reg[where_reg]
-        M_reg = np.zeros((np.size(where_reg[0]), M.shape[1]))
-        M_reg[np.arange(np.size(where_reg[0])), where_reg[0]] = 1
-        M4fit = np.concatenate([M, M_reg], axis=0)
-        d4fit = np.concatenate([d, d_reg])
-        s4fit = np.concatenate([d_err, s_reg])
-
-    p = lsq_linear(M4fit / s4fit[:, None], d4fit / s4fit).x
-    m = np.dot(M, p)
-    res[where_data_finite] = d - m
-    new_im[where_data_finite] = m
-    new_noise[where_data_finite] = d_err
-    norm_res = copy(res)
-    norm_res[where_data_finite] = norm_res[where_data_finite] / d_err
-
-    meddev = median_abs_deviation(norm_res[where_data_finite])
-    where_bad = np.where((np.abs(norm_res) / meddev > threshold) | np.isnan(norm_res))
-    new_badpix[where_bad] = np.nan
-
-    paras_out = np.zeros((np.size(ifuy_nodes), np.size(wv_nodes))) + np.nan
-    paras_out = np.ravel(paras_out)
-    paras_out[validpara] = p
-    paras_out = np.reshape(paras_out,(np.size(ifuy_nodes), np.size(wv_nodes)))
-
-    return new_im, new_noise, new_badpix, res, paras_out
-
-
-def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,trace_id_map=None,
-                              star_model=None,  mypool=None,
-                              threshold=10, use_set_nans=False,
-                              N_wvs_nodes=20, wv_nodes=None, delta_ifuy=0.05, ifuy_nodes=None,
-                              reg_mean_map=None, reg_std_map=None, wv_ref = None):
-    """ Normalize sliaces using a 2D spline
-
-    Parameters
-    ----------
-    image
-    im_wvs
-    im_ifuy
-    noise
-    badpixs
-    trace_id_map
-    star_model
-    mypool
-    threshold
-    use_set_nans
-    N_wvs_nodes
-    wv_nodes
-    delta_ifuy
-    ifuy_nodes
-    reg_mean_map
-    reg_std_map
-    wv_ref
-
-    Returns
-    -------
-    new_image, new_noise, new_badpixs, new_res, new_spline_paras
-
-    """
-
-    if noise is None:
-        noise = np.ones(image.shape)
-    if badpixs is None:
-        badpixs = np.ones(image.shape)
-    if star_model is None:
-        star_model = np.ones(image.shape)
-    if trace_id_map is None:
-        trace_id_map = np.zeros(image.shape)
-
-
-    if wv_nodes is None:
-        wv_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), N_wvs_nodes, endpoint=True)
-
-    if ifuy_nodes is None:
-        ifuy_min, ifuy_max = np.nanmin(im_ifuy), np.nanmax(im_ifuy)
-        ifuy_min, ifuy_max = np.floor(ifuy_min * 10) / 10, np.ceil(ifuy_max * 10) / 10
-        ifuy_nodes = np.arange(ifuy_min, ifuy_max + 0.1, delta_ifuy)
-
-    if wv_ref is None:
-        wv_ref = np.nanmin(im_wvs)
-
-    parallel_flag = True
-
-    unique_trace_ids = np.unique(trace_id_map[np.where(np.isfinite(trace_id_map))])
-
-    new_image = copy(image)
-    if use_set_nans:
-        new_image = set_nans(image, 40)
-    new_noise = copy(noise)
-    new_res = np.zeros(image.shape) + np.nan
-    new_badpixs = np.zeros(image.shape) + np.nan
-    new_spline_paras = np.zeros((np.size(unique_trace_ids),np.size(ifuy_nodes), np.size(wv_nodes)))
-
-    scaled_cloud = im_ifuy * wv_ref / im_wvs
-    bool_map = (scaled_cloud<np.min(ifuy_nodes)) | (scaled_cloud>np.max(ifuy_nodes)) | \
-               (im_wvs<np.min(wv_nodes)) | (im_wvs>np.max(wv_nodes))
-    where2mask = np.where(bool_map)
-    badpixs_nodes_mask = np.ones(badpixs.shape)
-    badpixs_nodes_mask[where2mask] = np.nan
-
-    if (mypool is None) or (parallel_flag == False):
-        print("\tPerforming serial normalize_slices_2dspline...")
-        for id,trace_id in enumerate(unique_trace_ids):
-            trace_mask = trace_id_map == trace_id
-            where_in_trace = np.where(trace_mask)
-            tmp_badpixs = np.zeros(badpixs.shape)+np.nan
-            tmp_badpixs[where_in_trace] = (badpixs_nodes_mask*badpixs)[where_in_trace]
-            row_id_min,row_id_max = np.min(where_in_trace[0]),np.max(where_in_trace[0])
-
-            paras = new_image[row_id_min:row_id_max,:], im_wvs[row_id_min:row_id_max,:], im_ifuy[row_id_min:row_id_max,:], \
-                new_noise[row_id_min:row_id_max,:], tmp_badpixs[row_id_min:row_id_max,:], wv_nodes,ifuy_nodes,wv_ref, \
-                star_model[row_id_min:row_id_max,:], threshold, reg_mean_map[id], reg_std_map[id]
-
-            outputs = _task_normslice_2dspline(paras)
-            partial_new_image, partial_new_noise, partial_new_badpixs, partial_new_res, partial_new_spline_paras = outputs
-
-            new_image[row_id_min:row_id_max,:] = partial_new_image
-            new_noise[row_id_min:row_id_max,:] = partial_new_noise
-            new_badpixs[row_id_min:row_id_max,:] = partial_new_badpixs
-            new_res[row_id_min:row_id_max,:] = partial_new_res
-            new_spline_paras[id,:,:] = partial_new_spline_paras
-    else:
-        print("\tPerforming parallelized normalize_slices_2dspline...")
-        row_indices_list = []
-        image_list = []
-        wvs_list = []
-        im_ifuy_list = []
-        noise_list = []
-        badpixs_list = []
-        star_model_list = []
-        for id, trace_id in enumerate(unique_trace_ids):
-            trace_mask = (trace_id_map == trace_id)
-            where_in_trace = np.where(trace_mask)
-            tmp_badpixs = np.zeros(badpixs.shape)+np.nan
-            tmp_badpixs[where_in_trace] = (badpixs_nodes_mask*badpixs)[where_in_trace]
-            row_id_min,row_id_max = np.min(where_in_trace[0]),np.max(where_in_trace[0])
-            row_indices_list.append((row_id_min,row_id_max ))
-
-            image_list.append(new_image[row_id_min:row_id_max, :])
-            wvs_list.append(im_wvs[row_id_min:row_id_max, :])
-            im_ifuy_list.append(im_ifuy[row_id_min:row_id_max, :])
-            noise_list.append(new_noise[row_id_min:row_id_max, :])
-            badpixs_list.append(tmp_badpixs[row_id_min:row_id_max, :])
-            star_model_list.append(star_model[row_id_min:row_id_max, :])
-
-        outputs_list = mypool.map(_task_normslice_2dspline, zip(image_list, wvs_list, im_ifuy_list, noise_list, badpixs_list,
-                                                      itertools.repeat(wv_nodes),
-                                                      itertools.repeat(ifuy_nodes),
-                                                      itertools.repeat(wv_ref),
-                                                      star_model_list,
-                                                      itertools.repeat(threshold),
-                                                      reg_mean_map,reg_std_map))
-        for id,((row_id_min,row_id_max), outputs) in enumerate(zip(row_indices_list, outputs_list)):
-            partial_new_image, partial_new_noise, partial_new_badpixs, partial_new_res, partial_new_spline_paras = outputs
-            new_image[row_id_min:row_id_max, :] = partial_new_image
-            new_noise[row_id_min:row_id_max, :] = partial_new_noise
-            new_badpixs[row_id_min:row_id_max, :] = partial_new_badpixs
-            new_res[row_id_min:row_id_max, :] = partial_new_res
-            new_spline_paras[id, :, :] = partial_new_spline_paras
-
-    return new_image, new_noise, new_badpixs, new_res, new_spline_paras
-
-
 def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array, interpolator, psf_wv0, fix_cen=None):
     """Fit a webbpsf model to an image
 
@@ -2634,9 +2184,9 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
 
     dist2host_as = np.sqrt(dra_as_array ** 2 + ddec_as_array ** 2)
 
-    psfsub_sc_im = np.zeros(sc_im.shape) + np.nan
-    psfsub_model_im = np.zeros(sc_im.shape)
-    bestfit_paras = np.zeros((4, np.size(wv_sampling))) + np.nan
+    psfsub_sc_im = np.full(sc_im.shape, np.nan)
+    psfsub_model_im = np.zeros_like(sc_im)
+    bestfit_paras = np.full((4, np.size(wv_sampling)), np.nan)
     for wv_id, left_wv in enumerate(wv_sampling):
         center_wv = left_wv * (1 + 0.25 / 2700)
         right_wv = left_wv * (1 + 0.5 / 2700)
@@ -2722,114 +2272,6 @@ def where_point_source(dataobj, radec_as, rad_as):
     ra, dec = radec_as
     dist2pointsource_as = np.sqrt((dataobj.dra_as_array - ra) ** 2 + (dataobj.ddec_as_array - dec) ** 2)
     return np.where(dist2pointsource_as < rad_as)
-
-
-def PCA_detec(im, im_err, im_badpixs, N_KL=5):
-    """ Detect (something??) using Princople Component Analyses
-
-    Parameters
-    ----------
-    im
-    im_err
-    im_badpixs
-    N_KL : int
-        Number of KL modes
-
-    Returns
-    -------
-    kls
-
-    """
-    im_cp = im * im_badpixs / im_err
-
-    new_im = im_cp[np.where(np.nansum(np.isfinite(im_cp), axis=1) > im.shape[1] // 2)[0], :]
-    ny, nx = new_im.shape
-    med_spec = np.nanmedian(new_im, axis=0)
-    where_nan = np.where(np.isnan(new_im))
-    new_im[where_nan] = med_spec[where_nan[1]]
-
-    X = new_im
-    X = X[np.where(np.nansum(X, axis=1) != 0)[0], :]
-    X = X / np.nanstd(X, axis=1)[:, None]
-    X[np.where(np.isnan(X))] = np.tile(np.nanmedian(X, axis=0)[None, :], (X.shape[0], 1))[np.where(np.isnan(X))]
-    X[np.where(np.isnan(X))] = 0
-
-    C = np.cov(X)
-    tot_basis = C.shape[0]
-    tmp_res_numbasis = np.clip(np.abs(N_KL) - 1, 0,
-                               tot_basis - 1)  # clip values, for output consistency we'll keep duplicates
-    max_basis = np.max(
-        tmp_res_numbasis) + 1  # maximum number of eigenvectors/KL basis we actually need to use/calculate
-    evals, evecs = la.eigh(C, subset_by_index=[tot_basis - max_basis, tot_basis - 1])
-    evals = np.copy(evals[::-1])
-    evecs = np.copy(evecs[:, ::-1], order='F')  # fortran order to improve memory caching in matrix multiplication
-    # calculate the KL basis vectors
-    kl_basis = np.dot(X.T, evecs)
-    kls = kl_basis * (1. / np.sqrt(evals * (nx - 1)))[None, :]  # multiply a value for each row
-    print(kls.shape)
-
-    return kls
-
-
-def PCA_wvs_axis(wavelengths, im, im_err, im_badpixs, bin_size, N_KL=5):
-    """Perform PCA along the wavelength axis
-
-    Parameters
-    ----------
-    wavelengths
-    im
-    im_err
-    im_badpixs
-    bin_size
-    N_KL : int
-        Number of KL modes
-
-    Returns
-    -------
-    new_wvs, kls
-
-    """
-    ny, nx = im.shape
-
-    new_wvs = np.arange(np.nanmin(wavelengths*im_badpixs), np.nanmax(wavelengths*im_badpixs), bin_size)
-    nz = np.size(new_wvs)
-    new_im = np.zeros((ny, nz))+  np.nan
-    for k in range(ny):
-        x = wavelengths[k]
-        y = im[k]/im_err[k]
-        q = im_badpixs[k]
-        s = im_err[k]
-
-        where_finite = np.where(np.isfinite(q) * np.isfinite(y) * (s != 0.0))
-        if np.size(where_finite[0]) < nx // 4:
-            continue
-        f = interp1d(x[where_finite], y[where_finite], bounds_error=False, fill_value=np.nan, kind="linear")
-        new_im[k, :] = f(new_wvs)
-    new_im[:,np.where(np.sum(np.isfinite(new_im),axis=0)<100)[0]]=np.nan
-    new_im = new_im[np.where(np.sum(np.isfinite(new_im),axis=1)!=0)[0],:]
-
-    new_im = new_im / np.nanstd(new_im, axis=1)[:, None]
-    where_nan = np.where(np.isnan(new_im))
-    new_im[where_nan] = 0
-
-    X = new_im
-    C = np.cov(X)
-
-    tot_basis = C.shape[0]
-    tmp_res_numbasis = np.clip(np.abs(N_KL) - 1, 0,
-                               tot_basis - 1)  # clip values, for output consistency we'll keep duplicates
-    max_basis = np.max(
-        tmp_res_numbasis) + 1  # maximum number of eigenvectors/KL basis we actually need to use/calculate
-    evals, evecs = la.eigh(C, subset_by_index=[tot_basis - max_basis, tot_basis - 1])
-    evals = np.copy(evals[::-1])
-    evecs = np.copy(evecs[:, ::-1], order='F')  # fortran order to improve memory caching in matrix multiplication
-    # calculate the KL basis vectors
-    kl_basis = np.dot(X.T, evecs)
-    kls = kl_basis * (1. / np.sqrt(evals * (nz - 1)))[None, :]  # multiply a value for each row
-    print(kls.shape)
-
-    return new_wvs, kls
-
 
 def combine_spectrum(wavelengths, fluxes, errors, bin_size):
     """ Combines the spectrum by combining the flux values in each bin using a weighted mean.
@@ -2992,7 +2434,6 @@ def _fitpsf_costfunc(paras, _x, _y, data, error, _webbpsf_interp):
         xc, yc, th = paras
     _x_diff, _y_diff = rotate_coordinates(_x - xc, _y - yc, -th, flipx=False)
     znew = _webbpsf_interp(_x_diff, _y_diff)
-    # znew = psf_func[0](_x - xc, _y - yc,grid=False )
     A = np.nansum(data * znew / error ** 2) / np.nansum(znew ** 2 / error ** 2)
     res = data - A * znew
     chi2 = np.nansum((res / error) ** 2)
@@ -3073,8 +2514,8 @@ def _fit_wpsf_task(paras, plot=False):
         iterator_sectors.extend([((r_min, r_max), phi_bound) for phi_bound in phi_bounds_list])
     tot_sectors = len(iterator_sectors)
 
-    out_paras = np.zeros((tot_sectors, 5)) + np.nan
-    out_model = np.zeros(_Z.shape)+ np.nan
+    out_paras = np.full((tot_sectors, 5), np.nan)
+    out_model = np.full(_Z.shape, np.nan)
     for sector_id, sector in enumerate(iterator_sectors):
         rmin, rmax = sector[0]
         pamin, pamax = sector[1]
@@ -3323,8 +2764,8 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
     all_interp_flux = all_interp_flux/all_interp_area2d*psf_spaxel_area
     all_interp_err = all_interp_err/all_interp_area2d*psf_spaxel_area
 
-    all_interp_psfmodel = np.zeros(all_interp_flux.shape) + np.nan
-    all_interp_psfsub = np.zeros(all_interp_flux.shape) + np.nan
+    all_interp_psfmodel = np.full(all_interp_flux.shape, np.nan)
+    all_interp_psfsub = np.full(all_interp_flux.shape, np.nan)
 
     if init_centroid is None:
         init_paras = np.array([0, 0])
@@ -3353,8 +2794,8 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
                 IWA, OWA, fit_cen, fit_angle, init_paras, ann_width, padding, sector_area
             out = _fit_wpsf_task(paras)
             if not bestfit_coords_defined:
-                bestfit_coords = np.zeros((out[0].shape[0],np.size(wv_sampling), 5)) + np.nan  # flux_init, flux,ra,dec,angle
-                bestfit_coords_defined=True
+                bestfit_coords = np.full((out[0].shape[0],np.size(wv_sampling), 5), np.nan)  # flux_init, flux,ra,dec,angle
+                bestfit_coords_defined = True
             bestfit_coords[:,wv_id, :] = out[0]
             all_interp_psfmodel[:, wv_id] = out[1]
             all_interp_psfsub[:, wv_id] = all_interp_flux[:, wv_id] - out[1]
@@ -3384,8 +2825,8 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
 
         for out_id,out in tqdm(enumerate(output_lists), total=len(output_lists), ncols=100):
             if not bestfit_coords_defined:
-                bestfit_coords = np.zeros((out[0].shape[0],np.size(wv_sampling), 5)) + np.nan  # flux_init, flux,ra,dec,angle
-                bestfit_coords_defined=True
+                bestfit_coords = np.full((out[0].shape[0],np.size(wv_sampling), 5), np.nan)  # flux_init, flux,ra,dec,angle
+                bestfit_coords_defined = True
             bestfit_coords[:,debug_init+out_id, :] = out[0]
             all_interp_psfmodel[:, debug_init+out_id] = out[1]
             all_interp_psfsub[:, debug_init+out_id] = all_interp_flux[:, debug_init+out_id] - out[1]
@@ -3446,9 +2887,9 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             wvs_ori = hdulist_sc["WAVELENGTH"].data
             ny_ori, nx_ori =wvs_ori.shape
 
-            new_model = np.zeros((ny_ori,nx_ori))+ np.nan
-            new_badpix = np.zeros((ny_ori,nx_ori))+ np.nan
-            new_area2d = np.zeros((ny_ori,nx_ori))+ np.nan
+            new_model = np.full((ny_ori,nx_ori), np.nan)
+            new_badpix = np.full((ny_ori,nx_ori), np.nan)
+            new_area2d = np.full((ny_ori,nx_ori), np.nan)
             for rowid in range(ny_ori):
                 new_model[rowid, :] = np.interp(wvs_ori[rowid, :] ,wv_sampling, all_interp_psfmodel[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
                 badpix_mask = np.isfinite(all_interp_badpix[(ny * obj_id + rowid), :]).astype(float)
@@ -3456,7 +2897,6 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
                 new_area2d[rowid, :] = np.interp(wvs_ori[rowid, :] , wv_sampling, all_interp_area2d[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
             where_bad = np.where(new_badpix != 1.0)
 
-            arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
             du = combdataobj.data_unit
             bu = hdulist_sc[1].header["BUNIT"].strip()
             if du == 'MJy'    and bu == 'MJy':
@@ -3464,9 +2904,9 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             elif du == 'MJy/sr' and bu == 'MJy/sr':
                 pass
             elif du == 'MJy/sr' and bu == 'MJy':
-                new_model *= (new_area2d*arcsec2_to_sr)
+                new_model *= new_area2d
             elif du == 'MJy'    and bu == 'MJy/sr':
-                new_model /= (new_area2d*arcsec2_to_sr)
+                new_model /= new_area2d
 
             tmp_sub = hdulist_sc["SCI"].data - new_model
 
@@ -3521,8 +2961,8 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
 
     ra_grid, dec_grid = np.meshgrid(ra_vec, dec_vec)
 
-    flux_map = np.zeros(ra_grid.shape)
-    fluxerr_map = np.zeros(ra_grid.shape)
+    flux_map = np.zeros_like(ra_grid)
+    fluxerr_map = np.zeros_like(ra_grid)
 
     all_interp_ra, all_interp_dec, all_interp_wvs, all_interp_flux, all_interp_err, all_interp_badpix, all_interp_area2d = \
         dataobj0.interpdata_regwvs(wv_sampling=None, modelfit=False, out_filename=dataobj0.interpdata_regwvs_filename,
@@ -3570,7 +3010,7 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
     for ra_id, ra in enumerate(ra_vec):
         for dec_id, dec in enumerate(dec_vec):
             print(ra, dec)
-            sampled_psf = np.zeros(all_interp_flux.shape) + np.nan
+            sampled_psf = np.full(all_interp_flux.shape, np.nan)
             for wv_id, wv in enumerate(wv_sampling):
                 # print(wv)
                 if not (debug_init < wv_id < debug_end):
@@ -3594,7 +3034,7 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
             noise_factor = np.nanstd(res/all_interp_err)
 
             flux_map[dec_id, ra_id] = mfflux
-            fluxerr_map[dec_id, ra_id] = mffluxerr*noise_factor
+            fluxerr_map[dec_id, ra_id] = mffluxerr * noise_factor
 
     snr_map = flux_map / fluxerr_map
     if out_filename is not None:
@@ -3632,7 +3072,7 @@ def _build_cube_task(inputs):
         Complex nested bunch of stuff... TODO figure out and document
 
     """
-    X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inputs
+    X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min, ifu_name = inputs
 
     psf_interp = _interp_psf(psf_interp_paras)
 
@@ -3641,8 +3081,13 @@ def _build_cube_task(inputs):
         for dec_id, dec in enumerate(dec_vec):
 
             R = np.sqrt((X - ra) ** 2 + (Y - dec) ** 2)
-            Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
-            where_finite = np.where(np.isfinite(Zbp) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
+            if ifu_name == 'nirspec':
+                Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
+                where_finite = np.where(np.isfinite(Zbp) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
+            elif ifu_name == 'miri':
+                where_finite = np.where(np.isfinite(Zbp) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
+            else:
+                raise ValueError('ifu_name must be either nirspec or miri')
 
             if np.size(where_finite[0]) < N_pix_min:
                 outs.append([ra_id, dec_id, np.nan, np.nan]) #changed from continue
@@ -3666,7 +3111,7 @@ def _build_cube_task(inputs):
 
 def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
                     linear_interp=True, mppool=None, aper_radius=0.5,
-                    debug_init=None, debug_end=None, N_pix_min=None):
+                    debug_init=None, debug_end=None, N_pix_min=None, ifu_name='nirspec'):
     """ Build a datacube, based on the forward modeling processed results
 
     Parameters
@@ -3714,6 +3159,13 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
     all_interp_err = combdataobj.noise
     all_interp_badpix = combdataobj.bad_pixels
 
+    if ifu_name == 'miri':
+        all_interp_ra = all_interp_ra.transpose()
+        all_interp_dec = all_interp_dec.transpose()
+        all_interp_flux = all_interp_flux.transpose()
+        all_interp_err = all_interp_err.transpose()
+        all_interp_badpix = all_interp_badpix.transpose()
+
     if hasattr(combdataobj, "filelist"):
         N_dithers = len(combdataobj.filelist)
     else:
@@ -3721,8 +3173,8 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
 
     ra_grid, dec_grid = np.meshgrid(ra_vec, dec_vec)
 
-    flux_cube = np.zeros((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1])) + np.nan
-    fluxerr_cube = np.zeros((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1])) + np.nan
+    flux_cube = np.full((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1]), np.nan)
+    fluxerr_cube = np.full((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1]), np.nan)
 
     # only process frames with wavelength index between debug_init and debug_end
     if debug_init is None:
@@ -3741,7 +3193,7 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
             continue
         rprint("prepping build_cube inputs... id: {} wave: {}".format(wv_id,wv))
 
-        psf_interp_paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
+        psf_interp_paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg, ifu_name
 
         X = all_interp_ra[:, wv_id]
         Y = all_interp_dec[:, wv_id]
@@ -3818,8 +3270,8 @@ def cube_matchedfilter(flux_cube, fluxerr_cube, wv_sampling, ra_grid, dec_grid, 
     ra_vec = ra_grid[0,:]
     dec_vec = dec_grid[:,0]
 
-    flux_map = np.zeros(ra_grid.shape) +np.nan
-    fluxerr_map = np.zeros(ra_grid.shape) +np.nan
+    flux_map = np.full((ra_grid.shape), np.nan)
+    fluxerr_map = np.full((ra_grid.shape), np.nan)
 
     for ra_id, ra in enumerate(ra_vec):
         print("ra",ra)

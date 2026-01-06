@@ -17,7 +17,6 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
         verbose : bool
             Be more verbose in text output?
         """
-        super().__init__(verbose=verbose)
 
         if len(dataobj_list) == 0:
             warning_text = "No data object provided provided. " + \
@@ -27,6 +26,8 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
             # Is there a compelling use case to allow manually adding data after initializing the class?
         else:
             self.combine_dataobj_list(dataobj_list)
+            self.bary_RV = 0
+            self.refpos = None
 
 
     def combine_dataobj_list(self, dataobj_list):
@@ -34,7 +35,6 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
 
         This concatenates the values from many attributes into a single overall combined dataset
         """
-        self.ins_type = dataobj_list[0].ins_type
         self.coords = dataobj_list[0].coords
         self.R = dataobj_list[0].R
         self.data_unit = dataobj_list[0].data_unit
@@ -50,8 +50,6 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
                 self.default_filenames[key] = val.replace(".fits","_combined.fits")
         self.utils_dir = dataobj_list[0].utils_dir
         self.crds_dir = dataobj_list[0].crds_dir
-        self.bary_RV = dataobj_list[0].bary_RV
-        self.refpos = dataobj_list[0].refpos
         if hasattr(dataobj_list[0], "wv_sampling"):
             self.wv_sampling = dataobj_list[0].wv_sampling
 
@@ -67,12 +65,12 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
             self.priheader_list.append(dataobj.priheader)
             self.extheader_list.append(dataobj.extheader)
 
-        self.data = np.concatenate([copy(dataobj.data) for dataobj in dataobj_list],axis=0)
-        self.noise = np.concatenate([copy(dataobj.noise) for dataobj in dataobj_list],axis=0)
-        self.bad_pixels = np.concatenate([copy(dataobj.bad_pixels) for dataobj in dataobj_list],axis=0)
-        self.wavelengths = np.concatenate([copy(dataobj.wavelengths) for dataobj in dataobj_list],axis=0)
-        self.dra_as_array = np.concatenate([copy(dataobj.dra_as_array) for dataobj in dataobj_list],axis=0)
-        self.ddec_as_array = np.concatenate([copy(dataobj.ddec_as_array) for dataobj in dataobj_list],axis=0)
-        self.area2d = np.concatenate([copy(dataobj.area2d) for dataobj in dataobj_list],axis=0)
-        N_traces = np.size(np.unique(dataobj.trace_id_map[np.where(np.isfinite(dataobj.trace_id_map))]))
-        self.trace_id_map = np.concatenate([dataobj.trace_id_map+dataobj_id*N_traces for dataobj_id,dataobj in enumerate(dataobj_list)],axis=0)
+        self.data = np.concatenate([copy(dataobj.data) for dataobj in dataobj_list], axis=0)
+        self.noise = np.concatenate([copy(dataobj.noise) for dataobj in dataobj_list], axis=0)
+        self.bad_pixels = np.concatenate([copy(dataobj.bad_pixels) for dataobj in dataobj_list], axis=0)
+        self.wavelengths = np.concatenate([copy(dataobj.wavelengths) for dataobj in dataobj_list], axis=0)
+        self.dra_as_array = np.concatenate([copy(dataobj.dra_as_array) for dataobj in dataobj_list], axis=0)
+        self.ddec_as_array = np.concatenate([copy(dataobj.ddec_as_array) for dataobj in dataobj_list], axis=0)
+        self.area2d = np.concatenate([copy(dataobj.area2d) for dataobj in dataobj_list], axis=0)
+        N_traces = np.size(np.unique(dataobj_list[0].trace_id_map[np.where(np.isfinite(dataobj_list[0].trace_id_map))]))
+        self.trace_id_map = np.concatenate([dataobj.trace_id_map+dataobj_id*N_traces for dataobj_id, dataobj in enumerate(dataobj_list)], axis=0)
