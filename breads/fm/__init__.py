@@ -2,7 +2,7 @@ from .template import templatefm
 from .hc_atmgrid_hpffm import hc_atmgrid_hpffm
 from .hc_atmgrid_splinefm import hc_atmgrid_splinefm
 from .hc_atmgrid_splinefm_jwst_nirspec import hc_atmgrid_splinefm_jwst_nirspec
-from .hc_atmgrid_splinefm_jwst_nirspec_cal import hc_atmgrid_splinefm_jwst_nirspec_cal
+from .hc_atmgrid_splinefm_jwst_ifu_cal import hc_atmgrid_splinefm_jwst_ifu_cal_cleaned
 from .hc_hpffm import hc_hpffm
 from .hc_kpicrvfm import hc_kpicrvfm
 from .hc_mask_splinefm import hc_mask_splinefm
