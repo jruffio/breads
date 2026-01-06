@@ -819,12 +819,15 @@ def propagate_coordinates_at_epoch(targetname, date, verbose=True):
     Simbad.add_votable_fields("dec")  # Retrieve proper motion in RA
     Simbad.add_votable_fields("pmra")  # Retrieve proper motion in RA
     Simbad.add_votable_fields("pmdec")  # Retrieve proper motion in Dec.
-    Simbad.add_votable_fields("plx")  # Retrieve parallax
+    Simbad.add_votable_fields("plx_value")  # Retrieve parallax
 
     if verbose:
         print(f"Retrieving SIMBAD coordinates for {targetname}")
 
     result_table = Simbad.query_object(targetname)
+
+    if result_table is None:
+        raise ValueError(f"{targetname} not found in SIMBAD database. Try with another target name recognized by SIMBAD.")
 
     # Get the coordinates and proper motion from the result table
     ra = result_table["ra"][0]
