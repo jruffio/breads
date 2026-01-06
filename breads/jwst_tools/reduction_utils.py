@@ -28,12 +28,12 @@ except ImportError:
 
 from breads.instruments.instrument import Instrument
 from breads.instruments.jwstnirspec_cal import JWSTNirspec_cal
-from breads.instruments.jwstnirspec_cal import untangle_dq
-from breads.instruments.jwstnirspec_cal import crop_trace_edges
-from breads.instruments.jwstnirspec_cal import where_point_source
-from breads.instruments.jwstnirspec_cal import fitpsf
-from breads.instruments.jwstnirspec_cal import get_contnorm_spec
-from breads.instruments.jwstnirspec_cal import filter_big_triangles
+from breads.instruments.jwst_IFUs import untangle_dq
+from breads.instruments.jwst_IFUs import crop_trace_edges
+from breads.instruments.jwst_IFUs import where_point_source
+from breads.instruments.jwst_IFUs import fitpsf
+from breads.instruments.jwst_IFUs import get_contnorm_spec
+from breads.instruments.jwst_IFUs import filter_big_triangles
 from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_cals
 from breads.fit import fitfm
 from breads.utils import get_spline_model
@@ -296,7 +296,7 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
 # wv_for_cent_calib_dict["G395H nrs1"] = np.arange(2.859, 4.103, 0.01)
 # wv_for_cent_calib_dict["G395H nrs2"] = np.arange(4.081, 5.280, 0.01)
 
-def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0), wv_sampling=None, N_wvs_nodes=40,
+def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampling=None, N_wvs_nodes=40,
                             mask_charge_transfer_radius=None,
                             IWA=0.3, OWA=1.0,
                             debug_init=None, debug_end=None,
@@ -313,7 +313,6 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
     cal_files : list of strings
         Filenames of stage 2 reduced Cal files to process
     utils_dir
-    crds_dir
     init_centroid : tuple of floats
         Starting guess for centroid location
     wv_sampling
@@ -398,7 +397,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, True])
 
         # Load that file. (TODO: Does this invoke the preproc_task_list?)
-        dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
+        dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
         regwvs_dataobj_list.append(dataobj.reload_interpdata_regwvs())
 
@@ -720,7 +719,7 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     if len(glob(cal_filename)) == 0:
         raise Exception("Could not find the corresponding cal file. Please run stage 2 without cleaning first.")
 
-    cal_dataobj = JWSTNirspec_cal(cal_filename, crds_dir=crds_dir, utils_dir=utils_dir,
+    cal_dataobj = JWSTNirspec_cal(cal_filename, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True)
     out = cal_dataobj.reload_coordinates_arrays()
     if out is None:
@@ -1034,7 +1033,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
                                                               "threshold_badpix": 10,
                                                               "mppool": mppool}, True, True])
 
-        dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
+        dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
 
         # Do some masking
@@ -1099,14 +1098,14 @@ def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None,
                                                                         "threshold_badpix": 100,
                                                                         "mppool": mppool}, True, True])
 
-        dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
+        dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
         if combined_star_func is not None:
             dataobj.reload_starspectrum_contnorm()
             dataobj.star_func = combined_star_func
 
         outputs = dataobj.reload_starsubtraction()
-        # outputs = None
+
         if outputs is None:
             outputs = dataobj.compute_starsubtraction(save_utils=True, starsub_dir="starsub1d",
                                                       threshold_badpix=10, mppool=mppool)
@@ -1140,7 +1139,7 @@ def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_rad
 
         if use_starsub:
             starsub_filename = os.path.join(dataobj.utils_dir, starsub_dir, os.path.basename(dataobj.filename))
-            starsub_dataobj = JWSTNirspec_cal(starsub_filename, crds_dir=dataobj.crds_dir, utils_dir=dataobj.utils_dir)
+            starsub_dataobj = JWSTNirspec_cal(starsub_filename, utils_dir=dataobj.utils_dir)
             if (dataobj.data_unit == 'MJy') and (starsub_dataobj.data_unit == 'MJy/sr'):
                 replace_data = dataobj.convert_MJy_per_sr_to_MJy(data_in_MJy_per_sr=starsub_dataobj.data)
             elif (dataobj.data_unit == 'MJy/sr') and (starsub_dataobj.data_unit == 'MJy/sr'):
