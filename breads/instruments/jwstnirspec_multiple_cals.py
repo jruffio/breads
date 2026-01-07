@@ -17,6 +17,7 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
         verbose : bool
             Be more verbose in text output?
         """
+        self.verbose = verbose
 
         if len(dataobj_list) == 0:
             warning_text = "No data object provided provided. " + \

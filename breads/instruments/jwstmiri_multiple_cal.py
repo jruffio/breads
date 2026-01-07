@@ -17,6 +17,7 @@ class JWSTMiri_multiple_cals(JWSTMiri_cal):
         dataobj_list
         verbose
         """
+        self.verbose = verbose
 
         if len(dataobj_list) == 0:
             warning_text = "No data object provided provided. " + \
