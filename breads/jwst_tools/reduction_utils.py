@@ -30,7 +30,6 @@ from breads.instruments.instrument import Instrument
 from breads.instruments.jwstnirspec_cal import JWSTNirspec_cal
 from breads.instruments.jwst_IFUs import untangle_dq
 from breads.instruments.jwst_IFUs import crop_trace_edges
-from breads.instruments.jwst_IFUs import where_point_source
 from breads.instruments.jwst_IFUs import fitpsf
 from breads.instruments.jwst_IFUs import get_contnorm_spec
 from breads.instruments.jwst_IFUs import filter_big_triangles
@@ -1043,7 +1042,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
         # mask planets before computing the star spectrum
         if ra_dec_point_sources is not None:
             for ra_pl, dec_pl in ra_dec_point_sources:
-                where_pl = where_point_source(dataobj, [ra_pl / 1000., dec_pl / 1000.], 0.16)
+                where_pl = dataobj.where_point_source([ra_pl / 1000., dec_pl / 1000.], 0.16)
                 dataobj.bad_pixels[where_pl] = np.nan
 
         dataobj_list.append(dataobj)
@@ -1939,7 +1938,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coor
         # mask planets before computing the star spectrum
         if ra_dec_point_sources is not None:
             for ra_pl, dec_pl in ra_dec_point_sources:
-                where_pl = where_point_source(dataobj, [ra_pl / 1000., dec_pl / 1000.], 0.16)
+                where_pl = dataobj.where_point_source([ra_pl / 1000., dec_pl / 1000.], 0.16)
                 dataobj.bad_pixels[where_pl] = np.nan
 
         dataobj_list.append(dataobj)

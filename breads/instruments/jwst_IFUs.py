@@ -1761,6 +1761,27 @@ class JWST_IFUs:
         wv_sampling = np.arange(wv_min, wv_max, sampling_dw)
         return wv_sampling
 
+    def where_point_source(self, radec_as, rad_as):
+        """Which pixels in a point cloud are within some given radius of a given location?
+
+        Parameters
+        ----------
+        dataobj : data object
+            Point cloud data object
+        radec_as : tuple of floats
+            RA, Dec coordinates of interest
+        rad_as : float
+            Radius in arcseconds
+
+        Returns
+        -------
+        dist2pointsource_as : 2d Boolean mask
+            Boolean mask of pixels within given radius of a given location
+        """
+        ra, dec = radec_as
+        dist2pointsource_as = np.sqrt((self.dra_as_array - ra) ** 2 + (self.ddec_as_array - dec) ** 2)
+        return np.where(dist2pointsource_as < rad_as)
+
 #### Functions
 def _get_wpsf_task(paras, fov_arcsec=6):
     """ Run WebbPSF for a single wavelength. Utility function for compute_webbpsf_model.
@@ -2252,26 +2273,6 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
 
     return bestfit_paras, psfsub_model_im, psfsub_sc_im
 
-
-def where_point_source(dataobj, radec_as, rad_as):
-    """Which pixels in a point cloud are within some given radius of a given location?
-
-    Parameters
-    ----------
-    dataobj : data object
-        Point cloud data object
-    radec_as : tuple of floats
-        RA, Dec coordinates of interest
-    rad_as : float
-        Radius in arcseconds
-
-    Returns
-    -------
-
-    """
-    ra, dec = radec_as
-    dist2pointsource_as = np.sqrt((dataobj.dra_as_array - ra) ** 2 + (dataobj.ddec_as_array - dec) ** 2)
-    return np.where(dist2pointsource_as < rad_as)
 
 def combine_spectrum(wavelengths, fluxes, errors, bin_size):
     """ Combines the spectrum by combining the flux values in each bin using a weighted mean.
