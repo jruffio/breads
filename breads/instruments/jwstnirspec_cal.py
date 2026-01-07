@@ -1,34 +1,24 @@
 import itertools
 import os.path
-import sys
-from copy import copy, deepcopy
+from copy import copy
 from glob import glob
-from warnings import warn
 
 import astropy.io.fits as pyfits
-import matplotlib.pyplot as plt
 import matplotlib.tri as tri
 import numpy as np
 import scipy.linalg as la
 import stpsf as webbpsf
-from astropy import constants as const
-from astropy import units as u
-from astropy.stats import sigma_clip
-from scipy.interpolate import CloughTocher2DInterpolator, LinearNDInterpolator
+
 from scipy.interpolate import interp1d, splev, splrep
 from scipy.ndimage import generic_filter, median_filter
-from scipy.optimize import minimize, curve_fit, lsq_linear
-from scipy.signal import convolve2d
+from scipy.optimize import lsq_linear
 from scipy.stats import median_abs_deviation
 from tqdm import tqdm
 
-import breads.utils as utils
-from breads.instruments.instrument import Instrument
-from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_elements
-from breads.utils import get_spline_model
 
-from instruments.jwst_IFUs import JWST_IFUs
-from instruments.jwst_IFUs import crop_trace_edges, set_nans, filter_big_triangles, combine_spectrum
+from breads.utils import get_spline_model
+from breads.instruments.jwst_IFUs import JWST_IFUs
+from breads.instruments.jwst_IFUs import crop_trace_edges, set_nans, filter_big_triangles, combine_spectrum
 
 
 

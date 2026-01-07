@@ -15,7 +15,7 @@ import breads.utils as utils
 from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_elements
 from breads.jwst_tools.flat_miri_utils import beta_masking_inverse_slice
 from scipy.ndimage import generic_filter
-from instruments.jwst_IFUs import JWST_IFUs
+from breads.instruments.jwst_IFUs import JWST_IFUs
 
 
 class JWSTMiri_cal(JWST_IFUs):
