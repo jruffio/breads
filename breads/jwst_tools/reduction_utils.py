@@ -299,7 +299,7 @@ def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampl
                             mask_charge_transfer_radius=None,
                             IWA=0.3, OWA=1.0,
                             debug_init=None, debug_end=None,
-                            numthreads=16,
+                            mypool=None,
                             save_plots=False,
                             filename_suffix="_webbpsf",
                             overwrite=False,
@@ -339,7 +339,6 @@ def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampl
       [X]_poly2d_centroid_[filename_suffix].txt
 
     """
-    mypool = mp.Pool(processes=numthreads)
 
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
@@ -414,6 +413,7 @@ def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampl
                                                                   pixelscale=0.1, oversample=10,
                                                                   parallelize=False, mppool=mypool,
                                                                   save_utils=True)
+
     wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_x, webbpsf_y, wpsf_oversample, wpsf_pixelscale = webbpsf_reload
     webbpsf_x = np.tile(webbpsf_x[None, :, :], (wepsfs.shape[0], 1, 1))
     webbpsf_y = np.tile(webbpsf_y[None, :, :], (wepsfs.shape[0], 1, 1))
@@ -685,7 +685,7 @@ def fm_charge_transfer(nonlin_paras, cubeobj, charge_transfer_mask=None, nodes=4
             return d, m_output, s
 
 
-def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
+def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, N_nodes=40, model_charge_transfer=False,
                               utils_dir=None, coords_offset=(0, 0)):
     """ Clean 1/f stripe noise from NIRSpec IFU data. Inspired by NSClean but implemented independently.
 
@@ -702,7 +702,6 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     rate_file
     cal_file_dir
     clean_dir
-    crds_dir
     N_nodes
     model_charge_transfer
     utils_dir
@@ -725,7 +724,7 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
         cal_dataobj.compute_coordinates_arrays(save_utils=True)
     cal_dataobj.apply_coords_offset(coords_offset=coords_offset)
 
-    ra_im, dec_im = cal_dataobj.getskycoords()
+    ra_im, dec_im = cal_dataobj.get_sky_coords()
     sep_im = np.sqrt(ra_im ** 2 + dec_im ** 2)
     cal_im = cal_dataobj.data
 
@@ -860,7 +859,7 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
         data.bad_pixels = copy(bad_pixels[:, colid])
 
         nonlin_paras = []
-        fm_paras = {"badpixfraction": 0.99, "nodes": N_nodes, "fix_parameters": [],
+        fm_paras = {"badpixfraction": 0.99, "nodes": N_nodes, "fix_parameters": None,
                     "regularization": "default", "M_spline": m_spline_column}
         if 1:  # optimize non linear parameter
             out_log_prob, _, rchi2, linparas, linparas_err = fitfm(nonlin_paras, data, fm_column_background, fm_paras,
@@ -909,7 +908,7 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     return new_rate_file
 
 
-def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
+def run_noise_clean(rate_files, stage2_dir, output_dir, N_nodes=40, model_charge_transfer=False,
                     utils_dir=None, coords_offset=(0, 0), overwrite=False, save_plots=True):
     """Invoke forward model noise removal for a list of rate files
 
@@ -918,7 +917,6 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, mo
     rate_files
     stage2_dir
     output_dir
-    crds_dir
     N_nodes
     model_charge_transfer
     utils_dir
@@ -948,7 +946,7 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, mo
             continue
 
 
-        forward_model_noise_clean(rate_file, stage2_dir, output_dir, crds_dir,
+        forward_model_noise_clean(rate_file, stage2_dir, output_dir,
                                   N_nodes=N_nodes,
                                   model_charge_transfer=model_charge_transfer, utils_dir=utils_dir,
                                   coords_offset=coords_offset)
@@ -961,7 +959,7 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, mo
     if save_plots:
         breads.jwst_tools.plotting.plot_2d_image_sets_side_by_side(rate_files, cleaned_rate_files,
                                                                    output_dir=output_dir,
-                                                                   suptitle="Noise Cleaining results. Left = Before, Right = After.",
+                                                                   suptitle="Noise Cleaning results. Left = Before, Right = After.",
                                                                    plot_label='noiseclean')
 
     return cleaned_rate_files
@@ -970,7 +968,7 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, mo
 # Host Star PSF Subtraction 
 
 
-def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_offset=(0, 0), wv_nodes=None,
+def compute_normalized_stellar_spectrum(cal_files, utils_dir, coords_offset=(0, 0), wv_nodes=None,
                                         mask_charge_transfer_radius=None, mppool=None,
                                         ra_dec_point_sources=None, overwrite=False,targetname=None):
     """
@@ -979,7 +977,6 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
     ----------
     cal_files
     utils_dir
-    crds_dir
     coords_offset
     wv_nodes
     mask_charge_transfer_radius
@@ -1057,7 +1054,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
     return combined_star_func
 
 
-def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None, combined_star_func=None,
+def compute_starlight_subtraction(cal_files, utils_dir, wv_nodes=None, combined_star_func=None,
                                   coords_offset=(0, 0), mppool=None,targetname=None):
     """
 
@@ -1065,7 +1062,6 @@ def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None,
     ----------
     cal_files
     utils_dir
-    crds_dir
     wv_nodes
     combined_star_func
     coords_offset
