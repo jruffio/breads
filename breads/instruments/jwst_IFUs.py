@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import itertools
 import os.path
 import sys
@@ -26,7 +27,7 @@ from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_el
 from breads.utils import get_spline_model
 
 
-class JWST_IFUs:
+class JWST_IFUs(ABC):
     def __init__(self, filename=None, utils_dir=None, verbose=True):
         """JWST IFU 2D calibrated data class.
 
@@ -241,6 +242,7 @@ class JWST_IFUs:
                 func = getattr(self, task_name)
                 func(**dict_paras)
 
+    @abstractmethod
     def _init_wcs(self, filename):
         """Hook to be implemented by subclasses"""
         raise NotImplementedError
@@ -392,10 +394,6 @@ class JWST_IFUs:
             self._save_coordinates_arrays(save_utils)
 
         return self.wavelengths, self.dra_as_array, self.ddec_as_array, self.area2d
-
-    def _compute_wcs(self, hdulist):
-        "Hook to be implemented by subclasses"
-        raise NotImplementedError
 
     def _save_coordinates_arrays(self, save_utils):
         """ Save the computed coordinates into the save utils directory.
@@ -761,6 +759,7 @@ class JWST_IFUs:
 
         return wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_X, webbpsf_Y, wpsf_oversample, wpsf_pixelscale
 
+    @abstractmethod
     def _get_webbpsf_model_inputs(self, image_mask, pixelscale):
         """Hook to be implemented by subclasses"""
         raise NotImplementedError
@@ -1667,15 +1666,12 @@ class JWST_IFUs:
         ifuX = None
         ifuY = None
 
-        print("debug", self.coords)
-
         if ras is not None and decs is not None:
             ifuX, ifuY = rotate_coordinates(ras, decs, self.east2V2_deg, flipx=False)
         else:
             if "ifu" in self.coords:
                 ifuX, ifuY =  self.dra_as_array, self.ddec_as_array
             elif "sky" in self.coords:
-                print("debug good", self.east2V2_deg)
                 ifuX, ifuY = rotate_coordinates(self.dra_as_array, self.ddec_as_array, self.east2V2_deg, flipx=False)
             else:
                 raise ValueError(f"coords type must be either 'ifu' or 'sky' not {self.coords}")
@@ -2037,7 +2033,6 @@ def _task_normrows(paras, plot=False):
 
     return new_im_rows, new_noise_rows, new_badpix_rows, res, paras_out
 
-
 def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nodes=40, mypool=None, threshold=10, star_sub_mode=False, use_set_nans=False, x_nodes=None, regularization=True, reg_mean_map=None, reg_std_map=None):
     """Normalize Rows
 
@@ -2091,7 +2086,7 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
 
 
     if (mypool is None) or (parallel_flag==False):
-        paras = new_image, im_wvs, new_noise, new_badpixs, x_nodes, star_model, threshold, star_sub_mode,regularization,reg_mean_map,reg_std_map
+        paras = new_image, im_wvs, new_noise, new_badpixs, x_nodes, star_model, threshold, star_sub_mode, regularization, reg_mean_map, reg_std_map
         outputs = _task_normrows(paras)
         new_image, new_noise, new_badpixs, new_res,new_spline_paras = outputs
     else:
@@ -2163,13 +2158,16 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, nod
                                                           itertools.repeat(None),
                                                           itertools.repeat(None)))
         else:
-            outputs_list = mypool.map(_task_normrows, zip(image_list, wvs_list, noise_list, badpixs_list,
+            arguments = list(zip(image_list, wvs_list, noise_list, badpixs_list,
                                                           itertools.repeat(x_nodes),
                                                           starmodel_list,
                                                           itertools.repeat(threshold),
                                                           itertools.repeat(star_sub_mode),
                                                           itertools.repeat(regularization),
                                                           reg_mean_map_list,reg_std_map_list))
+
+            outputs_list = mypool.map(_task_normrows, arguments)
+
         for row_indices, outputs in zip(row_indices_list, outputs_list):
             out_im_rows, out_noise_rows, out_badpixs_rows, out_res,spline_paras = outputs
             new_image[row_indices, :] = out_im_rows
