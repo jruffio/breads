@@ -124,7 +124,7 @@ class JWSTMiri_cal(JWST_IFUs):
         wv_ref : float or None
             Wavelength reference to later compute the quick monochromatic webbpsf
         """
-        self.mask_channel = np.full(self.data, np.nan)
+        self.mask_channel = np.full_like(self.data, np.nan)
         if self.channel_reduction == '1' or self.channel_reduction == '4':
             self.mask_channel[:, :507] = 1
         elif self.channel_reduction == '2' or self.channel_reduction == '3':
@@ -231,16 +231,25 @@ class JWSTMiri_cal(JWST_IFUs):
         """
 
         if self.verbose:
-            print("Initializing row_err and bad_pixels")
+            print("Initializing row_err and bad_pixels for MIRI")
         new_badpix = np.ones(self.bad_pixels.shape)
 
         for colid in range(self.bad_pixels.shape[1]):
             col_flux = np.copy(self.data[:, colid])
+
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="All-NaN slice encountered",
+                    category=RuntimeWarning,
+                )
+                smooth = generic_filter(col_flux, np.nanmedian, size=50)
+                col_flux = col_flux / smooth
+
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore', AstropyUserWarning)
-                col_flux = col_flux / generic_filter(col_flux, np.nanmedian, size=50)
                 clipped_data = sigma_clip(col_flux, sigma=3, maxiters=3)
-            new_badpix[clipped_data.mask, colid] = np.nan
+                new_badpix[clipped_data.mask, colid] = np.nan
 
         self.bad_pixels *= new_badpix
 
@@ -394,6 +403,7 @@ class JWSTMiri_cal(JWST_IFUs):
 
         wherenan = np.where(np.isnan(spline_paras0))
         reg_mean_map = copy(spline_paras0)
+
         reg_mean_map[wherenan] = np.tile(np.nanmedian(spline_paras0, axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
         reg_std_map = np.abs(spline_paras0)
         reg_std_map[wherenan] = np.tile(np.nanmax(np.abs(spline_paras0), axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]

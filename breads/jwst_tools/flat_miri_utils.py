@@ -310,7 +310,6 @@ def find_brightest_slices(data, channel, plot=False):
         topN_indices.append(np.where(medianes == top_peaks_values[i])[0])
     topN_indices = np.array(topN_indices)
 
-    print(topN_indices, len(peaks))
     if plot:
         plt.plot(medianes)
         plt.scatter(topN_indices, medianes[topN_indices])
@@ -340,7 +339,7 @@ def beta_masking_inverse_slice(data, beta, channel, N_slices=4):
             continue
         if ID not in slice_id_masked:
             slice_id_masked.append(ID)
-            print(f"Slice ID: {ID}")
+            print(f"Slice for ID: {ID}")
             mask[beta_slice_num == ID] = 1
 
     return mask

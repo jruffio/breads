@@ -243,7 +243,7 @@ class JWST_IFUs(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def compute_med_filt_badpix(self, filename):
+    def compute_med_filt_badpix(self):
         """Hook to be implemented by subclasses"""
         raise NotImplementedError
 
@@ -1117,7 +1117,6 @@ class JWST_IFUs(ABC):
                                                                               reg_std_map=reg_std_map0)
         if iterative:
             reg_mean_map1 = copy(spline_paras0)
-            print(reg_mean_map0.shape, reg_mean_map1.shape)
             where_nan = np.where(np.isnan(reg_mean_map1))
             reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
             reg_std_map1 = np.abs(reg_mean_map1)
@@ -1128,9 +1127,9 @@ class JWST_IFUs(ABC):
                                                                                   regularization=True,
                                                                                   reg_mean_map=reg_mean_map1,
                                                                                   reg_std_map=reg_std_map1)
-
+        print("norm col is done")
         continuum, normalized_im, normalized_err = self._get_masked_normalized_object(spline_cont0, im, err)
-
+        print("get mask done")
         new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
                                                                              normalized_im.flatten(),
                                                                              normalized_err.flatten(),
@@ -1181,6 +1180,9 @@ class JWST_IFUs(ABC):
         hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
+
+        if self.verbose:
+            print(f"Saved the continuum normalized star spectrum to {out_filename}")
 
     def _get_starspectrum_input(self, im, im_wvs, err, spec_R_sampling, x_nodes, N_nodes):
         """Get inputs to compute the continuum normalized star spectrum."""
@@ -2177,9 +2179,8 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
     psfsub_model_im = np.zeros_like(sc_im)
     bestfit_paras = np.full((4, np.size(wv_sampling)), np.nan)
     for wv_id, left_wv in enumerate(wv_sampling):
-        center_wv = left_wv * (1 + 0.25 / 2700)
+        center_wv = left_wv * (1 + 0.25 / 2700) #TODO change 2700 hardcodeing, replace with spectral resolution?
         right_wv = left_wv * (1 + 0.5 / 2700)
-        print(left_wv, center_wv, right_wv, wv_min, wv_max)
 
         where_fit_mask = np.where(
             np.isfinite(sc_im) * (noise != 0) * (np.isfinite(bad_pixels)) * (left_wv < sc_im_wvs) * (
@@ -2194,7 +2195,6 @@ def fit_webbpsf(sc_im, sc_im_wvs, noise, bad_pixels, dra_as_array, ddec_as_array
         Ysc = ddec_as_array[where_sc_mask]
         Zsc = sc_im[where_sc_mask]
 
-        print(np.size(where_fit_mask[0]), 377 / 4, np.size(where_sc_mask[0]), 736 / 2)
         if (np.size(where_fit_mask[0]) < 377 / 4) or (np.size(where_sc_mask[0]) < 736 / 2):
             print("Not enough points", wv_id, center_wv, np.size(where_fit_mask[0]), np.size(where_sc_mask[0]))
             bestfit_paras[:, wv_id] = np.array([center_wv, np.nan, np.nan, np.nan])
@@ -2741,8 +2741,6 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
     else:
         init_paras = np.array(init_centroid)
 
-    print(len(glob(out_filename)), out_filename)
-
     # only process frames with wavelength index between debug_init and debug_end
     if debug_init is None:
         debug_init = 0
@@ -2959,7 +2957,6 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
             if not (debug_init < wv_id < debug_end):
                 psf_interp_list.append(0)
                 continue
-            print(wv_id, wv, np.size(wv_sampling))
             paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
             out = _interp_psf(paras)
             psf_interp_list.append(out)
@@ -2971,7 +2968,6 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
         for k in range(debug_init):
             psf_interp_list.append(0)
         for wv_id, (wv, out) in enumerate(zip(wv_sampling, output_lists)):
-            print(wv_id, np.size(wv_sampling))
             psf_interp_list.append(out)
 
     print("done creating psf model")
@@ -2981,7 +2977,6 @@ def matchedfilter_bb(fitpsf_filename, dataobj_list, psfs, psfX, psfY, ra_vec, de
             print(ra, dec)
             sampled_psf = np.full(all_interp_flux.shape, np.nan)
             for wv_id, wv in enumerate(wv_sampling):
-                # print(wv)
                 if not (debug_init < wv_id < debug_end):
                     continue
                 X = all_interp_ra[:, wv_id]
@@ -3243,7 +3238,6 @@ def cube_matchedfilter(flux_cube, fluxerr_cube, wv_sampling, ra_grid, dec_grid, 
     fluxerr_map = np.full((ra_grid.shape), np.nan)
 
     for ra_id, ra in enumerate(ra_vec):
-        print("ra",ra)
         for dec_id, dec in enumerate(dec_vec):
 
             if outlier_threshold is not None:
