@@ -26,27 +26,22 @@ class JWSTNirspec_cal(JWST_IFUs):
     def __init__(self, filename=None, utils_dir=None, save_utils=True,
                  load_utils=True,
                  preproc_task_list = None,
-                 verbose=True, wv_ref=None):
-        """JWST NIRSpec 2D calibrated data.
+                 verbose=True):
+        """JWST NIRSpec 2D calibrated data class.
 
-        #TODO write param docs
 
         Parameters
         ----------
-        filename : str
-            Filename of a JWST cal file to load
-        crds_dir : str
-            Path to CRDS references directory
-        utils_dir : str
-            Path to a "utils" directory to write intermediate data products
-        save_utils : bool
-            Save outputs into utils directory?
-        load_utils : bool
-            load [something??] from utils directory?
-        preproc_task_list : list of strings
-            Very complex. List of tasks to run on the data. See further docs below.
-        verbose : bool
-            Be more verbose in output?
+        utils_dir: str or None
+            Path to the folder saving the intermediate products of each preprocessing step.
+        save_utils: bool (default=True)
+            Whether to save intermediate products.
+        load_utils: bool (default=True)
+            Whether to load intermediate products.
+        preproc_task_list: list or None
+            List of preprocessing tasks to run.
+        verbose: bool (default=True)
+            If True, the code is returning more printing.
         wv_ref : float
             Reference wavelength. If not set, the shortest wavelength will be used by default.
 
@@ -71,7 +66,7 @@ class JWSTNirspec_cal(JWST_IFUs):
 
 
     def _init_wcs(self, filename):
-        "Hook for nirspec subclass"
+        "Hook for nirspec subclass to compute World Coordinates System."
         from stdatamodels.jwst import datamodels
         import jwst.assign_wcs
         from jwst.photom.photom import DataSet
@@ -151,9 +146,7 @@ class JWSTNirspec_cal(JWST_IFUs):
 
 
     def _init_additional_default_filenames(self):
-        """
-
-        """
+        """Initializes the default filenames used only for nirspec preprocessing."""
         self.default_filenames["compute_charge_bleeding_mask"] = \
                 os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_barmask.fits"))
         self.default_filenames["compute_starspectrum_contnorm_2dspline"] = \
@@ -188,6 +181,7 @@ class JWSTNirspec_cal(JWST_IFUs):
             nans = bad.
 
         """
+
         if self.verbose:
             print("Initializing row_err and bad_pixels")
         new_badpix = np.ones(self.bad_pixels.shape)
@@ -205,22 +199,13 @@ class JWSTNirspec_cal(JWST_IFUs):
                 self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges)
 
         if save_utils:
-            if isinstance(save_utils, str):
-                out_filename = save_utils
-            else:
-                out_filename = self.default_filenames["compute_med_filt_badpix"]
+            self._save_med_filt_badpix(save_utils, new_badpix)
 
-            hdulist = pyfits.HDUList()
-            hdulist.append(pyfits.PrimaryHDU(data=new_badpix))
-            hdulist.writeto(out_filename, overwrite=True)
-            hdulist.close()
-            if self.verbose:
-                print(f"  Saved the quick bad pixel map to {out_filename}")
         return new_badpix
 
 
     def _get_webbpsf_model_inputs(self, image_mask, pixel_scale):
-        """Hook for MIRI subclass, returns webbpsf parameters for MRS simulation"""
+        """Hook for nirspec subclass, returns webbpsf parameters for nirspec simulation"""
         nrs = webbpsf.NIRSpec()
         nrs.load_wss_opd_by_date(self.priheader["DATE-BEG"])  # Load telescope state as of our observation date
         nrs.image_mask = image_mask  # optional: model opaque field stop outside of the IFU aperture
@@ -229,12 +214,14 @@ class JWSTNirspec_cal(JWST_IFUs):
 
 
     def compute_charge_bleeding_mask(self, save_utils=False, threshold2mask=0.15):
-        """ Compute charge bleeding mask
+        """ Compute charge bleeding bar mask
 
         Parameters
         ----------
-        save_utils
-        threshold2mask
+        save_utils: bool (default is False)
+            if True, save the computed charge bleeding mask.
+        threshold2mask: float (default is 0.15) in arcsec
+            Separation threshold to mask the traces sitting in the charge bleeding region.
 
         Returns
         -------
@@ -253,6 +240,7 @@ class JWSTNirspec_cal(JWST_IFUs):
         return bar_mask
 
     def save_charge_bleeding_mask(self, save_utils, bar_mask):
+        """Save charge bleeding bar mask"""
         if isinstance(save_utils, str):
             out_filename = save_utils
         else:
@@ -264,7 +252,7 @@ class JWSTNirspec_cal(JWST_IFUs):
         hdulist.close()
 
     def reload_charge_bleeding_mask(self, load_filename=None):
-        """ Reload charge bleeding mask
+        """ Reload charge bleeding bar mask
 
         Parameters
         ----------
@@ -681,7 +669,7 @@ class JWSTNirspec_cal(JWST_IFUs):
 
 
     def reload_starsubtraction_2dspline(self, load_filename=None):
-        """ Reload Star Subtractoin with 2D spline
+        """ Reload Star Subtraction with 2D spline
 
         Parameters
         ----------

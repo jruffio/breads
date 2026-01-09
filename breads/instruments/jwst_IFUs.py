@@ -31,8 +31,6 @@ class JWST_IFUs(ABC):
     def __init__(self, filename=None, utils_dir=None, verbose=True):
         """JWST IFU 2D calibrated data class.
 
-        #TODO write param docs
-
         Parameters
         ----------
         filename : str
@@ -94,9 +92,6 @@ class JWST_IFUs(ABC):
             warning_text = "No data file provided. " + \
                            "Please manually add data or use JWSTNirspec.read_data_file()"
             warn(warning_text)
-
-
-
 
     def _init_read_fits(self):
         """
@@ -247,56 +242,21 @@ class JWST_IFUs(ABC):
         """Hook to be implemented by subclasses"""
         raise NotImplementedError
 
-
-    def compute_med_filt_badpix(self, save_utils=False, window_size=50, mad_threshold=50, crop_Npix_from_trace_edges=0):
-        """ Quick bad pixel identification.
-
-        The data is first high-pass filtered row by row with a median filter with a window size of 50 (window_size)
-        pixels. The median absolute deviation (MAP) is then calculated row by row, and any pixel deviating by more than
-        50x the MAP are identified as bad.
-
-        Only returns (or save) the newly identified bad pixels, the ones already included in self.bad_pixels won't be in
-        new_badpix.
-        But this map is automatically applied to self.bad_pixels:  self.bad_pixels *= new_badpix
-
-        Parameters
-        ----------
-        crop_Npix_from_trace_edges
-        mad_threshold
-        window_size
-        save_utils : bool or string
-            Save the computed bad pixel map (nans=bad) into the utils directory
-            Default filename (set save_utils as a string instead of bool to override filename):
-            os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_med_filt_badpix.fits"))
-
-        Returns
-        -------
-        new_badpix : np.array
-            nans = bad.
-
-        """
-        if self.verbose:
-            print("Initializing row_err and bad_pixels")
-        new_badpix = np.ones(self.bad_pixels.shape)
-        for rowid in range(self.bad_pixels.shape[0]):
-            row_err = self.noise[rowid,:]
-            row_err = row_err - generic_filter(row_err, np.nanmedian, size=window_size)
-            row_err_masking = row_err/median_abs_deviation(row_err[np.where(np.isfinite(self.bad_pixels[rowid,:]))])
-            new_badpix[rowid,np.where((row_err_masking>mad_threshold))[0]] = np.nan
-        self.bad_pixels *= new_badpix
-
-        if crop_Npix_from_trace_edges != 0:
-            if hasattr(self, "trace_id_map"):
-                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges, trace_id_map=self.trace_id_map)
-            else:
-                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges)
-
-        if save_utils:
-            self._save_med_filt_badpix(save_utils, new_badpix)
-
-        return new_badpix
+    @abstractmethod
+    def compute_med_filt_badpix(self, filename):
+        """Hook to be implemented by subclasses"""
+        raise NotImplementedError
 
     def _save_med_filt_badpix(self, save_utils, new_badpix):
+        """Save the bad pixel map computed via median filtering.
+        Parameters
+        ----------
+        save_utils: str or None
+            Path to save the bad pixel map computed via median filtering. if None, by default path and filename are used.
+        new_badpix: 2d np.array
+            New bad pixel map computed via median filtering.
+
+        """
         if isinstance(save_utils, str):
             out_filename = save_utils
         else:
@@ -692,6 +652,8 @@ class JWST_IFUs(ABC):
 
     def _save_webbpsf_model(self, save_utils, wpsfs, wpsfs_header, wepsfs, wv_sampling, webbpsf_X, webbpsf_Y,
                             quick=False):
+        """Save computed webbpsf model to save_utils."""
+
         if isinstance(save_utils, str):
             out_filename = save_utils
         else:
@@ -900,6 +862,12 @@ class JWST_IFUs(ABC):
 
     def insert_psf_model(self, save_utils=False,centroid = None,OWA=None,spectrum_func=None,out_folder = "insert_psf",
                          mode=None):
+        """Inserts a PSF model
+        TODO: add documentation
+        Parameters
+        ----------
+        """
+
         if not hasattr(self,"webbpsf_interp"):
             raise Exception("WebbPSF not found. Please run compute_quick_webbpsf_model or compute_webbpsf_model first.")
 
@@ -1535,6 +1503,7 @@ class JWST_IFUs(ABC):
         return wvs_finite, where_finite
 
     def _interpdata_regwvs_trace(self, regwvs_dataobj, wv_sampling, _data, wvs_finite, where_finite, trace_id):
+
         regwvs_dataobj.dra_as_array[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
                                                       self.dra_as_array[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
         regwvs_dataobj.ddec_as_array[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
@@ -1688,8 +1657,9 @@ class JWST_IFUs(ABC):
 
         Parameters
         ----------
-        ifuy
-        ifux
+        ifux: X-spatial coordinate in the detector
+        ifuy: Y-spatial coordinate in the detector
+        TODO: is it still useful to use these args? Seems like we only call self.get_sky_coords()
 
         Returns
         -------
