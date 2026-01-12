@@ -183,7 +183,7 @@ class JWSTNirspec_cal(JWST_IFUs):
         """
 
         if self.verbose:
-            print("Initializing row_err and bad_pixels")
+            print("Initializing row_err and bad_pixels for nirspec")
         new_badpix = np.ones(self.bad_pixels.shape)
         for rowid in range(self.bad_pixels.shape[0]):
             row_err = self.noise[rowid,:]
@@ -653,15 +653,15 @@ class JWSTNirspec_cal(JWST_IFUs):
                 hdulist_sc = pyfits.open(self.filename)
                 du = self.data_unit
                 bu = self.extheader["BUNIT"].strip()
-                arcsec2_to_sr = (2.*np.pi/(360.*3600.))**2
+
                 if du == 'MJy'    and bu == 'MJy':
                     hdulist_sc["SCI"].data = subtracted_im
                 if du == 'MJy/sr' and bu == 'MJy/sr':
                     hdulist_sc["SCI"].data = subtracted_im
                 if du == 'MJy/sr' and bu == 'MJy':
-                    hdulist_sc["SCI"].data = subtracted_im*(self.area2d*arcsec2_to_sr)
+                    hdulist_sc["SCI"].data = subtracted_im* self.area2d
                 if du == 'MJy' and bu == 'MJy/sr':
-                    hdulist_sc["SCI"].data = subtracted_im/(self.area2d*arcsec2_to_sr)
+                    hdulist_sc["SCI"].data = subtracted_im/self.area2d
                 hdulist_sc["DQ"].data[np.where(np.isnan(self.bad_pixels))] = 1
                 hdulist_sc.writeto(os.path.join(self.utils_dir,starsub_dir, os.path.basename(self.filename)), overwrite=True)
                 hdulist_sc.close()
