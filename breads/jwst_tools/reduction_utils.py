@@ -1829,7 +1829,7 @@ def column_median_max_channel(data, channel='CH1'):
 
 def compute_coordinates_offset(path_cal_files, channel, utils_dir, target_name=None, IWA=None, OWA=None):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-    from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
+    from breads.instruments.jwstmiri_multiple_cals import JWSTMiri_multiple_cals
     from breads.instruments.jwstmiri_cal import get_contnorm_spec_miri
 
     if not os.path.exists(utils_dir):
@@ -1991,7 +1991,7 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, wv_nodes=N
 
 def get_combined_regwvs_miri(dataobj_list, channel, wv_sampling=None, use_starsub1d=False, reload=False):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-    from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
+    from breads.instruments.jwstmiri_multiple_cals import JWSTMiri_multiple_cals
 
     regwvs_dataobj_list = []
     for dataobj in dataobj_list:
