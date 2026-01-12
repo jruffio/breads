@@ -1884,7 +1884,6 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coor
                                              star_hf_subtraction=True, mppool=None,
                                              ra_dec_point_sources=None, overwrite=False):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-    from breads.instruments.jwstmiri_cal import get_contnorm_spec_miri
 
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
@@ -1939,7 +1938,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coor
 
         dataobj_list.append(dataobj)
 
-    new_wavelengths, combined_fluxes, combined_errors = get_contnorm_spec_miri(dataobj_list, spline2d=False,
+    new_wavelengths, combined_fluxes, combined_errors = get_contnorm_spec(dataobj_list, spline2d=False,
                                                                                load_utils=False,
                                                                                out_filename=combined_contnorm_spec_filename,
                                                                                spec_R_sampling=2700 * 4,

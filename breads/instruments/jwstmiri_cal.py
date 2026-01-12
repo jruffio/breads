@@ -372,8 +372,8 @@ class JWSTMiri_cal(JWST_IFUs):
         return continuum, normalized_im, normalized_err
 
     def _set_bad_pixels(self, bad_pixels):
-        """Hook for MIRI to set the bad pixels map."""
-        self.bad_pixels = bad_pixels.transpose() #Transposing to keep
+        """Hook for MIRI to set the bad pixels map. Used only in JWST_IFUs.compute_starspectrum()."""
+        self.bad_pixels = bad_pixels.transpose() #Transposing to be consistent with the parent's class method output return.
 
     def _save_starspectrum_contnorm(self, save_utils, new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes):
         """Save continuum normalized star spectrum results."""

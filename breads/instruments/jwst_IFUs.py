@@ -3075,7 +3075,7 @@ def _build_cube_task(inputs):
 
 def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
                     linear_interp=True, mppool=None, aper_radius=0.5,
-                    debug_init=None, debug_end=None, N_pix_min=None, ifu_name='nirspec'):
+                    debug_init=None, debug_end=None, N_pix_min=None):
     """ Build a datacube, based on the forward modeling processed results
 
     Parameters
@@ -3114,6 +3114,8 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
     else:
         print('Setting parallel_flag = False')
         parallel_flag = False
+
+    ifu_name = combdataobj.ifu_name
 
     wv_sampling = combdataobj.wv_sampling
     east2V2_deg = combdataobj.east2V2_deg
@@ -3157,7 +3159,7 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
             continue
         rprint("prepping build_cube inputs... id: {} wave: {}".format(wv_id,wv))
 
-        psf_interp_paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg, ifu_name
+        psf_interp_paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
 
         X = all_interp_ra[:, wv_id]
         Y = all_interp_dec[:, wv_id]
@@ -3167,7 +3169,7 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
 
         inputs.append([X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg,
                        psf_interp_paras,
-                       wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min])
+                       wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min, ifu_name])
 
     #step 2 map _build_cube_task over input list
     if parallel_flag:
@@ -3183,7 +3185,7 @@ def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None
 
     #step 3 iterate over outputs and save values
     for j, inp in enumerate(inputs):
-        X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min = inp
+        X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min, ifu_name = inp
         rprint('cubing outputs... id: {} wave: {}'.format(wv_id,wv))
         outs = outputs[j]
         for o in outs:
@@ -3293,7 +3295,7 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=
     """
     if interpolation is None:
         interpolation = "linear"
-    if 1 and load_utils and len(glob(out_filename)):
+    if load_utils and len(glob(out_filename)):
         print(len(glob(out_filename)), out_filename)
         with pyfits.open(out_filename) as hdulist:
             new_wavelengths = hdulist[0].data

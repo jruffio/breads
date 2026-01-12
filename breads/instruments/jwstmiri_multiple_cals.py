@@ -24,6 +24,7 @@ class JWSTMiri_multiple_cals(JWSTMiri_cal):
                            "Please manually add data or use JWSTMiri_multiple_cals.combine_dataobj_list()"
             warn(warning_text)
         else:
+            self.ifu_name = "miri"
             self.combine_dataobj_list(dataobj_list)
             self.bary_RV = 0
             self.refpos = None

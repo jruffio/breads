@@ -26,6 +26,7 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
             # TODO consider making this an Exception error rather than just a warning?
             # Is there a compelling use case to allow manually adding data after initializing the class?
         else:
+            self.ifu_name = 'nirspec'
             self.combine_dataobj_list(dataobj_list)
             self.bary_RV = 0
             self.refpos = None
