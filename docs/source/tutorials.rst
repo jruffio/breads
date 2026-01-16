@@ -14,7 +14,9 @@ General
    :caption: JWST
 
    tutorials/jwst/NIRSpec_Tutorial_1_Placeholder.ipynb
-
+   tutorials/jwst/MIRI_Tutorial_1_Data_Reductions_for_BREADS.ipynb   
+   tutorials/jwst/MIRI_Tutorial_2_MRS_Forward_Modeling_and_SNR.ipynb 
+   tutorials/jwst/MIRI_Tutorial_3_MRS_Cube-ish_build.ipynbi
 
 
 .. toctree::
@@ -22,5 +24,4 @@ General
    :caption: KPIC
 
    tutorials/kpic/KPIC_Tutorial_1_Placeholder.ipynb
-
 
