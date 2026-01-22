@@ -8,6 +8,7 @@ import stpsf as webbpsf
 from astropy.io import fits
 from astropy.stats import sigma_clip
 
+from copy import copy, deepcopy
 import warnings
 from astropy.utils.exceptions import AstropyUserWarning
 
@@ -283,7 +284,7 @@ class JWSTMiri_cal(JWST_IFUs):
             separation_arr = np.sqrt(self.dra_as_array ** 2 + self.ddec_as_array ** 2)
             where_finite = np.where(np.isfinite(self.dra_as_array) * (separation_arr < OWA))
 
-        _dra_as_array, _ddec_as_array = self.getskycoords()
+        _dra_as_array, _ddec_as_array = self.get_sky_coords()
         x = _dra_as_array[where_finite]
         y = _ddec_as_array[where_finite]
         w = self.wavelengths[where_finite]
@@ -300,8 +301,6 @@ class JWSTMiri_cal(JWST_IFUs):
         model_im = np.full(self.data.shape, np.nan)
         model_im[where_finite] = model_vec
 
-        arcsec2_to_sr = (2. * np.pi / (360. * 3600.)) ** 2
-
         if save_utils:
             if isinstance(save_utils, str):
                 out_filename = save_utils
@@ -315,14 +314,14 @@ class JWSTMiri_cal(JWST_IFUs):
             if bu == 'MJy':
                 hdulist_sc["SCI"].data = model_im
             if bu == 'MJy/sr':
-                hdulist_sc["SCI"].data = model_im / (self.area2d * arcsec2_to_sr)
+                hdulist_sc["SCI"].data = model_im / self.area2d
             hdulist_sc.writeto(out_filename, overwrite=True)
             hdulist_sc.close()
 
         if self.data_unit == 'MJy':
             return model_im
         elif self.data_unit == 'MJy/sr':
-            return model_im / (self.area2d * arcsec2_to_sr)
+            return model_im / self.area2d
 
 
     def _get_webbpsf_fit_inputs(self):
@@ -546,3 +545,42 @@ class JWSTMiri_cal(JWST_IFUs):
                                                       _data[where_finite[0], trace_id], left=np.nan, right=np.nan)
             regwvs_dataobj.noise[:, trace_id] = np.interp(wv_sampling, self.wavelengths[where_finite[0], trace_id],
                                                        self.noise[where_finite[0], trace_id], left=np.nan, right=np.nan)
+
+    def reload_interpdata_regwvs(self, load_filename=None):
+        """ Reload interpolated data onto regular wavelengths
+
+        Parameters
+        ----------
+        load_filename
+
+        Returns
+        -------
+
+        """
+        if "regwvs" in self.coords:
+            raise Exception("This data object is already interpolated. Won't interpolate again.")
+
+        if load_filename is None:
+            load_filename = self.default_filenames["compute_interpdata_regwvs"]
+        if len(glob(load_filename)) ==0:
+            return None
+        regwvs_dataobj = deepcopy(self)
+
+        regwvs_dataobj.coords = self.coords + " regwvs"
+
+        with pyfits.open(load_filename) as hdulist:
+            regwvs_dataobj.data = hdulist[0].data
+            regwvs_dataobj.noise = hdulist['INTERP_ERR'].data
+            regwvs_dataobj.dra_as_array  = hdulist['INTERP_RA'].data
+            regwvs_dataobj.ddec_as_array = hdulist['INTERP_DEC'].data
+            regwvs_dataobj.wavelengths  = hdulist['INTERP_WAVE'].data
+            regwvs_dataobj.bad_pixels  = hdulist['INTERP_BADPIX'].data
+            regwvs_dataobj.area2d = hdulist['INTERP_AREA2D'].data
+            try:
+                regwvs_dataobj.leftnright_wavelengths = hdulist['INTERP_LEFTNRIGHT'].data
+            except KeyError:
+                pass
+
+        regwvs_dataobj.wv_sampling = np.nanmedian(regwvs_dataobj.wavelengths, axis=1)
+
+        return regwvs_dataobj
