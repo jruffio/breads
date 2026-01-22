@@ -570,8 +570,8 @@ class JWST_IFUs(ABC):
 
             outarr_not_created = True
             for wv_id, wv in tqdm(enumerate(wv_sampling), total=nwavelen, ncols=100):
-                paras = IFU, wv, oversample, self.opmode, parallelize
-                out = _get_wpsf_task(paras, fov_arcsec=fov_arcsec)
+                paras = IFU, wv, oversample, self.opmode, parallelize, fov_arcsec
+                out = _get_wpsf_task(paras)
                 if outarr_not_created:
                     wpsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
                     wepsfs = np.zeros((nwavelen, out[0].shape[0], out[0].shape[1]))
@@ -596,7 +596,7 @@ class JWST_IFUs(ABC):
             paras_list = []
             for wv_id, wv in enumerate(wv_sampling):
                 rprint('{},{},{}'.format(wv_id, wv, nwavelen))
-                paras = IFU, wv, oversample, self.opmode, parallelize
+                paras = IFU, wv, oversample, self.opmode, parallelize, fov_arcsec
                 paras_list.append(paras)
             print('')
 
@@ -609,7 +609,7 @@ class JWST_IFUs(ABC):
             # Iterate, and display progress bar
             pool_out = [ o for o in tqdm(mppool.imap(_get_wpsf_task, paras_list), total=nwavelen, ncols=100)]
             print('')
-            mppool.close()
+            #mppool.close()
 
             print('collating pool outputs...')
             out = pool_out[0]
@@ -782,8 +782,8 @@ class JWST_IFUs(ABC):
 
         IFU = self._get_webbpsf_model_inputs(image_mask, pixelscale)
 
-        paras = IFU, self.webbpsf_wv0, oversample, self.opmode, None
-        out = _get_wpsf_task(paras, fov_arcsec=fov_arcsec)
+        paras = IFU, self.webbpsf_wv0, oversample, self.opmode, None, fov_arcsec
+        out = _get_wpsf_task(paras)
         wpsfs = out[0] #webbpsf oversampled
         wepsfs = out[1] #webbpsf oversampled + smoothing
         wepsfs_header = out[2] #webbpsf header
@@ -1594,7 +1594,7 @@ class JWST_IFUs(ABC):
             except KeyError:
                 pass
 
-        regwvs_dataobj.wv_sampling = np.nanmedian(regwvs_dataobj.wavelengths,axis=0)
+        regwvs_dataobj.wv_sampling = np.nanmedian(regwvs_dataobj.wavelengths, axis=0)
 
         return regwvs_dataobj
 
@@ -1751,7 +1751,7 @@ class JWST_IFUs(ABC):
         return np.where(dist2pointsource_as < rad_as)
 
 #### Functions
-def _get_wpsf_task(paras, fov_arcsec=6):
+def _get_wpsf_task(paras):
     """ Run WebbPSF for a single wavelength. Utility function for compute_webbpsf_model.
 
     Arguments
@@ -1770,7 +1770,7 @@ def _get_wpsf_task(paras, fov_arcsec=6):
 
     #TODO this should be updated to use OVERDIST probably!! Instead of the smoothing here. TBD.
     """
-    IFU, center_wv, wpsf_oversample, opmode, parallelize = paras
+    IFU, center_wv, wpsf_oversample, opmode, parallelize, fov_arcsec = paras
     if opmode=='FIXEDSLIT':
         if not parallelize:
             print('FixedSlit webbpsf kernel...')
@@ -2729,9 +2729,21 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
     all_interp_badpix = combdataobj.bad_pixels
     all_interp_area2d = combdataobj.area2d
 
+    if combdataobj.ifu_name == 'miri':
+        all_interp_ra = all_interp_ra.transpose()
+        all_interp_dec = all_interp_dec.transpose()
+        all_interp_wvs = all_interp_wvs.transpose()
+        all_interp_flux = all_interp_flux.transpose()
+        all_interp_err = all_interp_err.transpose()
+        all_interp_badpix = all_interp_badpix.transpose()
+        all_interp_area2d = all_interp_area2d.transpose()
+
+    steradians_to_arcsec2 = 1 / (2. * np.pi / (360. * 3600.)) ** 2
+    all_interp_area2d *= steradians_to_arcsec2 #convert pixel area in arcsec^2
+
     wv_sampling = combdataobj.wv_sampling
-    all_interp_flux = all_interp_flux/all_interp_area2d*psf_spaxel_area
-    all_interp_err = all_interp_err/all_interp_area2d*psf_spaxel_area
+    all_interp_flux = all_interp_flux/all_interp_area2d * psf_spaxel_area
+    all_interp_err = all_interp_err/all_interp_area2d * psf_spaxel_area
 
     all_interp_psfmodel = np.full(all_interp_flux.shape, np.nan)
     all_interp_psfsub = np.full(all_interp_flux.shape, np.nan)
@@ -2790,7 +2802,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
                                       itertools.repeat(sector_area))),
                                         total=debug_end-debug_init, ncols=100)]
 
-        for out_id,out in tqdm(enumerate(output_lists), total=len(output_lists), ncols=100):
+        for out_id, out in tqdm(enumerate(output_lists), total=len(output_lists), ncols=100):
             if not bestfit_coords_defined:
                 bestfit_coords = np.full((out[0].shape[0],np.size(wv_sampling), 5), np.nan)  # flux_init, flux,ra,dec,angle
                 bestfit_coords_defined = True
@@ -2835,7 +2847,7 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             os.makedirs(RDI_model_dir)
 
         for obj_id,filename in enumerate(combdataobj.filelist):
-            ny = combdataobj.data.shape[0]//len(combdataobj.filelist)
+            ny = all_interp_psfsub.shape[0]//len(combdataobj.filelist)#combdataobj.data.shape[0]//len(combdataobj.filelist)
             interpdata_filename = os.path.join(combdataobj.utils_dir, os.path.basename(filename).replace(".fits", "_regwvs.fits"))
             _interpdata_psfsub_filename = interpdata_filename.replace(".fits","_psfsub"+RDI_folder_suffix+".fits")
             hdulist = pyfits.HDUList()
@@ -3306,7 +3318,7 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=
         normalized_im_list = []
         normalized_err_list = []
         for dataobj in dataobj_list:
-            if spline2d:
+            if spline2d and dataobj.ifu_name != 'miri':
                 reload_outputs = dataobj.reload_starspectrum_contnorm_2dspline()
                 if reload_outputs is None:
                     reload_outputs = dataobj.compute_starspectrum_contnorm_2dspline(save_utils=False,mppool= mppool)
@@ -3353,4 +3365,3 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, mppool=
             hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
     return new_wavelengths, combined_fluxes, combined_errors
-
