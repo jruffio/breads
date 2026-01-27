@@ -503,16 +503,24 @@ class JWST_IFUs(ABC):
         """
         if coords_offset is None:
             coords_offset = [0,0]
+
         if self.verbose:
             print(f"Applying relative coordinate offset {coords_offset}")
         if isinstance(coords_offset[0],list) or isinstance(coords_offset[0],np.ndarray):
             self.dra_as_array -= np.polyval(coords_offset[0], self.wavelengths - np.nanmedian(self.wavelengths))
         else:
-            self.dra_as_array -= coords_offset[0]
+            if np.isfinite(coords_offset[0]):
+                self.dra_as_array -= coords_offset[0]
+            else:
+                raise ValueError("coords_offset must be finite")
         if isinstance(coords_offset[1],list) or isinstance(coords_offset[1],np.ndarray):
             self.ddec_as_array -= np.polyval(coords_offset[1], self.wavelengths - np.nanmedian(self.wavelengths))
         else:
-            self.ddec_as_array -= coords_offset[1]
+            if np.isfinite(coords_offset[1]):
+                self.ddec_as_array -= coords_offset[1]
+            else:
+                raise ValueError("coords_offset must be finite")
+
         return self.dra_as_array, self.ddec_as_array
 
 
