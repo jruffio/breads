@@ -299,7 +299,7 @@ def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampl
                             mask_charge_transfer_radius=None,
                             IWA=0.3, OWA=1.0,
                             debug_init=None, debug_end=None,
-                            mypool=None,
+                            mppool=None,
                             save_plots=False,
                             filename_suffix="_webbpsf",
                             overwrite=False,
@@ -388,10 +388,10 @@ def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampl
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"N_nodes": N_wvs_nodes,
                                                                     "threshold_badpix": 100,
-                                                                    "mppool": mypool}, True, True])
+                                                                    "mppool": mppool}, True, True])
         preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d_tmp",
                                                               "threshold_badpix": 10,
-                                                              "mppool": mypool}, True, True])
+                                                              "mppool": mppool}, True, True])
         preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, True])
 
         # Load that file. (TODO: Does this invoke the preproc_task_list?)
@@ -411,7 +411,7 @@ def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampl
         webbpsf_reload = regwvs_combdataobj.compute_webbpsf_model(wv_sampling=regwvs_combdataobj.wv_sampling,
                                                                   image_mask=None,
                                                                   pixelscale=0.1, oversample=10,
-                                                                  parallelize=False, mppool=mypool,
+                                                                  parallelize=False, mppool=mppool,
                                                                   save_utils=True)
 
     wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_x, webbpsf_y, wpsf_oversample, wpsf_pixelscale = webbpsf_reload
@@ -427,7 +427,7 @@ def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampl
     regwvs_combdataobj.bad_pixels[where_center_disk] = np.nan
 
     fitpsf(regwvs_combdataobj, wepsfs, webbpsf_x, webbpsf_y, out_filename=fitpsf_filename, IWA=0.0, OWA=OWA,
-           mppool=mypool, init_centroid=init_centroid, ann_width=ann_width, padding=padding,
+           mppool=mppool, init_centroid=init_centroid, ann_width=ann_width, padding=padding,
            sector_area=sector_area, RDI_folder_suffix=filename_suffix, rotate_psf=regwvs_combdataobj.east2V2_deg,
            flipx=True, psf_spaxel_area=(wpsf_pixelscale) ** 2, debug_init=debug_init, debug_end=debug_end)
 
@@ -1019,7 +1019,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, coords_offset=(0, 
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}, True, True])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
@@ -1085,7 +1085,7 @@ def compute_starlight_subtraction(cal_files, utils_dir, wv_nodes=None, combined_
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}, True, True])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         if combined_star_func is None:

@@ -137,6 +137,10 @@ class JWSTMiri_cal(JWST_IFUs):
         else:
             self.wv_ref = np.nanmin(self.wavelengths)
 
+    def _init_wave_wcs(self, filename):
+        self._init_wcs(self, filename)
+        return self.wavelengths
+
     def _init_wcs(self, filename):
         """Hook for MIRI subclass to compute World Coordinate System"""
         hdulist = fits.open(filename)

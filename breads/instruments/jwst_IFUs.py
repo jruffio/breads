@@ -87,7 +87,7 @@ class JWST_IFUs(ABC):
             self.bary_RV = 0
             self._init_read_fits()
             self._init_default_names()
-            self._init_wcs(filename)
+            self._init_wave_wcs(filename)
         else:
             warning_text = "No data file provided. " + \
                            "Please manually add data or use JWSTNirspec.read_data_file()"
@@ -604,12 +604,14 @@ class JWST_IFUs(ABC):
                 print('no pool supplied, creating one with {} threads'.format(os.cpu_count()))
                 from multiprocess import Pool
                 mppool = Pool()
+                need_to_close_pool = True
 
             print('starting parallel _get_wpsf_task ...')
             # Iterate, and display progress bar
             pool_out = [ o for o in tqdm(mppool.imap(_get_wpsf_task, paras_list), total=nwavelen, ncols=100)]
             print('')
-            #mppool.close()
+            if need_to_close_pool:
+                mppool.close()
 
             print('collating pool outputs...')
             out = pool_out[0]
@@ -1459,7 +1461,7 @@ class JWST_IFUs(ABC):
             raise Exception("This data object is already interpolated. Won't interpolate again.")
 
         if wv_sampling is None:
-            if not hasattr(self, "wv_sampling"):
+            if (not hasattr(self, "wv_sampling")) or self.wv_sampling is None:
                 self.wv_sampling = self.get_regwvs_sampling()
             wv_sampling = self.wv_sampling
         else:

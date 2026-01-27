@@ -20,6 +20,10 @@ from breads.utils import get_spline_model
 from breads.instruments.jwst_IFUs import JWST_IFUs
 from breads.instruments.jwst_IFUs import crop_trace_edges, set_nans, filter_big_triangles, combine_spectrum
 
+from stdatamodels.jwst import datamodels
+import jwst.assign_wcs
+from jwst.photom.photom import DataSet
+from gwcs import wcstools
 
 
 class JWSTNirspec_cal(JWST_IFUs):
@@ -65,12 +69,16 @@ class JWSTNirspec_cal(JWST_IFUs):
         super()._init_pipeline(save_utils=save_utils, load_utils=load_utils, preproc_task_list=preproc_task_list)
 
 
+    def _init_wave_wcs(self, filename):
+
+        ## Part 1: Loading information from the FITS file and its header metadata
+        hdulist_sc = pyfits.open(filename)
+        self.wavelengths = hdulist_sc["WAVELENGTH"].data
+        hdulist_sc.close()
+        return self.wavelengths
+
     def _init_wcs(self, filename):
         "Hook for nirspec subclass to compute World Coordinates System."
-        from stdatamodels.jwst import datamodels
-        import jwst.assign_wcs
-        from jwst.photom.photom import DataSet
-        from gwcs import wcstools
 
         hdulist = pyfits.open(filename)
         calfile = jwst.datamodels.open(hdulist)  # save time opening by passing the already opened file
@@ -137,7 +145,6 @@ class JWSTNirspec_cal(JWST_IFUs):
 
         arcsec2_to_steradians = (2.*np.pi/(360.*3600.))**2
 
-        self.wavelengths = wavelen_array
         self.ra_array = ra_array
         self.dec_array = dec_array
         self.area2d = area2d * arcsec2_to_steradians #convert area2d in steradians
