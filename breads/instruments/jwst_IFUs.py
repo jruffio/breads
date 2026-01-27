@@ -629,8 +629,8 @@ class JWST_IFUs(ABC):
 
         wepsfs *= oversample ** 2
 
-        halffov_x = pixelscale / oversample * wpsfs.shape[2] / 2.0
-        halffov_y = pixelscale / oversample * wpsfs.shape[1] / 2.0
+        halffov_x = IFU.pixelscale / oversample * wpsfs.shape[2] / 2.0
+        halffov_y = IFU.pixelscale / oversample * wpsfs.shape[1] / 2.0
         x = np.linspace(-halffov_x, halffov_x, wpsfs.shape[2], endpoint=True)
         y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[1], endpoint=True)
         webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
@@ -780,7 +780,7 @@ class JWST_IFUs(ABC):
         """
 
         if self.verbose:
-            print("Computing PSFs. This has to iterate over many wavelengths, so is slow.")
+            print("Computing monochromatic PSF.")
 
         self.webbpsf_wv0 = np.nanmedian(self.wavelengths)
 
