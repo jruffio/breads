@@ -20,10 +20,6 @@ from breads.utils import get_spline_model
 from breads.instruments.jwst_IFUs import JWST_IFUs
 from breads.instruments.jwst_IFUs import crop_trace_edges, set_nans, filter_big_triangles, combine_spectrum
 
-from stdatamodels.jwst import datamodels
-import jwst.assign_wcs
-from jwst.photom.photom import DataSet
-from gwcs import wcstools
 
 
 class JWSTNirspec_cal(JWST_IFUs):
@@ -79,6 +75,10 @@ class JWSTNirspec_cal(JWST_IFUs):
 
     def _init_wcs(self, filename):
         "Hook for nirspec subclass to compute World Coordinates System."
+        from stdatamodels.jwst import datamodels
+        import jwst.assign_wcs
+        from jwst.photom.photom import DataSet
+        from gwcs import wcstools
 
         hdulist = pyfits.open(filename)
         calfile = jwst.datamodels.open(hdulist)  # save time opening by passing the already opened file
