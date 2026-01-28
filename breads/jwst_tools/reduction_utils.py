@@ -384,7 +384,7 @@ def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampl
         # Define a series of processing tasks to be performed on each input file.
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}, True, True])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"N_nodes": N_wvs_nodes,
                                                                     "threshold_badpix": 100,
@@ -1961,7 +1961,7 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, wv_nodes=N
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}])
+        preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}, True, True])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         if combined_star_func is None:

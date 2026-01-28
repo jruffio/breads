@@ -328,6 +328,7 @@ class JWST_IFUs(ABC):
 
         if from_other_filename is None:
             hdulist = pyfits.open(self.filename) #open file
+            self._init_wcs(self.filename)
         else:
             hdulist = pyfits.open(from_other_filename) #open file
             self._init_wcs(from_other_filename)
@@ -600,6 +601,7 @@ class JWST_IFUs(ABC):
                 paras_list.append(paras)
             print('')
 
+            need_to_close_pool = False
             if mppool is None:
                 print('no pool supplied, creating one with {} threads'.format(os.cpu_count()))
                 from multiprocess import Pool
