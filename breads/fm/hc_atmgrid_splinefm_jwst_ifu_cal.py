@@ -2,6 +2,7 @@ import astropy.units as u
 import numpy as np
 from PyAstronomy import pyasl
 from astropy import constants as const
+from matplotlib import pyplot as plt
 from scipy.interpolate import interp1d
 
 from breads.utils import get_spline_model
@@ -88,7 +89,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
     ra_array = cubeobj.dra_as_array
     dec_array = cubeobj.ddec_as_array
     wvs = cubeobj.wavelengths
-    pixarea = cubeobj.area2d
+    pixarea_steradians = cubeobj.area2d
 
     if ifu_name == 'miri':
         if cubeobj.channel_reduction == '1' or cubeobj.channel_reduction == '4':
@@ -108,7 +109,10 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
         wvs = wvs.transpose()
         dec_array = dec_array.transpose()
         ra_array = ra_array.transpose()
-        pixarea = pixarea.transpose()
+        pixarea_steradians = pixarea_steradians.transpose()
+
+    steradians_to_arcsec2 = 1 / (2. * np.pi / (360. * 3600.)) ** 2
+    pixarea_arcsec2 = pixarea_steradians * steradians_to_arcsec2
 
     vsini, rv = other_nonlin_paras[0:2]
 
@@ -118,7 +122,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
     # Defining the position of companion
     comp_dra_as, comp_ddec_as = other_nonlin_paras[2], other_nonlin_paras[3]
 
-    comp_spec = _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs, pixarea)
+    comp_spec = _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs, pixarea_arcsec2)
 
     where_trace_finite, Nd, new_mask, larger_mask_comp, Nrows, rows_ids = _extract_companion_traces(ra_array, dec_array, comp_dra_as, comp_ddec_as, radius_as, nx, data, bad_pixels, noise, comp_spec, star_func, Nrows_max, wvs)
 
