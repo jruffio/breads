@@ -105,9 +105,9 @@ class JWST_IFUs(ABC):
 
         ## Part 2: Loading information from the FITS data
         self.data = hdulist_sc["SCI"].data
-        readout_noise_var = hdulist_sc["VAR_RNOISE"].data
-        photon_noise_var = hdulist_sc["VAR_POISSON"].data
-        self.noise = np.sqrt(readout_noise_var + photon_noise_var)
+        self.readout_noise_var = hdulist_sc["VAR_RNOISE"].data
+        self.photon_noise_var = hdulist_sc["VAR_POISSON"].data
+        self.noise = np.sqrt(self.readout_noise_var + self.photon_noise_var)
         dq = hdulist_sc["DQ"].data
         hdulist_sc.close()
 
@@ -1139,25 +1139,25 @@ class JWST_IFUs(ABC):
                                                                                   regularization=True,
                                                                                   reg_mean_map=reg_mean_map1,
                                                                                   reg_std_map=reg_std_map1)
-        print("norm col is done")
+
         continuum, normalized_im, normalized_err = self._get_masked_normalized_object(spline_cont0, im, err)
-        print("get mask done")
+
         new_wavelengths, combined_fluxes, combined_errors = combine_spectrum(im_wvs.flatten(),
                                                                              normalized_im.flatten(),
                                                                              normalized_err.flatten(),
                                                                              np.nanmedian(im_wvs) / spec_R_sampling)
         if save_utils:
             self._save_starspectrum_contnorm(save_utils, new_wavelengths, combined_fluxes, combined_errors,
-                                             spline_cont0, spline_paras0, x_nodes)
+                                             spline_cont0, spline_paras0, x_nodes, normalized_im)
 
 
         self.x_nodes = x_nodes
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
 
-        return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,x_nodes
+        return new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes
 
 
-    def _save_starspectrum_contnorm(self, save_utils, new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes):
+    def _save_starspectrum_contnorm(self, save_utils, new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes, normalized_im):
         """Save the continuum normalized star spectrum in a fits file.
 
         Parameters
@@ -1190,6 +1190,7 @@ class JWST_IFUs(ABC):
         hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
         hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
         hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
+        hdulist.writeto(pyfits.ImageHDU(data=normalized_im, name='CONT_NORM_IM'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
 

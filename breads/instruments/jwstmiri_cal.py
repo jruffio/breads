@@ -378,7 +378,7 @@ class JWSTMiri_cal(JWST_IFUs):
         """Hook for MIRI to set the bad pixels map. Used only in JWST_IFUs.compute_starspectrum()."""
         self.bad_pixels = bad_pixels.transpose() #Transposing to be consistent with the parent's class method output return.
 
-    def _save_starspectrum_contnorm(self, save_utils, new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes):
+    def _save_starspectrum_contnorm(self, save_utils, new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, x_nodes, continuum_normalized_image):
         """Save continuum normalized star spectrum results."""
         if isinstance(save_utils, str):
             out_filename = save_utils
@@ -392,6 +392,7 @@ class JWSTMiri_cal(JWST_IFUs):
         hdulist.append(pyfits.ImageHDU(data=spline_cont0.transpose(), name='SPLINE_CONT0'))
         hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
         hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
+        hdulist.writeto(pyfits.ImageHDU(data=continuum_normalized_image.transpose(), name='CONT_NORM_IM'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
 
