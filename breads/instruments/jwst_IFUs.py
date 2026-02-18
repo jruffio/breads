@@ -243,6 +243,11 @@ class JWST_IFUs(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def _init_wave_wcs(self, filename):
+        """Hook to be implemented by subclasses"""
+        raise NotImplementedError
+
+    @abstractmethod
     def compute_med_filt_badpix(self):
         """Hook to be implemented by subclasses"""
         raise NotImplementedError
