@@ -2489,7 +2489,7 @@ def _fit_wpsf_task(paras, plot=False):
         rad_bounds = [(rmin, rmin + ann_width) for rmin in np.arange(IWA, OWA, ann_width)]
     for [r_min, r_max] in rad_bounds:
         # equivalent to using floor but casting as well
-        if ann_width is None:
+        if sector_area is None:
             curr_sep_N_subsections = 1
         else:
             curr_sep_N_subsections = np.max([int(np.pi * (r_max ** 2 - r_min ** 2) / sector_area), 1])
@@ -2757,11 +2757,11 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
         all_interp_area2d = all_interp_area2d.transpose()
 
     steradians_to_arcsec2 = 1 / (2. * np.pi / (360. * 3600.)) ** 2
-    all_interp_area2d *= steradians_to_arcsec2 #convert pixel area in arcsec^2
+    all_interp_area2d_as = all_interp_area2d * steradians_to_arcsec2 #convert pixel area in arcsec^2
 
     wv_sampling = combdataobj.wv_sampling
-    all_interp_flux = all_interp_flux/all_interp_area2d * psf_spaxel_area
-    all_interp_err = all_interp_err/all_interp_area2d * psf_spaxel_area
+    all_interp_flux = all_interp_flux/all_interp_area2d_as * psf_spaxel_area
+    all_interp_err = all_interp_err/all_interp_area2d_as * psf_spaxel_area
 
     all_interp_psfmodel = np.full(all_interp_flux.shape, np.nan)
     all_interp_psfsub = np.full(all_interp_flux.shape, np.nan)
@@ -2828,9 +2828,9 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             all_interp_psfmodel[:, debug_init+out_id] = out[1]
             all_interp_psfsub[:, debug_init+out_id] = all_interp_flux[:, debug_init+out_id] - out[1]
 
-    all_interp_psfsub = all_interp_psfsub*all_interp_area2d/psf_spaxel_area
-    all_interp_psfmodel = all_interp_psfmodel*all_interp_area2d/psf_spaxel_area
-    all_interp_err = all_interp_err*all_interp_area2d/psf_spaxel_area
+    all_interp_psfsub = all_interp_psfsub*all_interp_area2d_as/psf_spaxel_area
+    all_interp_psfmodel = all_interp_psfmodel*all_interp_area2d_as/psf_spaxel_area
+    all_interp_err = all_interp_err*all_interp_area2d_as/psf_spaxel_area
 
     if out_filename is not None:
         wpsfsfit_header = {"INIT_ANG": wpsf_angle_offset,
@@ -2885,10 +2885,12 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
             ny_ori, nx_ori =wvs_ori.shape
 
             new_model = np.full((ny_ori,nx_ori), np.nan)
+            new_psfsub = np.full((ny_ori,nx_ori), np.nan)
             new_badpix = np.full((ny_ori,nx_ori), np.nan)
             new_area2d = np.full((ny_ori,nx_ori), np.nan)
             for rowid in range(ny_ori):
                 new_model[rowid, :] = np.interp(wvs_ori[rowid, :] ,wv_sampling, all_interp_psfmodel[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
+                new_psfsub[rowid, :] = np.interp(wvs_ori[rowid, :] ,wv_sampling, all_interp_psfsub[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
                 badpix_mask = np.isfinite(all_interp_badpix[(ny * obj_id + rowid), :]).astype(float)
                 new_badpix[rowid, :] = np.interp(wvs_ori[rowid, :] , wv_sampling, badpix_mask,left=np.nan, right=np.nan)
                 new_area2d[rowid, :] = np.interp(wvs_ori[rowid, :] , wv_sampling, all_interp_area2d[(ny * obj_id+rowid), :],left=np.nan, right=np.nan)
@@ -2902,12 +2904,13 @@ def fitpsf(combdataobj, psfs, psfX, psfY, out_filename=None, IWA=0, OWA=np.inf, 
                 pass
             elif du == 'MJy/sr' and bu == 'MJy':
                 new_model *= new_area2d
+                new_psfsub *= new_area2d
             elif du == 'MJy'    and bu == 'MJy/sr':
                 new_model /= new_area2d
+                new_psfsub /= new_area2d
 
-            tmp_sub = hdulist_sc["SCI"].data - new_model
 
-            hdulist_sc["SCI"].data = tmp_sub
+            hdulist_sc["SCI"].data = new_psfsub
             hdulist_sc["DQ"].data[where_bad] = 1
 
             # Write the new HDU list to a new FITS file

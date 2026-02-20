@@ -1145,7 +1145,7 @@ def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_rad
                 print('Exception: data obj in MJy/sr and starsub in MJy')
                 raise Exception('conversion from MJy to MJy/sr not implemented yet.')
             regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"].replace("_regwvs.fits",
-                                                                                             "_starsub1d_regwvs.fits")
+                                                                                             "_"+starsub_dir+"_regwvs.fits")
         else:
             replace_data = None
             regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"]
