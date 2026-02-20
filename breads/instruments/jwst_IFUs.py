@@ -1195,7 +1195,7 @@ class JWST_IFUs(ABC):
         hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
         hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
         hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
-        hdulist.writeto(pyfits.ImageHDU(data=normalized_im, name='CONT_NORM_IM'))
+        hdulist.append(pyfits.ImageHDU(data=normalized_im, name='CONT_NORM_IM'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
 
