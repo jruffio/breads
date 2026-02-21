@@ -1,9 +1,9 @@
-from breads.instruments.jwstmiri_cal import JWSTMiri_cal, _fit_wpsf_task
+from breads.instruments.jwstmiri_cal import JWSTMiri_cal
+from breads.instruments.jwst_IFUs_test import _fit_wpsf_task
 from warnings import warn
 import numpy as np
 from copy import copy
-import astropy.io.fits as pyfits
-import matplotlib.pyplot as plt
+
 
 
 class JWSTMiri_multiple_cals(JWSTMiri_cal):
@@ -17,17 +17,23 @@ class JWSTMiri_multiple_cals(JWSTMiri_cal):
         dataobj_list
         verbose
         """
-        super().__init__(verbose=verbose)
+        self.verbose = verbose
 
         if len(dataobj_list) == 0:
             warning_text = "No data object provided provided. " + \
                            "Please manually add data or use JWSTMiri_multiple_cals.combine_dataobj_list()"
             warn(warning_text)
         else:
+            self.ifu_name = "miri"
             self.combine_dataobj_list(dataobj_list)
+            self.bary_RV = 0
+            self.refpos = None
 
     def combine_dataobj_list(self, dataobj_list):
-        self.ins_type = dataobj_list[0].ins_type
+        """ Combine the data from multiple data objects
+
+        This concatenates the values from many attributes into a single overall combined dataset
+        """
         self.coords = dataobj_list[0].coords
         self.R = dataobj_list[0].R
         self.pixelscale = dataobj_list[0].pixelscale
@@ -50,8 +56,6 @@ class JWSTMiri_multiple_cals(JWSTMiri_cal):
                 self.default_filenames[key] = val.replace(".fits","_combined.fits")
         self.utils_dir = dataobj_list[0].utils_dir
         self.crds_dir = dataobj_list[0].crds_dir
-        self.bary_RV = dataobj_list[0].bary_RV
-        self.refpos = dataobj_list[0].refpos
         if hasattr(dataobj_list[0], "wv_sampling"):
             self.wv_sampling = dataobj_list[0].wv_sampling
         if hasattr(dataobj_list[0], "wvs_ori"):

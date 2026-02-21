@@ -34,7 +34,8 @@ dependencies = [
     "multiprocess",
     "tqdm",
     "h5py",
-    "species"
+    "species",
+    "py"
 ]
 
 [project.license]

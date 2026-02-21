@@ -28,12 +28,11 @@ except ImportError:
 
 from breads.instruments.instrument import Instrument
 from breads.instruments.jwstnirspec_cal import JWSTNirspec_cal
-from breads.instruments.jwstnirspec_cal import untangle_dq
-from breads.instruments.jwstnirspec_cal import crop_trace_edges
-from breads.instruments.jwstnirspec_cal import where_point_source
-from breads.instruments.jwstnirspec_cal import fitpsf
-from breads.instruments.jwstnirspec_cal import get_contnorm_spec
-from breads.instruments.jwstnirspec_cal import filter_big_triangles
+from breads.instruments.jwst_IFUs import untangle_dq
+from breads.instruments.jwst_IFUs import crop_trace_edges
+from breads.instruments.jwst_IFUs import fitpsf
+from breads.instruments.jwst_IFUs import get_contnorm_spec
+from breads.instruments.jwst_IFUs import filter_big_triangles
 from breads.instruments.jwstnirspec_multiple_cals import JWSTNirspec_multiple_cals
 from breads.fit import fitfm
 from breads.utils import get_spline_model
@@ -296,11 +295,11 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
 # wv_for_cent_calib_dict["G395H nrs1"] = np.arange(2.859, 4.103, 0.01)
 # wv_for_cent_calib_dict["G395H nrs2"] = np.arange(4.081, 5.280, 0.01)
 
-def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0), wv_sampling=None, N_wvs_nodes=40,
+def run_coordinate_recenter(cal_files, utils_dir, init_centroid=(0, 0), wv_sampling=None, N_wvs_nodes=40,
                             mask_charge_transfer_radius=None,
                             IWA=0.3, OWA=1.0,
                             debug_init=None, debug_end=None,
-                            numthreads=16,
+                            mppool=None,
                             save_plots=False,
                             filename_suffix="_webbpsf",
                             overwrite=False,
@@ -313,7 +312,6 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
     cal_files : list of strings
         Filenames of stage 2 reduced Cal files to process
     utils_dir
-    crds_dir
     init_centroid : tuple of floats
         Starting guess for centroid location
     wv_sampling
@@ -341,7 +339,6 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
       [X]_poly2d_centroid_[filename_suffix].txt
 
     """
-    mypool = mp.Pool(processes=numthreads)
 
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
@@ -387,18 +384,18 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         # Define a series of processing tasks to be performed on each input file.
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}, True, True])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"N_nodes": N_wvs_nodes,
                                                                     "threshold_badpix": 100,
-                                                                    "mppool": mypool}, True, True])
+                                                                    "mppool": mppool}, True, True])
         preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d_tmp",
                                                               "threshold_badpix": 10,
-                                                              "mppool": mypool}, True, True])
+                                                              "mppool": mppool}, True, True])
         preproc_task_list.append(["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}, True, True])
 
         # Load that file. (TODO: Does this invoke the preproc_task_list?)
-        dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
+        dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
         regwvs_dataobj_list.append(dataobj.reload_interpdata_regwvs())
 
@@ -414,8 +411,9 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
         webbpsf_reload = regwvs_combdataobj.compute_webbpsf_model(wv_sampling=regwvs_combdataobj.wv_sampling,
                                                                   image_mask=None,
                                                                   pixelscale=0.1, oversample=10,
-                                                                  parallelize=False, mppool=mypool,
+                                                                  parallelize=False, mppool=mppool,
                                                                   save_utils=True)
+
     wpsfs, wpsfs_header, wepsfs, webbpsf_wvs, webbpsf_x, webbpsf_y, wpsf_oversample, wpsf_pixelscale = webbpsf_reload
     webbpsf_x = np.tile(webbpsf_x[None, :, :], (wepsfs.shape[0], 1, 1))
     webbpsf_y = np.tile(webbpsf_y[None, :, :], (wepsfs.shape[0], 1, 1))
@@ -429,7 +427,7 @@ def run_coordinate_recenter(cal_files, utils_dir, crds_dir, init_centroid=(0, 0)
     regwvs_combdataobj.bad_pixels[where_center_disk] = np.nan
 
     fitpsf(regwvs_combdataobj, wepsfs, webbpsf_x, webbpsf_y, out_filename=fitpsf_filename, IWA=0.0, OWA=OWA,
-           mppool=mypool, init_centroid=init_centroid, ann_width=ann_width, padding=padding,
+           mppool=mppool, init_centroid=init_centroid, ann_width=ann_width, padding=padding,
            sector_area=sector_area, RDI_folder_suffix=filename_suffix, rotate_psf=regwvs_combdataobj.east2V2_deg,
            flipx=True, psf_spaxel_area=(wpsf_pixelscale) ** 2, debug_init=debug_init, debug_end=debug_end)
 
@@ -687,7 +685,7 @@ def fm_charge_transfer(nonlin_paras, cubeobj, charge_transfer_mask=None, nodes=4
             return d, m_output, s
 
 
-def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
+def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, N_nodes=40, model_charge_transfer=False,
                               utils_dir=None, coords_offset=(0, 0)):
     """ Clean 1/f stripe noise from NIRSpec IFU data. Inspired by NSClean but implemented independently.
 
@@ -704,7 +702,6 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     rate_file
     cal_file_dir
     clean_dir
-    crds_dir
     N_nodes
     model_charge_transfer
     utils_dir
@@ -720,14 +717,14 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     if len(glob(cal_filename)) == 0:
         raise Exception("Could not find the corresponding cal file. Please run stage 2 without cleaning first.")
 
-    cal_dataobj = JWSTNirspec_cal(cal_filename, crds_dir=crds_dir, utils_dir=utils_dir,
+    cal_dataobj = JWSTNirspec_cal(cal_filename, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True)
     out = cal_dataobj.reload_coordinates_arrays()
     if out is None:
         cal_dataobj.compute_coordinates_arrays(save_utils=True)
     cal_dataobj.apply_coords_offset(coords_offset=coords_offset)
 
-    ra_im, dec_im = cal_dataobj.getskycoords()
+    ra_im, dec_im = cal_dataobj.get_sky_coords()
     sep_im = np.sqrt(ra_im ** 2 + dec_im ** 2)
     cal_im = cal_dataobj.data
 
@@ -862,7 +859,7 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
         data.bad_pixels = copy(bad_pixels[:, colid])
 
         nonlin_paras = []
-        fm_paras = {"badpixfraction": 0.99, "nodes": N_nodes, "fix_parameters": [],
+        fm_paras = {"badpixfraction": 0.99, "nodes": N_nodes, "fix_parameters": None,
                     "regularization": "default", "M_spline": m_spline_column}
         if 1:  # optimize non linear parameter
             out_log_prob, _, rchi2, linparas, linparas_err = fitfm(nonlin_paras, data, fm_column_background, fm_paras,
@@ -911,7 +908,7 @@ def forward_model_noise_clean(rate_file, cal_file_dir, clean_dir, crds_dir, N_no
     return new_rate_file
 
 
-def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, model_charge_transfer=False,
+def run_noise_clean(rate_files, stage2_dir, output_dir, N_nodes=40, model_charge_transfer=False,
                     utils_dir=None, coords_offset=(0, 0), overwrite=False, save_plots=True):
     """Invoke forward model noise removal for a list of rate files
 
@@ -920,7 +917,6 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, mo
     rate_files
     stage2_dir
     output_dir
-    crds_dir
     N_nodes
     model_charge_transfer
     utils_dir
@@ -950,7 +946,7 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, mo
             continue
 
 
-        forward_model_noise_clean(rate_file, stage2_dir, output_dir, crds_dir,
+        forward_model_noise_clean(rate_file, stage2_dir, output_dir,
                                   N_nodes=N_nodes,
                                   model_charge_transfer=model_charge_transfer, utils_dir=utils_dir,
                                   coords_offset=coords_offset)
@@ -963,7 +959,7 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, mo
     if save_plots:
         breads.jwst_tools.plotting.plot_2d_image_sets_side_by_side(rate_files, cleaned_rate_files,
                                                                    output_dir=output_dir,
-                                                                   suptitle="Noise Cleaining results. Left = Before, Right = After.",
+                                                                   suptitle="Noise Cleaning results. Left = Before, Right = After.",
                                                                    plot_label='noiseclean')
 
     return cleaned_rate_files
@@ -972,7 +968,7 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, crds_dir, N_nodes=40, mo
 # Host Star PSF Subtraction 
 
 
-def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_offset=(0, 0), wv_nodes=None,
+def compute_normalized_stellar_spectrum(cal_files, utils_dir, coords_offset=(0, 0), wv_nodes=None,
                                         mask_charge_transfer_radius=None, mppool=None,
                                         ra_dec_point_sources=None, overwrite=False,targetname=None):
     """
@@ -981,7 +977,6 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
     ----------
     cal_files
     utils_dir
-    crds_dir
     coords_offset
     wv_nodes
     mask_charge_transfer_radius
@@ -1024,7 +1019,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}, True, True])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
@@ -1034,7 +1029,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
                                                               "threshold_badpix": 10,
                                                               "mppool": mppool}, True, True])
 
-        dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
+        dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
 
         # Do some masking
@@ -1044,7 +1039,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
         # mask planets before computing the star spectrum
         if ra_dec_point_sources is not None:
             for ra_pl, dec_pl in ra_dec_point_sources:
-                where_pl = where_point_source(dataobj, [ra_pl / 1000., dec_pl / 1000.], 0.16)
+                where_pl = dataobj.where_point_source([ra_pl / 1000., dec_pl / 1000.], 0.16)
                 dataobj.bad_pixels[where_pl] = np.nan
 
         dataobj_list.append(dataobj)
@@ -1059,7 +1054,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, crds_dir, coords_o
     return combined_star_func
 
 
-def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None, combined_star_func=None,
+def compute_starlight_subtraction(cal_files, utils_dir, wv_nodes=None, combined_star_func=None,
                                   coords_offset=(0, 0), mppool=None,targetname=None):
     """
 
@@ -1067,7 +1062,6 @@ def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None,
     ----------
     cal_files
     utils_dir
-    crds_dir
     wv_nodes
     combined_star_func
     coords_offset
@@ -1091,7 +1085,7 @@ def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None,
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}, True, True])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         if combined_star_func is None:
@@ -1099,14 +1093,14 @@ def compute_starlight_subtraction(cal_files, utils_dir, crds_dir, wv_nodes=None,
                                                                         "threshold_badpix": 100,
                                                                         "mppool": mppool}, True, True])
 
-        dataobj = JWSTNirspec_cal(filename, crds_dir=crds_dir, utils_dir=utils_dir,
+        dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir,
                                   save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
         if combined_star_func is not None:
             dataobj.reload_starspectrum_contnorm()
             dataobj.star_func = combined_star_func
 
         outputs = dataobj.reload_starsubtraction()
-        # outputs = None
+
         if outputs is None:
             outputs = dataobj.compute_starsubtraction(save_utils=True, starsub_dir="starsub1d",
                                                       threshold_badpix=10, mppool=mppool)
@@ -1140,7 +1134,7 @@ def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_rad
 
         if use_starsub:
             starsub_filename = os.path.join(dataobj.utils_dir, starsub_dir, os.path.basename(dataobj.filename))
-            starsub_dataobj = JWSTNirspec_cal(starsub_filename, crds_dir=dataobj.crds_dir, utils_dir=dataobj.utils_dir)
+            starsub_dataobj = JWSTNirspec_cal(starsub_filename, utils_dir=dataobj.utils_dir)
             if (dataobj.data_unit == 'MJy') and (starsub_dataobj.data_unit == 'MJy/sr'):
                 replace_data = dataobj.convert_MJy_per_sr_to_MJy(data_in_MJy_per_sr=starsub_dataobj.data)
             elif (dataobj.data_unit == 'MJy/sr') and (starsub_dataobj.data_unit == 'MJy/sr'):
@@ -1151,7 +1145,7 @@ def get_combined_regwvs(dataobj_list, wv_sampling=None, mask_charge_transfer_rad
                 print('Exception: data obj in MJy/sr and starsub in MJy')
                 raise Exception('conversion from MJy to MJy/sr not implemented yet.')
             regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"].replace("_regwvs.fits",
-                                                                                             "_starsub1d_regwvs.fits")
+                                                                                             "_"+starsub_dir+"_regwvs.fits")
         else:
             replace_data = None
             regwvs_filename = dataobj.default_filenames["compute_interpdata_regwvs"]
@@ -1835,7 +1829,7 @@ def column_median_max_channel(data, channel='CH1'):
 
 def compute_coordinates_offset(path_cal_files, channel, utils_dir, target_name=None, IWA=None, OWA=None):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-    from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
+    from breads.instruments.jwstmiri_multiple_cals import JWSTMiri_multiple_cals
     from breads.instruments.jwstmiri_cal import get_contnorm_spec_miri
 
     if not os.path.exists(utils_dir):
@@ -1890,7 +1884,6 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coor
                                              star_hf_subtraction=True, mppool=None,
                                              ra_dec_point_sources=None, overwrite=False):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-    from breads.instruments.jwstmiri_cal import get_contnorm_spec_miri
 
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
@@ -1940,12 +1933,12 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, coor
         # mask planets before computing the star spectrum
         if ra_dec_point_sources is not None:
             for ra_pl, dec_pl in ra_dec_point_sources:
-                where_pl = where_point_source(dataobj, [ra_pl / 1000., dec_pl / 1000.], 0.16)
+                where_pl = dataobj.where_point_source([ra_pl / 1000., dec_pl / 1000.], 0.16)
                 dataobj.bad_pixels[where_pl] = np.nan
 
         dataobj_list.append(dataobj)
 
-    new_wavelengths, combined_fluxes, combined_errors = get_contnorm_spec_miri(dataobj_list, spline2d=False,
+    new_wavelengths, combined_fluxes, combined_errors = get_contnorm_spec(dataobj_list, spline2d=False,
                                                                                load_utils=False,
                                                                                out_filename=combined_contnorm_spec_filename,
                                                                                spec_R_sampling=2700 * 4,
@@ -1968,7 +1961,7 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, wv_nodes=N
 
         preproc_task_list = []
         preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}])
+        preproc_task_list.append(["compute_coordinates_arrays", {"targname": target_name}, True, True])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         if combined_star_func is None:
@@ -1997,7 +1990,7 @@ def compute_starlight_subtraction_miri(cal_files, channel, utils_dir, wv_nodes=N
 
 def get_combined_regwvs_miri(dataobj_list, channel, wv_sampling=None, use_starsub1d=False, reload=False):
     from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-    from breads.instruments.jwstmiri_multiple_cal import JWSTMiri_multiple_cals
+    from breads.instruments.jwstmiri_multiple_cals import JWSTMiri_multiple_cals
 
     regwvs_dataobj_list = []
     for dataobj in dataobj_list:
