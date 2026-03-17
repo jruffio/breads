@@ -1018,19 +1018,19 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, coords_offset=(0, 
         print(filename)
 
         preproc_task_list = []
-        preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}, True, True])
+        preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}])
+        preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}])
         preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
         preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
         preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
                                                                     "threshold_badpix": 100,
-                                                                    "mppool": mppool}, True, True])
+                                                                    "mppool": mppool}])
         preproc_task_list.append(["compute_starsubtraction", {"starsub_dir": "starsub1d",
                                                               "threshold_badpix": 10,
-                                                              "mppool": mppool}, True, True])
+                                                              "mppool": mppool}])
 
         dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir,
-                                  save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
+                                  save_utils=True, load_utils=False, preproc_task_list=preproc_task_list)
 
         # Do some masking
         dataobj.bad_pixels = crop_trace_edges(dataobj.bad_pixels, N_pix=1, trace_id_map=dataobj.trace_id_map)
