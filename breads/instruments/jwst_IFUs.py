@@ -376,10 +376,12 @@ class JWST_IFUs(ABC):
             out_filename = self.default_filenames["compute_coordinates_arrays"]
 
         hdulist = pyfits.HDUList()
+        hdr_area2d = pyfits.Header()
+        hdr_area2d['BUNIT'] = 'steradian'
         hdulist.append(pyfits.PrimaryHDU(data=self.wavelengths))
         hdulist.append(pyfits.ImageHDU(data=self.dra_as_array, name='DELTA_RA'))
         hdulist.append(pyfits.ImageHDU(data=self.ddec_as_array, name='DELTA_DEC'))
-        hdulist.append(pyfits.ImageHDU(data=self.area2d, name='AREA2D'))
+        hdulist.append(pyfits.ImageHDU(data=self.area2d, header=hdr_area2d, name='AREA2D'))
         hdulist.append(pyfits.ImageHDU(data=self.trace_id_map, name='TRACE_ID_MAP'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
@@ -411,6 +413,17 @@ class JWST_IFUs(ABC):
                 self.trace_id_map = hdulist['TRACE_ID_MAP'].data
             except KeyError:
                 print("Old reduction of coordinates. Could not find hdulist['TRACE_ID_MAP'].data. Please reprocess.")
+            try:
+                hdr_area2d = hdulist['AREA2D'].header['BUNIT']
+            except KeyError:
+                print("Warning - Could not find data unit for hdulist['AREA2D']. \n *_relcoords.fits intermediate files seems to be computed from an old breads version")
+                mean_area2d = np.nanmedian(area2d)
+                if mean_area2d < 1e-12: #Unit surely in steradian
+                    print("Unit seems to be in steradian")
+                else:
+                    print("Unit seems to be in arcsec^2, converting to steradian for compatibility")
+                    arcsec2_to_steradian = (2. * np.pi / (360. * 3600.)) ** 2
+                    area2d *= arcsec2_to_steradian
 
         self.dra_as_array, self.ddec_as_array, self.area2d = dra_as_array, ddec_as_array, area2d
         self.coords = "sky"

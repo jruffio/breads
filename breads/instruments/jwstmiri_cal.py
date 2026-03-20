@@ -138,7 +138,7 @@ class JWSTMiri_cal(JWST_IFUs):
             self.wv_ref = np.nanmin(self.wavelengths)
 
     def _init_wave_wcs(self, filename):
-        self._init_wcs(self, filename)
+        self._init_wcs(filename)
         return self.wavelengths
 
     def _init_wcs(self, filename):
@@ -182,6 +182,9 @@ class JWSTMiri_cal(JWST_IFUs):
             hdulist.writeto(self.filename, overwrite=True)
 
             print("WCS computed")
+
+            if hasattr(self, "mask_channel"):
+                self.wavelengths *= self.mask_channel
 
         return self.ra_array, self.dec_array, self.wavelengths, self.area2d
 
@@ -392,7 +395,7 @@ class JWSTMiri_cal(JWST_IFUs):
         hdulist.append(pyfits.ImageHDU(data=spline_cont0.transpose(), name='SPLINE_CONT0'))
         hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
         hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
-        hdulist.writeto(pyfits.ImageHDU(data=continuum_normalized_image.transpose(), name='CONT_NORM_IM'))
+        hdulist.append(pyfits.ImageHDU(data=continuum_normalized_image.transpose(), name='CONT_NORM_IM'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
 
