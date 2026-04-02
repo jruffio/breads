@@ -235,7 +235,11 @@ class JWSTNirspec_cal(JWST_IFUs):
 
         """
         if self.verbose:
-            print(f"Computing charge bleeding mask. Will save to {0}".format(self.default_filenames['compute_charge_bleeding_mask']))
+            msg = "Computing charge bleeding mask."
+            if save_utils:
+                msg += f" Will save to {self.default_filenames['compute_charge_bleeding_mask']}"
+            print(msg)
+
         ifuX, ifuY = self.get_ifu_coords()
 
         bar_mask = np.ones(self.bad_pixels.shape)
