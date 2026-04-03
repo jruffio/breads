@@ -13,10 +13,10 @@ General
    :maxdepth: 1
    :caption: JWST
 
-   tutorials/jwst/1_obtaining_uncalibrated_data_tutorial.ipynb
-   tutorials/jwst/2_running_BREADS_pipeline_tutorial.ipynb
-   tutorials/jwst/3_analyzing_data_products_CCF_covariance.ipynb
-   tutorials/jwst/4_spectral_modelling_likelihood_joint_analysis.ipynb
+   tutorials/jwst/jwst_obtaining_uncalibrated_data_tutorial.ipynb
+   tutorials/jwst/nirspec_1_running_BREADS_pipeline_tutorial.ipynb
+   tutorials/jwst/nirspec_2_analyzing_data_products_CCF_covariance.ipynb
+   tutorials/jwst/nirspec_3_spectral_modelling_likelihood_joint_analysis.ipynb
 
 
 
