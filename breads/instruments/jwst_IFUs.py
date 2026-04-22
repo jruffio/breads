@@ -26,6 +26,9 @@ import breads.utils as utils
 from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_elements
 from breads.utils import get_spline_model
 
+import subprocess
+from datetime import datetime
+
 
 class JWST_IFUs(ABC):
     def __init__(self, filename=None, utils_dir=None, verbose=True):
@@ -51,6 +54,22 @@ class JWST_IFUs(ABC):
                 Default to class load_utils if not defined for the task.
 
         """
+        self.breads_header = pyfits.Header()
+        # Pipeline identification
+        self.breads_header['COMMENT'] = '=== BREADS Pipeline Keywords ==='
+        self.breads_header['BREADSV'] = ('1.0.0', 'BREADS pipeline version')
+        try:
+            commit = subprocess.check_output(
+                ['git', 'rev-parse', 'HEAD'],
+                cwd=os.path.dirname(__file__),  # run in the BREADS package directory
+                stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except subprocess.CalledProcessError:
+            commit = 'UNKNOWN'
+        self.breads_header['COMMITH']  = (commit, 'BREADS git commit hash')
+        self.breads_header['REDDATE']  = (datetime.utcnow().isoformat(), 'UTC date of reduction')
+
+
         self.bad_pixels = None
 
         self.dra_as_array = None
