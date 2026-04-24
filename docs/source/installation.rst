@@ -15,6 +15,13 @@ Briefly:
  * ``cd breads``
  * ``pip install .``
 
+Define the environment variable ``BREADS_DATA`` to point to a directory BREADS can download data for testing.
+For instance, you could add the following line to your ``.bashrc`` file:
+
+.. code-block:: bash
+
+   export BREADS_DATA="/path/to/breads_data"
+
 **Installing with optional dependencies**
 
 BREADS may be used to reduce data from several facilities, and some dependencies are optional depending on what kind of data you will be reducing. For instance, the JWST pipeline (python package ``jwst``) is only a required dependency if you're going to be reduing JWST data.  Optional dependencies can be specified using brackets in the ``pip`` command line.
