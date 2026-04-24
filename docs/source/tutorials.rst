@@ -1,5 +1,5 @@
 
-BREADS tutorials
+Tutorials
 ================
 
 
