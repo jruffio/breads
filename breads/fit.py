@@ -7,40 +7,64 @@ from scipy.special import loggamma
 
 __all__ =  ('fitfm', 'log_prob', 'combined_log_prob', 'nlog_prob')
 
-def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=True, bounds=None, scale_noise=True, marginalize_noise_scaling=False,
-          debug=False):
-    """
-    Fit a forward model to data returning probabilities and best fit linear parameters.
 
-    Args:
-        nonlin_paras: [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
-            parameters depends on the forward model defined.
-        dataobj: A data object of type breads.instruments.instrument.Instrument to be analyzed.
-        fm_func: A forward model function. See breads.fm.template.template() for an example.
-        fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
-        computeH0: If true (default), compute the probability of the model removing the first element of the linear
-            model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
-            non-linear parameters
-        bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=False, bounds=None, scale_noise=True, marginalize_noise_scaling=False):
+    """
+    Fit a forward model (FM) to a data object (defined by an instrument class) returning probabilities and best fit linear parameters.
+
+    Parameters
+    ----------
+        nonlin_paras : list
+            [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear parameters depends on the forward model defined.
+        dataobj : Instrument
+            A data object following the template of breads.instruments.instrument.Instrument to be analyzed.
+        fm_func : function
+            A forward model function. See breads.fm.template.template() for an example.
+        fm_paras : dict
+            Additional parameters for fm_func (other than non-linear parameters and dataobj)
+        computeH0 : bool, optional
+            If true (default is False), compute the probability of the model removing the first element of the linear model; See second ouput log_prob_H0. This can be used to compute delta likelihoods.
+        bounds : tuple of arrays, optional
+            (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
-            e.g. ([0,0,...], [np.inf,np.inf,...]) default no bounds.
+            e.g. ([0,0,...], [np.inf,np.inf,...]). default no bounds.
             Each numpy array must have shape (N_linear_parameters,).
+        scale_noise : bool, optional
+            If true (default True), scale the noise by the reduced chi2 of the best fit. This is useful when the noise is not well estimated. Set to False if you want to use the original noise estimation.
+        marginalize_noise_scaling : bool, optional
+            If true (default False), marginalize the log probability with respect to the noise scaling factor with a Jeffreys prior. This is useful when the noise is not well estimated. Set to False if you want to use the original noise estimation.
+            This only works when there is no regularization in the forward model.
+            This also only affect the calculation of the log probability but not the best fit linear parameters and their uncertainties.
 
-
-    Returns:
-        log_prob: Probability of the model marginalized over linear parameters.
-        log_prob_H0: Probability of the model without the planet marginalized over linear parameters.
-        s2: noise scaling factor
-        linparas: Best fit linear parameters
-        linparas_err: Uncertainties of best fit linear parameters
+    Returns
+    -------
+        log_prob : float
+            Probability of the model marginalized over linear parameters.
+            Caution: if the size of the data vector (N_data) varies for different non-linear parameters (e.g., different positions with different edges and bad pixels), the log probability values are not directly comparable and should only be used to compute delta log probabilities.
+            To properly use log_prob, one should ensure that the data vector does not change when exploring the non-linear parameters. This is needed to compute RVs or astrometry for example.
+        log_prob_H0 : float
+            Probability of the model without the planet component(s).
+        s2 : float
+            This is the reduced chi2 of the best fit; i.e., the square of the noise scaling factor.
+            The noise scaling factor being the standard deviation of the normalized residuals (normalized by the data noise standard deviation).
+            While this value is always returned, it is only applied to the computation of linparas_err and/or log_prob if scale_noise is True.
+        linparas : np.ndarray
+            Best fit linear parameters
+        linparas_err : np.ndarray
+            Uncertainties of best fit linear parameters
     """
+    if computeH0:
+        raise Exception('computeH0 not yet implemented here')
+
     fm_out = fm_func(nonlin_paras, dataobj, **fm_paras)
 
     #Check the forward model matrices
+    # "no_reg" stands for matrices and vector "without the regularization part" as the forward model can optionally include regularization vectors and matrices as well.
     if len(fm_out) == 3:
         d_no_reg, M_no_reg, s_no_reg = fm_out
     elif len(fm_out) == 4:
         d_no_reg, M_no_reg, s_no_reg, extra_outputs = fm_out
+        # extra_outputs can include a regularization prescription for example.
     else:
         raise ValueError(f"Unrecognized number of matrices for forward model, the number of outputs for {fm_func.__name__} is expected to be 3 or 4 but {len(fm_out)} were given.")
 
@@ -48,15 +72,15 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=True, bounds=None,
     N_data = np.size(d_no_reg)
 
     if N_data == 0:
-        #Nothing can be fitted
+        # Nothing can be fitted
         return _invalid_outputs(N_linpara)
 
     if N_linpara == 1 and computeH0:
-        #Only one parameter to fit so cannot test both H0 and H1 hypothesis.
+        # Only one parameter to fit so cannot test both H0 and H1 hypothesis.
         computeH0 = False
         raise Warning("Only one parameter to fit so cannot test H0 hypothesis.")
 
-    #Initializing the boundaries for least-square fit
+    # Initializing the boundaries for least-square fit
     if bounds is None:
         _bounds = ([-np.inf]*N_linpara, [np.inf]*N_linpara)
     else:
@@ -64,13 +88,17 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=True, bounds=None,
         if any(np.any(np.isfinite(arr)) for arr in _bounds): #check if there is finite boundaries
             raise Warning("The calculation of log prob is only theoretically accurate if no finite bounds are used...")
 
-    # Reject the column(s) full of 0 of the model matrix M (without regularization)
+    # Will reject the column(s) full of 0 of the model matrix M (without regularization)
     validpara = np.where(np.any(M_no_reg != 0, axis=0))
 
-    if 0 not in validpara[0]:
-        #the first linear parameters is invalid which means that the companion cannot be fitted
-        #Hence, we return nan for the best fit linear parameters and -inf for their probability
-        print("Companion cannot be fitted, returning nan arrays")
+    if len(fm_out) == 4 and "N_planet_linparas" in extra_outputs.keys():
+        N_planet_paras = extra_outputs["N_planet_linparas"]
+    else:
+        N_planet_paras = 1
+    if np.min(validpara[0]) >= N_planet_paras:
+        # the first linear parameters are invalid which means that the companion cannot be fitted
+        # Hence, we return nan for the best fit linear parameters and -inf for their probability
+        raise Warning("Companion cannot be fitted, returning nan arrays")
         return _invalid_outputs(N_linpara)
 
     M_no_reg = M_no_reg[:, validpara[0]]  # Filtering the column(s) full of 0
@@ -79,137 +107,296 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=True, bounds=None,
     d_no_reg = d_no_reg / s_no_reg #Normalizing the data by the data standard deviation
     M_no_reg = M_no_reg / s_no_reg [:, None] #Normalizing the M_ij by the data standard deviation s_i
 
-    ##### Concatenating the regularization vectors with model matrix and data vector + computing the scale noise factor with a first lsq best fit
+    # check if regularization is used in the forward model by checking the extra outputs of the forward model
     if len(fm_out) == 4 and "regularization" in extra_outputs.keys():
-        if marginalize_noise_scaling:
-            raise Exception("The maths for the marginalization of the noise scaling factor is not compatible with the regularization. Set marginalize_noise_scaling = False")
-
-        M, d, s, M_reg, d_reg, s_reg = _concatenate_model_regularization(d_no_reg, M_no_reg, s_no_reg, extra_outputs, validpara)
-
-        if scale_noise:
-            _, _, _, _, rchi2, noise_scaling = _get_lsq_fit(M, d, _bounds, N_data=N_data)
-            M = np.concatenate([M_no_reg/noise_scaling, M_reg], axis=0)
-            d = np.concatenate([d_no_reg/noise_scaling, d_reg/s_reg])
-            s = np.concatenate([s_no_reg*noise_scaling, s_reg])
-
-        # noise scaling is done, set to unity for later as no more scaling is necessary
-        noise_scaling = 1
-
+        d_reg, s_reg = extra_outputs["regularization"]
+        if np.sum(~np.isnan(d_reg)) == 0 or np.sum(~np.isnan(s_reg)) == 0:
+            # No regularization used in this case
+            is_regularized = False
+        else:
+            is_regularized = True
+            if marginalize_noise_scaling:
+                raise Exception("The maths for the marginalization of the noise scaling factor is not compatible with the regularization. Set marginalize_noise_scaling = False")
     else:
-        # No regularization used in this case
+        is_regularized = False
+
+    if not is_regularized: # No regularization used in this case
         M = M_no_reg
         d = d_no_reg
         s = s_no_reg
 
-    logdet_Sigma = np.sum(2 * np.log(s))
+        logdet_Sigma = np.sum(2 * np.log(s))
 
-    paras, _, residuals, chi2, _, _ = _get_lsq_fit(M, d, _bounds, N_data=None)
+        paras, _, residuals, chi2, rchi2, noise_scaling = _get_lsq_fit(M, d, _bounds, N_data=None)
+        if not scale_noise:
+            noise_scaling = 1.0
 
-    # Section to compute error bars of linear parameters
-    MTM = np.dot(M.T, M)
-    try:
-        iMTM = np.linalg.inv(MTM)
-        if len(fm_out) == 4 and "regularization" in extra_outputs.keys():
-            if not scale_noise:
-                rchi2 = np.nansum(residuals[:N_data] ** 2) / N_data #rchi2 computed only on the data residuals without the regularization.
+        # Section to compute error bars of linear parameters
+        MTM = np.dot(M.T, M)
+        # error catching is because the matrix inversion can fail and we don't want this to crash the entire process when computing an SNR map for example.
+        try:
+            iMTM = np.linalg.inv(MTM)
+            slogdet_icovphi0 = np.linalg.slogdet(MTM)
+            logdet_icovphi0 = slogdet_icovphi0[1]
+        except Exception as e:
+            # only printing the error message, but will not stop because of it
+            # Will simply return the outputs corresponding to invalid data.
+            print("Exiting covariance section in fitfm() with error:")
+            print(e)
+            return _invalid_outputs(N_linpara)
+    else: # Regularization used in this case
+        # Prepares the vectors and matrics with the regularization part concatenated to the data vector, model matrix, and noise vector for the regularized fit.
+        M, d, s, M_reg, d_reg, s_reg = _concatenate_model_regularization(d_no_reg, M_no_reg, s_no_reg, extra_outputs, validpara)
+        # M, d, and s now include their regularization parts.
 
-            MTM_no_reg = np.dot(M_no_reg.T, M_no_reg)
-            covphi = np.dot(iMTM, np.dot(MTM_no_reg,iMTM.T))
+        # when the data is regularized, the noise scaling is a bit tricky because it will impact the relative weighting of the data and the regularization in the fit.
+        # We therefore do this interatively with a first fit to get the noise scaling factor and then apply it to the data and the model before doing the final fit and computing the log probability.
+        paras, _, residuals, chi2, rchi2, noise_scaling = _get_lsq_fit(M, d, _bounds, N_data=N_data)
+
+        if scale_noise:
+            M = np.concatenate([M_no_reg/noise_scaling, M_reg], axis=0)
+            d = np.concatenate([d_no_reg/noise_scaling, d_reg/s_reg])
+            s = np.concatenate([s_no_reg*noise_scaling, s_reg])
+            paras, _, residuals, chi2, _, _ = _get_lsq_fit(M, d, _bounds, N_data=None)
+
+            # noise scaling is done, set to unity for later as no more scaling is necessary
+            noise_scaling = 1
+
+        logdet_Sigma = np.sum(2 * np.log(s))
+
+
+        # Section to compute error bars of linear parameters
+        MTM = np.dot(M.T, M)
+        MTM_no_reg = np.dot(M_no_reg.T, M_no_reg)
+        try:
+            iMTM = np.linalg.inv(MTM)
+            covphi = np.dot(iMTM, np.dot(MTM_no_reg, iMTM.T))
             # The formula below assumes that we are using the determinant of the inverse covariance
             # That's why we are adding the minus sign
             logdet_icovphi0 = -np.sum(np.log(np.diag(covphi)))
+        except Exception as e:
+            # only printing the error message, but will not stop because of it
+            # Will simply return the outputs corresponding to invalid data.
+            print("Exiting covariance section in fitfm() with error:")
+            print(e)
+            return _invalid_outputs(N_linpara)
 
-            if debug:
-                pass
-                slogdet_covphi0 = np.linalg.slogdet(covphi)
-                logdet_icovphi01 = -slogdet_covphi0[1]
-
-                logdet_MTM = np.linalg.slogdet(MTM)[1]
-                logdet_MTM_no_reg = np.linalg.slogdet(MTM_no_reg)[1]
-                logdet_icovphi02 = -(-2*logdet_MTM+logdet_MTM_no_reg)
-                print("logdet_icovphi02, logdet_icovphi0",logdet_icovphi01,logdet_icovphi02,-np.sum(np.log(np.diag(covphi))))
-
-        else:
-            if scale_noise:
-                rchi2 = np.nansum(residuals[:N_data] ** 2) / N_data
-                noise_scaling = np.sqrt(rchi2)
-            else:
-                rchi2 = 1
-                noise_scaling = 1
-
-            covphi = noise_scaling * iMTM
-            slogdet_icovphi0 = np.linalg.slogdet(MTM)
-            logdet_icovphi0 = slogdet_icovphi0[1]
-            if debug:
-                plt.plot(np.diag(covphi))
-                plt.show()
-                print("logdet_icovphi02,logdet_icovphi0",logdet_icovphi0,-np.sum(np.log(np.diag(covphi))))
-                exit()
-
-    except Exception as e:
-        print("Exiting covariance section in fitfm() with error:")
-        print(e)
-        return _invalid_outputs(N_linpara)
-
-
+    covphi = noise_scaling ** 2 * iMTM
     diagcovphi = copy(np.diag(covphi))
-    diagcovphi[np.where(diagcovphi<0.0)] = np.nan #uncertainties cannot be negative so replacing by nan here
-    paras_err = np.sqrt(diagcovphi) #get the uncertainties via the diagonal of the matrix
+    diagcovphi[np.where(diagcovphi < 0.0)] = np.nan  # uncertainties cannot be negative so replacing by nan here
+    paras_err = np.sqrt(diagcovphi)  # get the uncertainties via the diagonal of the matrix
 
-    # JB: the N_data is kinda wrong I think because is N_data the size of d or the number of pixels on the detector?
-    # But this is just a constant in the log probability, so as long as we don't use the absolute likelihood values,
-    # we are fine
-    if marginalize_noise_scaling:
-        log_prob = (M.shape[1] - N_data) / 2 * np.log(2 * np.pi) -0.5 * logdet_Sigma - 0.5 * logdet_icovphi0 \
-                   - ((N_data-M.shape[1]+2-1)/2) * np.log(chi2) + loggamma((N_data - M.shape[1] + 2 - 1) / 2)
+    # Caution: One need to be mindful of N_data:
+    # N_data the size of d, but it can vary depending on the position  of the planet and the number of bad pixels for example, which can change the size of the data vector.
+    # This means that the log_prob is not comparable between different planet positions.
+    # To fix this issue, one needs to fix the data vector in the forward model function, such that it does not depend on the non-linear parameters.
+    if marginalize_noise_scaling and not is_regularized:
+        # Eq 41 in Ruffio+2019, https://ui.adsabs.harvard.edu/abs/2019AJ....158..200R/abstract
+        log_prob = (M.shape[1] - N_data) / 2 * np.log(2 * np.pi) - 0.5 * logdet_Sigma - 0.5 * logdet_icovphi0 \
+                   - ((N_data - M.shape[1] + 2 - 1) / 2) * np.log(chi2) + loggamma((N_data - M.shape[1] + 2 - 1) / 2)
     else:
-        # log(Eq 36) in Ruffio+2019:
-        log_prob = ((M.shape[1]-N_data)/2)*np.log(2*np.pi) -0.5 * logdet_Sigma - 0.5 * logdet_icovphi0 \
-                   -((N_data-M.shape[1])/2) * np.log(noise_scaling**2) -0.5*chi2/noise_scaling**2
-        # log_prob = -0.5*chi2/noise_scaling**2
-
-    if computeH0:
-        log_prob_H0 = _compute_H0(M, d, N_data, _bounds, logdet_Sigma, marginalize_noise_scaling)
-    else:
-        log_prob_H0 = np.nan
+        # log(Eq 36) in Ruffio+2019, https://ui.adsabs.harvard.edu/abs/2019AJ....158..200R/abstract
+        log_prob = ((M.shape[1] - N_data) / 2) * np.log(2 * np.pi) - 0.5 * logdet_Sigma - 0.5 * logdet_icovphi0 \
+                   - ((N_data - M.shape[1]) / 2) * np.log(noise_scaling ** 2) - 0.5 * chi2 / noise_scaling ** 2
 
     # Initialize the arrays of best-fit linear parameters and their uncertainties
     linparas = np.full(N_linpara, np.nan)
     linparas_err = np.full(N_linpara, np.nan)
 
-    #Bookeeping the valid best fit linear parameters
+    # Bookeeping the valid best fit linear parameters
     linparas[validpara] = paras
     linparas_err[validpara] = paras_err
 
+    log_prob_H0 = None
     return log_prob, log_prob_H0, rchi2, linparas, linparas_err
+#
+# def fitfm_old(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=True, bounds=None, scale_noise=True, marginalize_noise_scaling=False,
+#           debug=False):
+#     """
+#     Fit a forward model to data returning probabilities and best fit linear parameters.
+#
+#     Args:
+#         nonlin_paras: [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
+#             parameters depends on the forward model defined.
+#         dataobj: A data object of type breads.instruments.instrument.Instrument to be analyzed.
+#         fm_func: A forward model function. See breads.fm.template.template() for an example.
+#         fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
+#         computeH0: If true (default), compute the probability of the model removing the first element of the linear
+#             model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
+#             non-linear parameters
+#         bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+#             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
+#             e.g. ([0,0,...], [np.inf,np.inf,...]) default no bounds.
+#             Each numpy array must have shape (N_linear_parameters,).
+#
+#
+#     Returns:
+#         log_prob: Probability of the model marginalized over linear parameters.
+#         log_prob_H0: Probability of the model without the planet marginalized over linear parameters.
+#         s2: noise scaling factor
+#         linparas: Best fit linear parameters
+#         linparas_err: Uncertainties of best fit linear parameters
+#     """
+#     fm_out = fm_func(nonlin_paras, dataobj, **fm_paras)
+#
+#     #Check the forward model matrices
+#     if len(fm_out) == 3:
+#         d_no_reg, M_no_reg, s_no_reg = fm_out
+#     elif len(fm_out) == 4:
+#         d_no_reg, M_no_reg, s_no_reg, extra_outputs = fm_out
+#     else:
+#         raise ValueError(f"Unrecognized number of matrices for forward model, the number of outputs for {fm_func.__name__} is expected to be 3 or 4 but {len(fm_out)} were given.")
+#
+#     N_linpara = M_no_reg.shape[1]
+#     N_data = np.size(d_no_reg)
+#
+#     if N_data == 0:
+#         #Nothing can be fitted
+#         return _invalid_outputs(N_linpara)
+#
+#     if N_linpara == 1 and computeH0:
+#         #Only one parameter to fit so cannot test both H0 and H1 hypothesis.
+#         computeH0 = False
+#         raise Warning("Only one parameter to fit so cannot test H0 hypothesis.")
+#
+#     #Initializing the boundaries for least-square fit
+#     if bounds is None:
+#         _bounds = ([-np.inf]*N_linpara, [np.inf]*N_linpara)
+#     else:
+#         _bounds = (copy(bounds[0]), copy(bounds[1]))
+#         if any(np.any(np.isfinite(arr)) for arr in _bounds): #check if there is finite boundaries
+#             raise Warning("The calculation of log prob is only theoretically accurate if no finite bounds are used...")
+#
+#     # Reject the column(s) full of 0 of the model matrix M (without regularization)
+#     validpara = np.where(np.any(M_no_reg != 0, axis=0))
+#
+#     # todo: what if the planet is modeled with more than one parameter?
+#     if 0 not in validpara[0]:
+#         #the first linear parameters is invalid which means that the companion cannot be fitted
+#         #Hence, we return nan for the best fit linear parameters and -inf for their probability
+#         print("Companion cannot be fitted, returning nan arrays")
+#         return _invalid_outputs(N_linpara)
+#
+#     M_no_reg = M_no_reg[:, validpara[0]]  # Filtering the column(s) full of 0
+#     _bounds = (np.array(_bounds[0])[validpara[0]], np.array(_bounds[1])[validpara[0]]) #Selecting the bounds for the valid parameters
+#
+#     d_no_reg = d_no_reg / s_no_reg #Normalizing the data by the data standard deviation
+#     M_no_reg = M_no_reg / s_no_reg [:, None] #Normalizing the M_ij by the data standard deviation s_i
+#
+#     ##### Concatenating the regularization vectors with model matrix and data vector + computing the scale noise factor with a first lsq best fit
+#     if len(fm_out) == 4 and "regularization" in extra_outputs.keys():
+#         if marginalize_noise_scaling:
+#             raise Exception("The maths for the marginalization of the noise scaling factor is not compatible with the regularization. Set marginalize_noise_scaling = False")
+#
+#         M, d, s, M_reg, d_reg, s_reg = _concatenate_model_regularization(d_no_reg, M_no_reg, s_no_reg, extra_outputs, validpara)
+#
+#         if scale_noise:
+#             _, _, _, _, rchi2, noise_scaling = _get_lsq_fit(M, d, _bounds, N_data=N_data)
+#             M = np.concatenate([M_no_reg/noise_scaling, M_reg], axis=0)
+#             d = np.concatenate([d_no_reg/noise_scaling, d_reg/s_reg])
+#             s = np.concatenate([s_no_reg*noise_scaling, s_reg])
+#
+#         # noise scaling is done, set to unity for later as no more scaling is necessary
+#         noise_scaling = 1
+#
+#     else:
+#         # No regularization used in this case
+#         M = M_no_reg
+#         d = d_no_reg
+#         s = s_no_reg
+#
+#     logdet_Sigma = np.sum(2 * np.log(s))
+#
+#     paras, _, residuals, chi2, _, _ = _get_lsq_fit(M, d, _bounds, N_data=None)
+#
+#     # Section to compute error bars of linear parameters
+#     MTM = np.dot(M.T, M)
+#     try:
+#         iMTM = np.linalg.inv(MTM)
+#         if len(fm_out) == 4 and "regularization" in extra_outputs.keys():
+#             if not scale_noise:
+#                 rchi2 = np.nansum(residuals[:N_data] ** 2) / N_data #rchi2 computed only on the data residuals without the regularization.
+#
+#             MTM_no_reg = np.dot(M_no_reg.T, M_no_reg)
+#             covphi = np.dot(iMTM, np.dot(MTM_no_reg,iMTM.T))
+#             # The formula below assumes that we are using the determinant of the inverse covariance
+#             # That's why we are adding the minus sign
+#             logdet_icovphi0 = -np.sum(np.log(np.diag(covphi)))
+#
+#             if debug:
+#                 pass
+#                 slogdet_covphi0 = np.linalg.slogdet(covphi)
+#                 logdet_icovphi01 = -slogdet_covphi0[1]
+#
+#                 logdet_MTM = np.linalg.slogdet(MTM)[1]
+#                 logdet_MTM_no_reg = np.linalg.slogdet(MTM_no_reg)[1]
+#                 logdet_icovphi02 = -(-2*logdet_MTM+logdet_MTM_no_reg)
+#                 print("logdet_icovphi02, logdet_icovphi0",logdet_icovphi01,logdet_icovphi02,-np.sum(np.log(np.diag(covphi))))
+#
+#         else:
+#             rchi2 = np.nansum(residuals[:N_data] ** 2) / N_data
+#             if scale_noise:
+#                 noise_scaling = np.sqrt(rchi2)
+#                 rchi2 = 1
+#             else:
+#                 noise_scaling = 1
+#
+#             covphi = noise_scaling**2 * iMTM
+#             slogdet_icovphi0 = np.linalg.slogdet(MTM)
+#             logdet_icovphi0 = slogdet_icovphi0[1]
+#             if debug:
+#                 plt.plot(np.diag(covphi))
+#                 plt.show()
+#                 print("logdet_icovphi02,logdet_icovphi0",logdet_icovphi0,-np.sum(np.log(np.diag(covphi))))
+#                 exit()
+#
+#     except Exception as e:
+#         print("Exiting covariance section in fitfm() with error:")
+#         print(e)
+#         return _invalid_outputs(N_linpara)
+#
+#
+#     diagcovphi = copy(np.diag(covphi))
+#     diagcovphi[np.where(diagcovphi<0.0)] = np.nan #uncertainties cannot be negative so replacing by nan here
+#     paras_err = np.sqrt(diagcovphi) #get the uncertainties via the diagonal of the matrix
+#
+#     # JB: the N_data is kinda wrong I think because is N_data the size of d or the number of pixels on the detector?
+#     # But this is just a constant in the log probability, so as long as we don't use the absolute likelihood values,
+#     # we are fine
+#     if marginalize_noise_scaling:
+#         log_prob = (M.shape[1] - N_data) / 2 * np.log(2 * np.pi) -0.5 * logdet_Sigma - 0.5 * logdet_icovphi0 \
+#                    - ((N_data-M.shape[1]+2-1)/2) * np.log(chi2) + loggamma((N_data - M.shape[1] + 2 - 1) / 2)
+#     else:
+#         # log(Eq 36) in Ruffio+2019:
+#         log_prob = ((M.shape[1]-N_data)/2)*np.log(2*np.pi) -0.5 * logdet_Sigma - 0.5 * logdet_icovphi0 \
+#                    -((N_data-M.shape[1])/2) * np.log(noise_scaling**2) -0.5*chi2/noise_scaling**2
+#         # log_prob = -0.5*chi2/noise_scaling**2
+#
+#     if computeH0:
+#         log_prob_H0 = _compute_H0(M, d, N_data, _bounds, logdet_Sigma, marginalize_noise_scaling)
+#     else:
+#         log_prob_H0 = np.nan
+#
+#     # Initialize the arrays of best-fit linear parameters and their uncertainties
+#     linparas = np.full(N_linpara, np.nan)
+#     linparas_err = np.full(N_linpara, np.nan)
+#
+#     #Bookeeping the valid best fit linear parameters
+#     linparas[validpara] = paras
+#     linparas_err[validpara] = paras_err
+#
+#     return log_prob, log_prob_H0, rchi2, linparas, linparas_err
 
-def log_prob(nonlin_paras, dataobj, fm_func, fm_paras, nonlin_lnprior_func=None, bounds=None, scale_noise=True):
+def log_prob(nonlin_paras, dataobj, fm_func, fm_paras, nonlin_lnprior_func=None, bounds=None, scale_noise=True, marginalize_noise_scaling=False):
     """
     Wrapper to fit_fm() but only returns the log probability marginalized over the linear parameters.
-
-    Args:
-        nonlin_paras: [p1,p2,...] List of non-linear parameters such as rv, y, x. The meaning and number of non-linear
-            parameters depends on the forward model defined.
-        dataobj: A data object of type breads.instruments.instrument.Instrument to be analyzed.
-        fm_func: A forward model function. See breads.fm.template.template() for an example.
-        fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
-        computeH0: If true (default), compute the probability of the model removing the first element of the linear
-            model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
-            non-linear parameters
-        bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
-            Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
-            e.g. ([0,0,...], [np.inf,np.inf,...]). default no bounds.
-            Each numpy array must have shape (N_linear_parameters,).
-
-    Returns:
-        log_prob: Probability of the model marginalized over linear parameters.
     """
     if nonlin_lnprior_func is not None:
         prior = nonlin_lnprior_func(nonlin_paras)
     else:
         prior = 0
     try:
-        lnprob = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False,bounds=bounds,scale_noise=scale_noise)[0]+prior
+        lnprob = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False,bounds=bounds,scale_noise=scale_noise, marginalize_noise_scaling=marginalize_noise_scaling)[0]+prior
     except:
         lnprob =  -np.inf
     return lnprob
@@ -311,7 +498,7 @@ def _get_lsq_fit(M_normalized, d_normalized, _bounds, N_data=None):
         rchi2 = chi2 / N_data
     else:
         N_data = np.size(residuals)
-        chi2 = np.nansum(residuals ** 2) / N_data
+        chi2 = np.nansum(residuals ** 2)
         rchi2 = chi2 / N_data
     noise_scaling = np.sqrt(rchi2)
 

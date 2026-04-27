@@ -103,17 +103,27 @@ def find_closest_leftnright_elements(v1, v2):
     return v_left, v_right
 
 def get_err_from_posterior(x, posterior):
-    """ Return the mode, and the left and right errors of a distribution. The errors are defined with a 68% confidence level.
+    """
+    Return the mode, and the left and right errors of a distribution defined by its x samples and corresponding posterior values.
+    The errors are defined with a 68% confidence level.
+
+    Note: This function will not work if the posterior distribution is multi-modal, or if the posterior distribution is not well sampled around the mode.
 
     Parameters
     ----------
-    x : Sampling of the 1D posterior
-    posterior : Posterior array
+    x : np.array
+        Sampling of the 1D posterior
+    posterior :
+        Posterior array
 
     Returns
     -------
-        Mode, left error, right error
-
+    mode : float
+        mode of the  distribution
+    left_error : float
+        error on the left of the mode (mode - left_error is the lower bound of the 68% confidence interval)
+    right_error : float
+        error on the right of the mode (mode + right_error is the upper bound of the 68% confidence interval)
     """
     ind = np.argsort(posterior)
     cum_posterior = np.zeros(np.shape(posterior))
