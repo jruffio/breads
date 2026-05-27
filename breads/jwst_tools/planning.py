@@ -1,8 +1,10 @@
 import astropy.units as u
-import matplotlib.pyplot as plt
+import matplotlib, matplotlib.pyplot as plt
 import numpy as np
 import pysiaf
 import stpsf
+import copy
+
 from poppy.utils import quantity_input
 
 
@@ -12,6 +14,7 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
                       nirspec_aperture='ifu',
                       offset_star=None,
                       ax=None,
+                      disk_pa=None, disk_semimajor_axis=None, disk_inclination=None,
                       verbose=False):
     """ Visualize NIRSpec IFU or slit FOV for a companion
 
@@ -56,6 +59,8 @@ def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
                           nirspec_aperture=nirspec_aperture,
                           instrument='NIRSpec',
                           offset_star=offset_star, ax=ax,
+                          disk_pa=disk_pa, disk_semimajor_axis=disk_semimajor_axis,
+                          disk_inclination=disk_inclination,
                           verbose=verbose)
 
 def visualize_miri_mrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
@@ -63,6 +68,7 @@ def visualize_miri_mrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star
                            psf_core_check_radius=None,
                            mrs_band='2A',
                            offset_star=None, ax=None,
+                           disk_pa=None, disk_semimajor_axis=None, disk_inclination=None,
                            verbose=False):
     """ Visualize MIRI MRS FOV for a companion
 
@@ -107,6 +113,8 @@ def visualize_miri_mrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star
                           psf_core_check_radius,
                           instrument='MIRI', mrs_band=mrs_band,
                           offset_star=offset_star, ax=ax,
+                          disk_pa=disk_pa, disk_semimajor_axis=disk_semimajor_axis,
+                          disk_inclination=disk_inclination,
                           verbose=verbose)
 
 
@@ -117,6 +125,7 @@ def _visualize_jwst_ifu_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'sta
                           nirspec_aperture='ifu',
                           mrs_band='2A',
                           offset_star = None, ax=None,
+                          disk_pa=None, disk_semimajor_axis=None, disk_inclination=None,
                           verbose=False):
     """ shared function to display the NIRSpec or MRS FOV relative to a companion
 
@@ -249,6 +258,14 @@ def _visualize_jwst_ifu_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'sta
                  v3star + np.cos(comp_rel_pa_rad) * (_comp_sep.to_value(u.arcsec) + 0.5),
                  _comp_name, color='blue')
 
+    if disk_semimajor_axis is not None and disk_inclination is not None and disk_pa is not None:
+        # Plot a disk
+        diskpatch = matplotlib.patches.Ellipse( (v2star, v3star),
+                                               disk_semimajor_axis, disk_semimajor_axis * np.cos(np.deg2rad(disk_inclination)),
+                                               angle= v3pa - disk_pa + 90, # degrees counter-clockwise, starting from horizontal
+                                               color='green', alpha=0.3)
+        ax.add_patch(diskpatch)
+
     if instrument.lower() == 'nirspec':
         if nirspec_aperture == 'ifu':
             slice_V3IdlYAngle = inst_siaf.apertures['NRS_IFU_SLICE00'].V3IdlYAngle
@@ -274,7 +291,6 @@ def _visualize_jwst_ifu_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'sta
         x, y = ap.corners('tel', rederive=False)
         x2, y2 = ap.closed_polygon_points('tel', rederive=False)
         vertices = np.asarray([x,y]).transpose()
-        import matplotlib
         polygon = matplotlib.patches.Polygon(vertices, closed=True, facecolor='pink', edgecolor='red', alpha=0.5)
         # Note on polycon.contains_point:  from https://matplotlib.org/stable/api/_as_gen/matplotlib.patches.Patch.html
         #  "The proper use of this method depends on the transform of the patch. [...]
@@ -296,9 +312,6 @@ def _visualize_jwst_ifu_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'sta
 
 #############
 #  Functions for using STPSF to generate and plot a mock IFU slice for a star with companion(s)
-
-import stpsf
-import copy
 
 def arrow_angle(ax, angle, pos=(0.15, 0.15), length=0.075, color='skyblue', labelN=False, **kwargs):
     # astronomy angle convention relative to +Y
