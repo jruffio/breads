@@ -15,11 +15,11 @@ from scipy.optimize import lsq_linear
 from scipy.stats import median_abs_deviation
 from tqdm import tqdm
 
-
 from breads.utils import get_spline_model
 from breads.instruments.jwst_IFUs import JWST_IFUs
-from breads.instruments.jwst_IFUs import crop_trace_edges, set_nans, filter_big_triangles, combine_spectrum
-
+from breads.jwst_tools.plotting import filter_big_triangles
+from breads.jwst_tools.spectra import combine_spectrum
+from breads.jwst_tools.default_nirspec import wv_ref_dict
 
 
 class JWSTNirspec_cal(JWST_IFUs):
@@ -62,7 +62,8 @@ class JWSTNirspec_cal(JWST_IFUs):
         super().__init__(filename, utils_dir, verbose)
         self._init_additional_default_filenames()
         self.R = 2700 #TODO change
-        super()._init_pipeline(save_utils=save_utils, load_utils=load_utils, preproc_task_list=preproc_task_list)
+        self.breads_header['WV_REF'] = wv_ref_dict[self.priheader['GRATING'].strip()]
+        super().run_preproc_list(save_utils=save_utils, load_utils=load_utils, preproc_task_list=preproc_task_list)
 
 
     def _init_wave_wcs(self, filename):
@@ -135,11 +136,10 @@ class JWSTNirspec_cal(JWST_IFUs):
                 y = y.reshape(y.shape[0], 1) * np.ones((1, xmax - xmin))
 
                 # Transform all those pixels to RA, Dec, wavelength
-                skycoords, speccoord = wcses[i](x, y, with_units=True)
-
-                ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
-                dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
-                wavelen_array[ymin:ymax, xmin:xmax] = speccoord
+                _out = wcses[i](x, y)
+                ra_array[ymin:ymax, xmin:xmax] = _out[0]
+                dec_array[ymin:ymax, xmin:xmax] = _out[1]
+                wavelen_array[ymin:ymax, xmin:xmax] = _out[2]
 
                 self.trace_id_map[ymin:ymax, xmin:xmax][np.where(np.isfinite(ra_array[ymin:ymax, xmin:xmax]))] = i
 
@@ -161,7 +161,7 @@ class JWSTNirspec_cal(JWST_IFUs):
         self.default_filenames["compute_starsubtraction_2dspline"] = \
                 os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_2dstarsub.fits"))
 
-    def compute_med_filt_badpix(self, save_utils=False, window_size=50, mad_threshold=50, crop_Npix_from_trace_edges=0):
+    def compute_med_filt_badpix(self, save_utils=False, window_size=50, mad_threshold=50):
         """ Quick bad pixel identification.
 
         The data is first high-pass filtered row by row with a median filter with a window size of 50 (window_size)
@@ -174,20 +174,23 @@ class JWSTNirspec_cal(JWST_IFUs):
 
         Parameters
         ----------
-        crop_Npix_from_trace_edges
-        mad_threshold
-        window_size
         save_utils : bool or string
             Save the computed bad pixel map (nans=bad) into the utils directory
             Default filename (set save_utils as a string instead of bool to override filename):
             os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_med_filt_badpix.fits"))
+        window_size : int
+            Window size for the median filter. Default is 50 pixels.
+        mad_threshold : float
+            Threshold in units of the median absolute deviation (MAD) to identify bad pixels. Default is 50.
 
         Returns
         -------
         new_badpix : np.array
-            nans = bad.
+            Values that are nans mean "bad pixel".
 
         """
+        self.breads_header["QKBADWIN"] = window_size
+        self.breads_header["QKBADTHR"] = mad_threshold
 
         if self.verbose:
             print("Initializing row_err and bad_pixels for nirspec")
@@ -199,17 +202,25 @@ class JWSTNirspec_cal(JWST_IFUs):
             new_badpix[rowid,np.where((row_err_masking>mad_threshold))[0]] = np.nan
         self.bad_pixels *= new_badpix
 
-        if crop_Npix_from_trace_edges != 0:
-            if hasattr(self, "trace_id_map"):
-                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges,trace_id_map=self.trace_id_map)
-            else:
-                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges)
 
         if save_utils:
             self._save_med_filt_badpix(save_utils, new_badpix)
 
         return new_badpix
 
+    def reload_med_filt_badpix(self, load_filename=None):
+        new_badpix = super().reload_med_filt_badpix()
+
+        if load_filename is None:
+            load_filename = self.default_filenames["compute_med_filt_badpix"]
+        if len(glob(load_filename)) == 0:
+            return None
+
+        with pyfits.open(load_filename) as hdulist:
+            self.breads_header["QKBADWIN"] = hdulist['BREADS'].header["QKBADWIN"]
+            self.breads_header["QKBADTHR"] = hdulist['BREADS'].header["QKBADTHR"]
+
+        return new_badpix
 
     def _get_webbpsf_model_inputs(self, image_mask, pixel_scale):
         """Hook for nirspec subclass, returns webbpsf parameters for nirspec simulation"""
@@ -404,7 +415,6 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                          wv_nodes = wv_nodes,
                                                                                          ifuy_nodes=ifuy_nodes,
                                                                                          threshold=threshold_badpix,
-                                                                                         use_set_nans=False,
                                                                                          reg_mean_map=reg_mean_map0,
                                                                                          reg_std_map=reg_std_map0,
                                                                                          wv_ref=self.wv_ref,
@@ -423,7 +433,6 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                              wv_nodes = wv_nodes,
                                                                                              ifuy_nodes=ifuy_nodes,
                                                                                              threshold=threshold_badpix,
-                                                                                             use_set_nans=False,
                                                                                              reg_mean_map=reg_mean_map1,
                                                                                              reg_std_map=reg_std_map1,
                                                                                              wv_ref=self.wv_ref,
@@ -610,7 +619,6 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                          wv_nodes = self.wv_nodes,
                                                                                          ifuy_nodes=self.ifuy_nodes,
                                                                                          threshold=threshold_badpix,
-                                                                                         use_set_nans=False,
                                                                                          reg_mean_map=reg_mean_map0,
                                                                                          reg_std_map=reg_std_map0,
                                                                                          wv_ref=self.wv_ref,
@@ -632,7 +640,6 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                              wv_nodes = self.wv_nodes,
                                                                                              ifuy_nodes=self.ifuy_nodes,
                                                                                              threshold=threshold_badpix,
-                                                                                             use_set_nans=False,
                                                                                              reg_mean_map=reg_mean_map1,
                                                                                              reg_std_map=reg_std_map1,
                                                                                              wv_ref=self.wv_ref,
@@ -662,7 +669,7 @@ class JWSTNirspec_cal(JWST_IFUs):
                 if not os.path.exists(os.path.join(self.utils_dir,starsub_dir)):
                     os.makedirs(os.path.join(self.utils_dir,starsub_dir))
                 hdulist_sc = pyfits.open(self.filename)
-                du = self.data_unit
+                du = self.breads_header["DATAUNIT"]
                 bu = self.extheader["BUNIT"].strip()
 
                 if du == 'MJy'    and bu == 'MJy':
@@ -809,7 +816,7 @@ def _task_normslice_2dspline(paras):
 
 def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,trace_id_map=None,
                               star_model=None,  mypool=None,
-                              threshold=10, use_set_nans=False,
+                              threshold=10,
                               N_wvs_nodes=20, wv_nodes=None, delta_ifuy=0.05, ifuy_nodes=None,
                               reg_mean_map=None, reg_std_map=None, wv_ref = None):
     """ Normalize sliaces using a 2D spline
@@ -825,7 +832,6 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
     star_model
     mypool
     threshold
-    use_set_nans
     N_wvs_nodes
     wv_nodes
     delta_ifuy
@@ -866,8 +872,6 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
     unique_trace_ids = np.unique(trace_id_map[np.where(np.isfinite(trace_id_map))])
 
     new_image = copy(image)
-    if use_set_nans:
-        new_image = set_nans(image, 40)
     new_noise = copy(noise)
     new_res = np.zeros(image.shape) + np.nan
     new_badpixs = np.zeros(image.shape) + np.nan

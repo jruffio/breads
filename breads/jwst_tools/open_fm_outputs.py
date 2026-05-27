@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 
-from breads.jwst_tools.reduction_utils import find_files_to_process
+from breads.jwst_reduction.reduction_utils import find_files_to_process
 
 def open_fm_outputs_miri(uncaldir, targetname, n_nodes, list_bands=None, companion_offsets=None):
     if list_bands is None:

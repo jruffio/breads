@@ -8,7 +8,7 @@ from scipy.special import loggamma
 __all__ =  ('fitfm', 'log_prob', 'combined_log_prob', 'nlog_prob')
 
 
-def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=False, bounds=None, scale_noise=True, marginalize_noise_scaling=False):
+def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=True, marginalize_noise_scaling=False):
     """
     Fit a forward model (FM) to a data object (defined by an instrument class) returning probabilities and best fit linear parameters.
 
@@ -22,8 +22,6 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=False, bounds=None
             A forward model function. See breads.fm.template.template() for an example.
         fm_paras : dict
             Additional parameters for fm_func (other than non-linear parameters and dataobj)
-        computeH0 : bool, optional
-            If true (default is False), compute the probability of the model removing the first element of the linear model; See second ouput log_prob_H0. This can be used to compute delta likelihoods.
         bounds : tuple of arrays, optional
             (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
@@ -42,8 +40,6 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=False, bounds=None
             Probability of the model marginalized over linear parameters.
             Caution: if the size of the data vector (N_data) varies for different non-linear parameters (e.g., different positions with different edges and bad pixels), the log probability values are not directly comparable and should only be used to compute delta log probabilities.
             To properly use log_prob, one should ensure that the data vector does not change when exploring the non-linear parameters. This is needed to compute RVs or astrometry for example.
-        log_prob_H0 : float
-            Probability of the model without the planet component(s).
         s2 : float
             This is the reduced chi2 of the best fit; i.e., the square of the noise scaling factor.
             The noise scaling factor being the standard deviation of the normalized residuals (normalized by the data noise standard deviation).
@@ -53,9 +49,6 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=False, bounds=None
         linparas_err : np.ndarray
             Uncertainties of best fit linear parameters
     """
-    if computeH0:
-        raise Exception('computeH0 not yet implemented here')
-
     fm_out = fm_func(nonlin_paras, dataobj, **fm_paras)
 
     #Check the forward model matrices
@@ -74,11 +67,6 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=False, bounds=None
     if N_data == 0:
         # Nothing can be fitted
         return _invalid_outputs(N_linpara)
-
-    if N_linpara == 1 and computeH0:
-        # Only one parameter to fit so cannot test both H0 and H1 hypothesis.
-        computeH0 = False
-        raise Warning("Only one parameter to fit so cannot test H0 hypothesis.")
 
     # Initializing the boundaries for least-square fit
     if bounds is None:
@@ -207,8 +195,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=False, bounds=None
     linparas[validpara] = paras
     linparas_err[validpara] = paras_err
 
-    log_prob_H0 = None
-    return log_prob, log_prob_H0, rchi2, linparas, linparas_err
+    return log_prob, rchi2, linparas, linparas_err
 
 def log_prob(nonlin_paras, dataobj, fm_func, fm_paras, nonlin_lnprior_func=None, bounds=None, scale_noise=True, marginalize_noise_scaling=False):
     """
@@ -219,7 +206,7 @@ def log_prob(nonlin_paras, dataobj, fm_func, fm_paras, nonlin_lnprior_func=None,
     else:
         prior = 0
     try:
-        lnprob = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,computeH0=False,bounds=bounds,scale_noise=scale_noise, marginalize_noise_scaling=marginalize_noise_scaling)[0]+prior
+        lnprob = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,bounds=bounds,scale_noise=scale_noise, marginalize_noise_scaling=marginalize_noise_scaling)[0]+prior
     except:
         lnprob =  -np.inf
     return lnprob
@@ -258,9 +245,6 @@ def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,
         dataobj: A data object of type breads.instruments.instrument.Instrument to be analyzed.
         fm_func: A forward model function. See breads.fm.template.template() for an example.
         fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
-        computeH0: If true (default), compute the probability of the model removing the first element of the linear
-            model; See second ouput log_prob_H0. This can be used to compute the Bayes factor for a fixed set of
-            non-linear parameters
         bounds: (Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
             e.g. ([0,0,...], [np.inf,np.inf,...]) default no bounds.
@@ -278,10 +262,9 @@ def _invalid_outputs(N_linear_parameters):
     linparas = np.full(N_linear_parameters, np.nan)
     linparas_err = np.full(N_linear_parameters, np.nan)
     log_prob = -np.inf
-    log_prob_H0 = -np.inf
     s2 = np.inf
 
-    return log_prob, log_prob_H0, s2, linparas, linparas_err
+    return log_prob, s2, linparas, linparas_err
 
 def _concatenate_model_regularization(d_no_reg, M_no_reg, s_no_reg, extra_outputs, validpara):
     """Helper function to concatenate regularization parameters with model matrix and data vectors"""
@@ -326,27 +309,3 @@ def _get_lsq_fit(M_normalized, d_normalized, _bounds, N_data=None):
     noise_scaling = np.sqrt(rchi2)
 
     return paras, d_estimated, residuals, chi2, rchi2, noise_scaling
-
-def _compute_H0(M_normalized, d_normalized, N_data, _bounds, logdet_Sigma, marginalize_noise_scaling=True, noise_scaling=1):
-    """Helper to compute the H0 hypothesis (i.e. without off axis companion)"""
-
-    M_H0 = M_normalized[:, 1:] #removing the first column i.e. the off axis companion model
-    _crop_bounds = (np.array(_bounds[0])[1::], np.array(_bounds[1])[1::])
-
-    paras_H0, d_estimated, residuals_H0, chi2_H0, rchi2, _ = _get_lsq_fit(M_H0, d_normalized, _crop_bounds, N_data=None)
-
-    slogdet_icovphi0_H0 = np.linalg.slogdet(np.dot(M_H0.T, M_H0))
-    # todo check the maths when N_linpara is different from M.shape[1]. E.g. at the edge of the FOV
-    if marginalize_noise_scaling:
-        log_prob_H0 = -0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0_H0[1] - (
-                    N_data + M_H0.shape[1] + 2 - 1) / 2 * np.log(chi2_H0) + \
-                    loggamma((N_data - M_H0.shape[1] + 2 - 1) / 2) + (M_H0.shape[1] - N_data) / 2 * np.log(
-                    2 * np.pi)
-    else:
-        # log(Eq 36) in Ruffio+2019:
-        # TODO Seems more logical to me that it should be M_H0.shape[1] here, but I didn't redo the math. Need to check.
-        log_prob_H0 = ((M_normalized.shape[1] - N_data) / 2) * np.log(2 * np.pi) - 0.5 * logdet_Sigma - 0.5 * slogdet_icovphi0_H0[
-            1] \
-                      - ((N_data - M_normalized.shape[1]) / 2) * np.log(noise_scaling ** 2) - 0.5 * chi2_H0 / noise_scaling ** 2
-
-    return log_prob_H0

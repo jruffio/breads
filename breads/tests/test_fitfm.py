@@ -64,7 +64,7 @@ def test_linear_model():
         fm_paras={},
         marginalize_noise_scaling=False, scale_noise=False
     )
-    bestfit_log_prob, log_prob_H0, rchi2, linparas, linparas_err = results
+    bestfit_log_prob, rchi2, linparas, linparas_err = results
 
     def log_likelihood_test(paras, data_obj):
         """
@@ -192,7 +192,7 @@ def test_nonlinear_para():
         fm_paras={'gauss_width': gauss_width},
         marginalize_noise_scaling=False, scale_noise=False
     )
-    bestfit_log_prob, log_prob_H0, rchi2, linparas, linparas_err = results
+    bestfit_log_prob, rchi2, linparas, linparas_err = results
 
     # print("BREADS gaussian amplitude (fixed gauss_center):", linparas[0], "±", linparas_err[0])
     # print("BREADS Intercept (fixed gauss_center):", linparas[1], "±", linparas_err[1])
@@ -209,7 +209,7 @@ def test_nonlinear_para():
     gauss_center_grid = np.linspace(gauss_center - 2, gauss_center + 2, 100)
 
     # grid_search effectively runs fitfm for each value of gauss_center in the grid, and returns the log probability and best-fit linear parameters for each value of gauss_center.
-    bestfit_log_prob, _, rchi2, linparas, linparas_err = grid_search(
+    bestfit_log_prob, rchi2, linparas, linparas_err = grid_search(
         para_vecs=[gauss_center_grid],
         dataobj=data_obj,
         fm_func=intro_nonlin_fm,
@@ -383,7 +383,7 @@ def test_noise_scaling():
         fm_paras={'gauss_width': gauss_width},
         marginalize_noise_scaling=False, scale_noise=False
     )
-    bestfit_log_prob, log_prob_H0, rchi2, linparas, linparas_err = results
+    bestfit_log_prob, rchi2, linparas, linparas_err = results
 
     # print("BREADS gaussian amplitude (no noise scaling):", linparas[0], "±", linparas_err[0])
     # print("BREADS Intercept (no noise scaling):", linparas[1], "±", linparas_err[1])
@@ -401,7 +401,7 @@ def test_noise_scaling():
         fm_paras={'gauss_width': gauss_width},
         marginalize_noise_scaling=False, scale_noise=True
     )
-    bestfit_log_prob, log_prob_H0, rchi2, linparas, linparas_err = results
+    bestfit_log_prob, rchi2, linparas, linparas_err = results
     BREADS_noise_scaling = np.sqrt(rchi2)
 
     # print("BREADS gaussian amplitude (WITH noise scaling):", linparas[0], "±", linparas_err[0])
@@ -417,7 +417,7 @@ def test_noise_scaling():
     # Although note that this is not statistically accurate, since we are not actually marginalizing over the noise scaling factor here.
     gauss_center_grid = np.linspace(gauss_center - 2, gauss_center + 2, 100)
 
-    bestfit_log_prob, _, rchi2, linparas, linparas_err = grid_search(
+    bestfit_log_prob, rchi2, linparas, linparas_err = grid_search(
         para_vecs=[gauss_center_grid],
         dataobj=data_obj,
         fm_func=intro_nonlin_fm,
@@ -439,7 +439,7 @@ def test_noise_scaling():
     # Note 2: linparas and linparas_err WON'T be marginalized over the noise scaling factor. This only works on the bestfit_log_prob output to derive the posteriors of non-linear parameters.
     gauss_center_grid = np.linspace(gauss_center - 2, gauss_center + 2, 100)
 
-    bestfit_log_prob, _, rchi2, linparas, linparas_err = grid_search(
+    bestfit_log_prob, rchi2, linparas, linparas_err = grid_search(
         para_vecs=[gauss_center_grid],
         dataobj=data_obj,
         fm_func=intro_nonlin_fm,
@@ -603,7 +603,7 @@ def test_regularization():
         fm_paras={'gauss_width': gauss_width, 'd_reg': d_reg, 's_reg': s_reg},
         marginalize_noise_scaling=False, scale_noise=False
     )
-    bestfit_log_prob, log_prob_H0, rchi2, linparas, linparas_err = results
+    bestfit_log_prob, rchi2, linparas, linparas_err = results
 
     # # Here the uncertainty on the intercept matches the prior we set.
     # print("BREADS gaussian amplitude:", linparas[0], "±", linparas_err[0])
@@ -616,7 +616,7 @@ def test_regularization():
 
     # First, let's get the posterior on gauss_center without any prior (setting them to np.nan):
     gauss_center_grid = np.linspace(gauss_center - 2, gauss_center + 2, 100)
-    bestfit_log_prob, _, rchi2, linparas, linparas_err = grid_search(
+    bestfit_log_prob, rchi2, linparas, linparas_err = grid_search(
         para_vecs=[gauss_center_grid],
         dataobj=data_obj,
         fm_func=intro_regularization_fm,
@@ -632,7 +632,7 @@ def test_regularization():
     assert np.abs(best_fit1 - gauss_center) < 3 * max(left_err1, right_err1), "BREADS gauss_center estimate is not within 3 sigma of true value (no prior)"
 
     # Let's set the priors now:
-    bestfit_log_prob, _, rchi2, linparas, linparas_err = grid_search(
+    bestfit_log_prob, rchi2, linparas, linparas_err = grid_search(
         para_vecs=[gauss_center_grid],
         dataobj=data_obj,
         fm_func=intro_regularization_fm,

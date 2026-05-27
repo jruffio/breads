@@ -59,7 +59,7 @@ class JWSTMiri_cal(JWST_IFUs):
         self._init_miri_channel_band(channel_reduction)
         self._init_mask_channel(wv_ref)
         self.opmode = "IFU" #only option for MIRI
-        super()._init_pipeline(save_utils=save_utils, load_utils=load_utils, preproc_task_list=preproc_task_list)
+        super().run_preproc_list(save_utils=save_utils, load_utils=load_utils, preproc_task_list=preproc_task_list)
 
     def _init_miri_channel_band(self, channel_reduction):
         """Initialize attributes relative to MIRI channel and band.
@@ -286,10 +286,10 @@ class JWSTMiri_cal(JWST_IFUs):
             centroid = [0, 0]
 
         if OWA is None:
-            where_finite = np.where(np.isfinite(self.dra_as_array))
+            where_finite = np.where(np.isfinite(self.x))
         else:
-            separation_arr = np.sqrt(self.dra_as_array ** 2 + self.ddec_as_array ** 2)
-            where_finite = np.where(np.isfinite(self.dra_as_array) * (separation_arr < OWA))
+            separation_arr = np.sqrt(self.x ** 2 + self.y ** 2)
+            where_finite = np.where(np.isfinite(self.x) * (separation_arr < OWA))
 
         _dra_as_array, _ddec_as_array = self.get_sky_coords()
         x = _dra_as_array[where_finite]
@@ -325,9 +325,9 @@ class JWSTMiri_cal(JWST_IFUs):
             hdulist_sc.writeto(out_filename, overwrite=True)
             hdulist_sc.close()
 
-        if self.data_unit == 'MJy':
+        if self.breads_header["DATAUNIT"] == 'MJy':
             return model_im
-        elif self.data_unit == 'MJy/sr':
+        elif self.breads_header["DATAUNIT"] == 'MJy/sr':
             return model_im / self.area2d
 
 
@@ -339,19 +339,16 @@ class JWSTMiri_cal(JWST_IFUs):
             np.copy(self.bad_pixels).transpose(),
             np.copy(self.data).transpose(),
             np.copy(self.noise).transpose(),
-            np.copy(self.dra_as_array).transpose(),
-            np.copy(self.ddec_as_array).transpose(),
+            np.copy(self.x).transpose(),
+            np.copy(self.y).transpose(),
             np.copy(np.abs(self.wavelengths - self.webbpsf_wv0)).transpose(),
         )
 
-    def _get_starspectrum_input(self, im, im_wvs, err, spec_R_sampling, x_nodes, N_nodes):
+    def _get_starspectrum_input(self, spec_R_sampling, x_nodes, N_nodes):
         """Hook for MIRI, returns input for continuum normalized star spectrum computation."""
-        if im is None:
-            im = np.copy(self.data).transpose()
-        if im_wvs is None:
-            im_wvs = np.copy(self.wavelengths).transpose()
-        if err is None:
-            err = np.copy(self.noise).transpose()
+        im = np.copy(self.data).transpose()
+        im_wvs = np.copy(self.wavelengths).transpose()
+        err = np.copy(self.noise).transpose()
         if spec_R_sampling is None:
             spec_R_sampling = self.R * 4
         if x_nodes is None:
@@ -399,7 +396,7 @@ class JWSTMiri_cal(JWST_IFUs):
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
 
-    def _get_starsub_inputs(self, load_starspectrum_contnorm, im, im_wvs, err):
+    def _get_starsub_inputs(self, load_starspectrum_contnorm):
         """Hook for MIRI, return input for subtracting star spectrum from the data."""
         if load_starspectrum_contnorm is None:
             load_starspectrum_contnorm = self.default_filenames["compute_starspectrum_contnorm"]
@@ -417,12 +414,9 @@ class JWSTMiri_cal(JWST_IFUs):
         reg_std_map = reg_std_map
         reg_std_map = np.clip(reg_std_map, 1e-11, np.inf)
 
-        if im is None:
-            im = np.copy(self.data).transpose()
-        if im_wvs is None:
-            im_wvs = np.copy(self.wavelengths).transpose()
-        if err is None:
-            err = np.copy(self.noise).transpose()
+        im = np.copy(self.data).transpose()
+        im_wvs = np.copy(self.wavelengths).transpose()
+        err = np.copy(self.noise).transpose()
 
         bad_pixels = np.copy(self.bad_pixels).transpose()
 
@@ -450,7 +444,7 @@ class JWSTMiri_cal(JWST_IFUs):
             if not os.path.exists(os.path.join(self.utils_dir, starsub_dir)):
                 os.makedirs(os.path.join(self.utils_dir, starsub_dir))
             hdulist_sc = pyfits.open(self.filename)
-            du = self.data_unit
+            du = self.breads_header["DATAUNIT"]
             bu = self.extheader["BUNIT"].strip()
             if du == 'MJy' and bu == 'MJy':
                 hdulist_sc["SCI"].data = subtracted_im
@@ -467,8 +461,8 @@ class JWSTMiri_cal(JWST_IFUs):
 
     def _init_regwvs_obj(self, regwvs_dataobj, Ntraces, Nwv):
         """Hook for MIRI, initialize the interpolated calibrated data over regular wavelength grid object."""
-        regwvs_dataobj.dra_as_array = np.full((Nwv, Ntraces), np.nan)
-        regwvs_dataobj.ddec_as_array = np.full((Nwv, Ntraces), np.nan)
+        regwvs_dataobj.x = np.full((Nwv, Ntraces), np.nan)
+        regwvs_dataobj.y = np.full((Nwv, Ntraces), np.nan)
         regwvs_dataobj.wavelengths = np.full((Nwv, Ntraces), np.nan)
         regwvs_dataobj.leftnright_wavelengths = np.full((2, Nwv, Ntraces), np.nan)
         regwvs_dataobj.data = np.full((Nwv, Ntraces), np.nan)
@@ -476,9 +470,9 @@ class JWSTMiri_cal(JWST_IFUs):
         regwvs_dataobj.bad_pixels = np.full((Nwv, Ntraces), np.nan)
         regwvs_dataobj.area2d = np.full((Nwv, Ntraces), np.nan)
 
-    def _get_interpdata_shapes(self, _data, wv_sampling):
+    def _get_interpdata_shapes(self, wv_sampling):
         """Hook for MIRI, return the number of spectral traces and the number of wavelength bins for the interpolated data."""
-        Ntraces, Nwv = _data.shape[1], np.size(wv_sampling)
+        Ntraces, Nwv = self.data.shape[1], np.size(wv_sampling)
         return Ntraces, Nwv
 
     def _get_where_finite(self, trace_id):
@@ -487,18 +481,18 @@ class JWSTMiri_cal(JWST_IFUs):
         where_finite = np.where(np.isfinite(self.bad_pixels[:, trace_id]))
         return wvs_finite, where_finite
 
-    def _interpdata_regwvs_trace(self, regwvs_dataobj, wv_sampling, _data, wvs_finite, where_finite, trace_id):
+    def _interpdata_regwvs_trace(self, regwvs_dataobj, wv_sampling, wvs_finite, where_finite, trace_id):
         """Hook for MIRI, method to interpolate the data over regular wavelength grid."""
         if self.channel == '34':
             print("Flipping the wavelength axis for channel 34")
-            regwvs_dataobj.dra_as_array[:, trace_id] = np.interp(wv_sampling,
+            regwvs_dataobj.x[:, trace_id] = np.interp(wv_sampling,
                                                               np.flip(self.wavelengths[wvs_finite[0], trace_id]),
-                                                              np.flip(self.dra_as_array[wvs_finite[0], trace_id]),
+                                                              np.flip(self.x[wvs_finite[0], trace_id]),
                                                               left=np.nan,
                                                               right=np.nan)
-            regwvs_dataobj.ddec_as_array[:, trace_id] = np.interp(wv_sampling,
+            regwvs_dataobj.y[:, trace_id] = np.interp(wv_sampling,
                                                                np.flip(self.wavelengths[wvs_finite[0], trace_id]),
-                                                               np.flip(self.ddec_as_array[wvs_finite[0], trace_id]),
+                                                               np.flip(self.y[wvs_finite[0], trace_id]),
                                                                left=np.nan,
                                                                right=np.nan)
 
@@ -521,17 +515,17 @@ class JWSTMiri_cal(JWST_IFUs):
             where_finite = np.where(np.isfinite(np.flip(self.bad_pixels[:, trace_id])))
 
             regwvs_dataobj.data[:, trace_id] = np.interp(wv_sampling, np.flip(self.wavelengths[where_finite[0], trace_id]),
-                                                      np.flip(_data[where_finite[0], trace_id]), left=np.nan, right=np.nan)
+                                                      np.flip(self.data[where_finite[0], trace_id]), left=np.nan, right=np.nan)
             regwvs_dataobj.noise[:, trace_id] = np.interp(wv_sampling, np.flip(self.wavelengths[where_finite[0], trace_id]),
                                                        np.flip(self.noise[where_finite[0], trace_id]), left=np.nan,
                                                        right=np.nan)
 
         else:
-            regwvs_dataobj.dra_as_array[:, trace_id] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], trace_id],
-                                                              self.dra_as_array[wvs_finite[0], trace_id], left=np.nan,
+            regwvs_dataobj.x[:, trace_id] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], trace_id],
+                                                              self.x[wvs_finite[0], trace_id], left=np.nan,
                                                               right=np.nan)
-            regwvs_dataobj.ddec_as_array[:, trace_id] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], trace_id],
-                                                               self.ddec_as_array[wvs_finite[0], trace_id], left=np.nan,
+            regwvs_dataobj.y[:, trace_id] = np.interp(wv_sampling, self.wavelengths[wvs_finite[0], trace_id],
+                                                               self.y[wvs_finite[0], trace_id], left=np.nan,
                                                                right=np.nan)
 
             regwvs_dataobj.wavelengths[:, trace_id] = wv_sampling
@@ -550,7 +544,7 @@ class JWSTMiri_cal(JWST_IFUs):
             where_finite = np.where(np.isfinite(self.bad_pixels[:, trace_id]))
 
             regwvs_dataobj.data[:, trace_id] = np.interp(wv_sampling, self.wavelengths[where_finite[0], trace_id],
-                                                      _data[where_finite[0], trace_id], left=np.nan, right=np.nan)
+                                                      self.data[where_finite[0], trace_id], left=np.nan, right=np.nan)
             regwvs_dataobj.noise[:, trace_id] = np.interp(wv_sampling, self.wavelengths[where_finite[0], trace_id],
                                                        self.noise[where_finite[0], trace_id], left=np.nan, right=np.nan)
 
@@ -565,30 +559,31 @@ class JWSTMiri_cal(JWST_IFUs):
         -------
 
         """
-        if "regwvs" in self.coords:
+        if "regwvs" in self.breads_header['COORDS']:
             raise Exception("This data object is already interpolated. Won't interpolate again.")
 
         if load_filename is None:
             load_filename = self.default_filenames["compute_interpdata_regwvs"]
+        if self.breads_header["DATA_HPF"] and not load_filename.endswith("_starsub.fits"):
+            load_filename = load_filename.replace(".fits", "_starsub.fits")
         if len(glob(load_filename)) ==0:
             return None
-        regwvs_dataobj = deepcopy(self)
-
-        regwvs_dataobj.coords = self.coords + " regwvs"
 
         with pyfits.open(load_filename) as hdulist:
-            regwvs_dataobj.data = hdulist[0].data
-            regwvs_dataobj.noise = hdulist['INTERP_ERR'].data
-            regwvs_dataobj.dra_as_array  = hdulist['INTERP_RA'].data
-            regwvs_dataobj.ddec_as_array = hdulist['INTERP_DEC'].data
-            regwvs_dataobj.wavelengths  = hdulist['INTERP_WAVE'].data
-            regwvs_dataobj.bad_pixels  = hdulist['INTERP_BADPIX'].data
-            regwvs_dataobj.area2d = hdulist['INTERP_AREA2D'].data
+            self.data = hdulist['INTERP_DATA'].data
+            self.noise = hdulist['INTERP_ERR'].data
+            self.x  = hdulist['INTERP_X'].data
+            self.y = hdulist['INTERP_Y'].data
+            self.wavelengths  = hdulist['INTERP_WAVE'].data
+            self.bad_pixels  = hdulist['INTERP_BADPIX'].data
+            self.area2d = hdulist['INTERP_AREA2D'].data
             try:
-                regwvs_dataobj.leftnright_wavelengths = hdulist['INTERP_LEFTNRIGHT'].data
+                self.leftnright_wavelengths = hdulist['INTERP_LEFTNRIGHT'].data
             except KeyError:
                 pass
+            self.breads_header['COORDS'] = hdulist['BREADS'].header['COORDS']
+            self.breads_header['DATAUNIT'] = hdulist['BREADS'].header['DATAUNIT']
 
-        regwvs_dataobj.wv_sampling = np.nanmedian(regwvs_dataobj.wavelengths, axis=1)
+        self.wv_sampling = np.nanmedian(self.wavelengths, axis=1)
 
-        return regwvs_dataobj
+        return self
