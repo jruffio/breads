@@ -181,7 +181,7 @@ class JWST_IFUs(ABC):
         self.default_filenames["compute_starsubtraction_3dspline"] = \
             os.path.join(self.utils_dir, basename.replace(".fits", "_starsub_3Dspline.fits"))
         self.default_filenames["compute_advanced_badpix"] = \
-            os.path.join(self.utils_dir, basename.replace(".fits", "_starsub.fits"))
+            self.default_filenames["compute_starsubtraction"]
         self.default_filenames["compute_interpdata_regwvs"] = \
             os.path.join(self.utils_dir, basename.replace(".fits", "_regwvs.fits"))
 
@@ -581,8 +581,7 @@ class JWST_IFUs(ABC):
         ddec_as_array: in arcsec, new relative declination after offset
 
         """
-
-        if len(glob(coords_filename)) == 1:
+        if coords_filename is not None and len(glob(coords_filename)) == 1:
             print(f"Found centroid filename {coords_filename}. Loading those.")
             coords_offset = np.loadtxt(coords_filename, delimiter=' ')
         if coords_offset is None:
@@ -1486,7 +1485,7 @@ class JWST_IFUs(ABC):
 
 
     def compute_starsubtraction(self,  save_utils=False, threshold_badpix=10,mppool=None,combined_contnorm_filename=None,
-                                only_identify_badpix = False,starsub_dir=None, load_starspectrum_contnorm = None):
+                                only_identify_badpix = False,starsub_dir=None, load_starspectrum_contnorm = None,iterative=True):
         """
         Fit the spline model row by row, but including the stellar features with self.star_func(), which is the continuum-normalized star spectrum.
 
@@ -1514,14 +1513,16 @@ class JWST_IFUs(ABC):
             This should not be used unless the default filenames were changed, but it is not recommended. This is only to define the regularization of the spline.
             It should be the filename of the utility file saved by compute_starspectrum_contnorm() (meaning _save_starspectrum_contnorm()).
             If None, the default filename is used.
+        iterative : Boolean (optional)
+            If true, perform fit twice. First time to identify bad pixels. If False, only do it once.
 
 
         Returns
         -------
         subtracted_im : ndarray
             Star subtracted image.
-        star_model : 1d numpy array
-            1D Star model used for the star subtraction.
+        star_model : ndarray
+            Image of the best fit model of the star
         spline_paras0 : ndarray (N_nodes x N_traces)
             Linear parameters returned by the spline fitting routine for each spectral trace of the detector.
         self.wv_nodes : 1d numpy array (N_nodes)
@@ -1548,11 +1549,15 @@ class JWST_IFUs(ABC):
         im, im_wvs, err, bad_pixels, reg_mean_map, reg_std_map = self._get_starsub_inputs(load_starspectrum_contnorm)
 
         # Fit the model twice, the first time is used to identify and mask outliers from sigma clipping with threshold_badpix.
-        for i in range(2):
+        if iterative:
+            Nit = 2
+        else:
+            Nit = 1
+        for i in range(Nit):
             star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
                                                                                   badpixs=bad_pixels,
                                                                                   wv_nodes=self.wv_nodes,
-                                                                                  star_model=self.star_func(im_wvs),
+                                                                                  stellar_features=self.star_func(im_wvs),
                                                                                   threshold=threshold_badpix,
                                                                                   mppool=mppool,
                                                                                   regularization=True,
@@ -1984,9 +1989,9 @@ class JWST_IFUs(ABC):
         # reg_mean_map_init[where_low_snr_prior] = np.nan
         # reg_std_map_init[where_low_snr_prior] = np.nan
 
-        star_model = self.star_func(self.wavelengths)
+        stellar_features = self.star_func(self.wavelengths)
 
-        _out = fit_3dspline(self, x_nodes,y_nodes,wv_nodes,stamp_size = stamp_size,star_model=star_model,
+        _out = fit_3dspline(self, x_nodes,y_nodes,wv_nodes,stamp_size = stamp_size,stellar_features=stellar_features,
                             reg_mean_map=reg_mean_map_init, reg_std_map=reg_std_map_init,
                             max_cores=max_cores,threshold=threshold_badpix)
         spline_cont0, _, new_badpixs, subtracted_im, spline3d_paras_np, spline3d_paras_err_np = _out
@@ -2068,7 +2073,7 @@ class JWST_IFUs(ABC):
             self.data[where_finite_data] = subtracted_im[where_finite_data]
             self.breads_header["DATA_HPF"] = True
             self.breads_header["HPF_TYPE"] = "spline3d"
-        return subtracted_im, star_model, spline3d_paras_np,spline3d_paras_err_np, self.wv_nodes,self.x_nodes,self.y_nodes
+        return subtracted_im, spline_cont0, spline3d_paras_np,spline3d_paras_err_np, self.wv_nodes,self.x_nodes,self.y_nodes
 
 
     def reload_starsubtraction_3dspline(self, load_filename=None):
@@ -2139,14 +2144,16 @@ class JWST_IFUs(ABC):
             else:
                 self.y_nodes = y_nodes
 
-    def compute_advanced_badpix(self,  save_utils=False, threshold_badpix=10,mppool=None,starspec_contnorm_filename=None,
-                                starsub_dir=None, load_starspectrum_contnorm = None):
+    def compute_advanced_badpix(self,  save_utils=False, threshold_badpix=10,mppool=None,combined_contnorm_filename=None,
+                                starsub_dir=None, load_starspectrum_contnorm = None,iterative=True):
         """
         Same as compute_starsubtraction() but simply enforcing only_identify_badpix = True.
         """
         only_identify_badpix = True
-        return self.compute_starsubtraction(save_utils=save_utils, threshold_badpix=threshold_badpix,mppool=mppool,starspec_contnorm_filename=starspec_contnorm_filename,
-                                only_identify_badpix = only_identify_badpix,starsub_dir=starsub_dir, load_starspectrum_contnorm = load_starspectrum_contnorm)
+        return self.compute_starsubtraction(save_utils=save_utils, threshold_badpix=threshold_badpix,mppool=mppool,
+                                            combined_contnorm_filename=combined_contnorm_filename,
+                                            only_identify_badpix = only_identify_badpix,starsub_dir=starsub_dir,
+                                            load_starspectrum_contnorm = load_starspectrum_contnorm,iterative=iterative)
 
     def reload_advanced_badpix(self, load_filename=None):
         """ Reload advanced bad pixel map computed by compute_starsubtraction().
@@ -2207,8 +2214,6 @@ class JWST_IFUs(ABC):
 
         for trace_id in range(Ntraces):
             wvs_finite, where_finite = self._get_where_finite(trace_id)
-            if np.size(wvs_finite[0]) == 0 or np.size(where_finite[0]) == 0:
-                continue
 
             # interpolates everything row by row. Different behavior between NIRSpec and MIRI
             self._interpdata_regwvs_trace(regwvs_tmpobj, wv_sampling, wvs_finite, where_finite, trace_id)
@@ -2218,6 +2223,7 @@ class JWST_IFUs(ABC):
         regwvs_tmpobj.noise[where_bad] = np.nan
         regwvs_tmpobj.bad_pixels[where_bad] = np.nan
 
+        self.breads_header['COORDS'] = self.breads_header['COORDS'] + " regwvs"
         if save_utils:
             self._save_interpdata_regwvs(save_utils, regwvs_tmpobj)
 
@@ -2230,7 +2236,6 @@ class JWST_IFUs(ABC):
         self.noise = regwvs_tmpobj.noise
         self.bad_pixels = regwvs_tmpobj.bad_pixels
         self.area2d = regwvs_tmpobj.area2d
-        self.breads_header['COORDS'] = self.breads_header['COORDS'] + " regwvs"
 
         return regwvs_tmpobj
 
@@ -2247,27 +2252,29 @@ class JWST_IFUs(ABC):
 
     def _interpdata_regwvs_trace(self, regwvs_dataobj, wv_sampling, wvs_finite, where_finite, trace_id):
 
-        regwvs_dataobj.x[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
-                                                      self.x[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
-        regwvs_dataobj.y[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
-                                                       self.y[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
-        regwvs_dataobj.wavelengths[trace_id, :] = wv_sampling
-        regwvs_dataobj.area2d[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
-                                                self.area2d[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
-        badpix_mask = np.isfinite(self.bad_pixels[trace_id, :]).astype(float)
-        regwvs_dataobj.bad_pixels[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
-                                                    badpix_mask[wvs_finite], left=0, right=0)
+        if np.size(wvs_finite[0]) > 0:
+            regwvs_dataobj.x[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
+                                                          self.x[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
+            regwvs_dataobj.y[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
+                                                           self.y[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
+            regwvs_dataobj.wavelengths[trace_id, :] = wv_sampling
+            regwvs_dataobj.area2d[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
+                                                    self.area2d[trace_id, wvs_finite[0]], left=np.nan, right=np.nan)
+            badpix_mask = np.isfinite(self.bad_pixels[trace_id, :]).astype(float)
+            regwvs_dataobj.bad_pixels[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, wvs_finite[0]],
+                                                        badpix_mask[wvs_finite], left=0, right=0)
 
-        # following little section written by chatgpt to find the left and right wavelengths in the original data
-        v_left, v_right = find_closest_leftnright_elements(self.wavelengths[trace_id, wvs_finite[0]], wv_sampling)
+            # following little section written by chatgpt to find the left and right wavelengths in the original data
+            v_left, v_right = find_closest_leftnright_elements(self.wavelengths[trace_id, wvs_finite[0]], wv_sampling)
 
-        regwvs_dataobj.leftnright_wavelengths[0, trace_id, :] = v_left
-        regwvs_dataobj.leftnright_wavelengths[1, trace_id, :] = v_right
+            regwvs_dataobj.leftnright_wavelengths[0, trace_id, :] = v_left
+            regwvs_dataobj.leftnright_wavelengths[1, trace_id, :] = v_right
 
-        regwvs_dataobj.data[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, where_finite[0]],
-                                              self.data[trace_id, where_finite[0]], left=np.nan, right=np.nan)
-        regwvs_dataobj.noise[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, where_finite[0]],
-                                               self.noise[trace_id, where_finite[0]], left=np.nan, right=np.nan)
+        if np.size(where_finite[0]) > 0:
+            regwvs_dataobj.data[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, where_finite[0]],
+                                                  self.data[trace_id, where_finite[0]], left=np.nan, right=np.nan)
+            regwvs_dataobj.noise[trace_id, :] = np.interp(wv_sampling, self.wavelengths[trace_id, where_finite[0]],
+                                                   self.noise[trace_id, where_finite[0]], left=np.nan, right=np.nan)
 
     def _init_regwvs_obj(self, regwvs_dataobj, Ntraces, Nwv):
         """ Initialize the arrays for the interpolation on a regular wavelength grid"""
@@ -2657,10 +2664,10 @@ class JWST_IFUs(ABC):
         if pointcloud_interp is None:
             pointcloud_interp = self.get_2D_point_cloud_interpolator(wv0)
         if x_vec is None:
-            x_vec = np.linspace(-3, 3, 60)
+            x_vec = np.linspace(-3, 3, 240)
             x_vec += np.nanmedian(self.x)
         if y_vec is None:
-            y_vec = np.linspace(-3, 3, 60)
+            y_vec = np.linspace(-3, 3, 240)
             y_vec += np.nanmedian(self.y)
 
         dramin, dramax, ddecmin, ddecmax = np.min(x_vec), np.max(x_vec), np.min(y_vec), np.max(y_vec)
@@ -2748,11 +2755,11 @@ class JWST_IFUs(ABC):
                 suffix = suffix + "_HPF"+self.breads_header["HPF_TYPE"]
             if "regwvs" in self.breads_header['COORDS']:
                 suffix = suffix + "_regwvs"
-            pickle_pilename = os.path.join(self.utils_dir,os.path.basename(self.filename).replace(".fits",suffix+".pkl"))
+            pickle_filename = os.path.join(self.utils_dir,os.path.basename(self.filename).replace(".fits",suffix+".pkl"))
         else:
-            pickle_pilename = filename
+            pickle_filename = filename
 
-        with open(pickle_pilename, "wb") as f:
+        with open(pickle_filename, "wb") as f:
             pickle.dump(self, f)
 
     @classmethod

@@ -22,14 +22,14 @@ def _task_normrows(paras):
     Parameters
     ----------
     paras : tuple
-        im_rows, im_wvs_rows, noise_rows, badpix_rows, wv_nodes, star_model, threshold,regularization,reg_mean_map,reg_std_map
+        im_rows, im_wvs_rows, noise_rows, badpix_rows, wv_nodes, stellar_features, threshold,regularization,reg_mean_map,reg_std_map
 
     Returns
     -------
     new_im_rows, new_noise_rows, new_badpix_rows, res,paras_out
 
     """
-    im_rows, im_wvs_rows, noise_rows, badpix_rows, wv_nodes, star_model, threshold,regularization,reg_mean_map,reg_std_map = paras
+    im_rows, im_wvs_rows, noise_rows, badpix_rows, wv_nodes, stellar_features, threshold,regularization,reg_mean_map,reg_std_map = paras
 
     new_im_rows = np.array(copy(im_rows), '<f4')  # .byteswap().newbyteorder()
     new_noise_rows = copy(noise_rows)
@@ -44,7 +44,7 @@ def _task_normrows(paras):
             np.isfinite(im_rows[k, :])
             & np.isfinite(badpix_rows[k, :])
             & np.isfinite(noise_rows[k, :])
-            & np.isfinite(star_model[k, :])
+            & np.isfinite(stellar_features[k, :])
         )
 
         valid_mask = (
@@ -61,7 +61,7 @@ def _task_normrows(paras):
         d = im_rows[k, where_data_finite[0]]
         d_err = noise_rows[k, where_data_finite[0]]
 
-        M = M_spline[where_data_finite[0], :] * star_model[k, where_data_finite[0], None]
+        M = M_spline[where_data_finite[0], :] * stellar_features[k, where_data_finite[0], None]
 
         if regularization:
             validpara = np.where(np.nansum(M > np.nanmax(M) * 0.00001, axis=0) != 0)
@@ -106,11 +106,11 @@ def _task_normrows(paras):
 
     return new_im_rows, new_noise_rows, new_badpix_rows, res, paras_out
 
-def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, N_nodes=40, mppool=None, threshold=10,
+def normalize_rows(image, im_wvs, noise=None, badpixs=None, stellar_features=None, N_nodes=40, mppool=None, threshold=10,
                    wv_nodes=None, regularization=True, reg_mean_map=None, reg_std_map=None):
     """
     Fit a spline model to each row of the detector image.
-    Stellar spectral features can be included through the "star_model" parameter.
+    Stellar spectral features can be included through the "stellar_features" parameter.
 
     Parameters
     ----------
@@ -122,8 +122,8 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, N_n
         2D array of the noise corresponding to each pixel in the image (same shape as image). If None, all pixels are assumed to have noise of 1.
     badpixs : 2d array or None (optional)
         2D array of the bad pixel mask corresponding to each pixel in the image (same shape as image). If None, all pixels are assumed to be good (badpixs=1).
-    star_model : 2d array or None
-        This is to optionally include the stellar lines in the spline models, if not None, the star_model is multiplied to the spline model.
+    stellar_features : 2d array or None
+        This is to optionally include the stellar lines in the spline models, if not None, the stellar_features is multiplied to the spline model.
     N_nodes : int or None (optional, default is 40)
         If wv_nodes is None, Number of nodes to use for fitting splines for the continuum star spectrum estimation.
     mppool : multiprocessing.Pool or None (optional)
@@ -158,8 +158,8 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, N_n
         noise = np.ones(image.shape)
     if badpixs is None:
         badpixs = np.ones(image.shape)
-    if star_model is None:
-        star_model = np.ones(image.shape)
+    if stellar_features is None:
+        stellar_features = np.ones(image.shape)
 
     if wv_nodes is None:
         wv_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), N_nodes, endpoint=True)
@@ -180,7 +180,7 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, N_n
 
 
     if (mppool is None) or (parallel_flag==False):
-        paras = new_image, im_wvs, new_noise, new_badpixs, wv_nodes, star_model, threshold, regularization, reg_mean_map, reg_std_map
+        paras = new_image, im_wvs, new_noise, new_badpixs, wv_nodes, stellar_features, threshold, regularization, reg_mean_map, reg_std_map
         outputs = _task_normrows(paras)
         new_image, new_noise, new_badpixs, new_res,new_spline_paras = outputs
     else:
@@ -205,7 +205,7 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, N_n
             _im_wvs = im_wvs[(k * chunk_size):((k + 1) * chunk_size), :]
             _new_noise = new_noise[(k * chunk_size):((k + 1) * chunk_size), :]
             _new_badpixs = new_badpixs[(k * chunk_size):((k + 1) * chunk_size), :]
-            _star_model = star_model[(k * chunk_size):((k + 1) * chunk_size), :]
+            _stellar_features = stellar_features[(k * chunk_size):((k + 1) * chunk_size), :]
             # regularization=None,reg_mean_map=None,reg_std_map=None
             if regularization:
                 reg_mn_chunk= reg_mean_map[(k * chunk_size):((k + 1) * chunk_size), :]
@@ -215,7 +215,7 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, N_n
             wvs_list.append(_im_wvs)
             noise_list.append(_new_noise)
             badpixs_list.append(_new_badpixs)
-            starmodel_list.append(_star_model)
+            starmodel_list.append(_stellar_features)
             if regularization:
                 reg_mean_map_list.append(reg_mn_chunk)
                 reg_std_map_list.append(reg_std_chunk)
@@ -227,7 +227,7 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, N_n
         _im_wvs = im_wvs[((N_chunks - 1) * chunk_size):image.shape[0], :]
         _new_noise = new_noise[((N_chunks - 1) * chunk_size):image.shape[0], :]
         _new_badpixs = new_badpixs[((N_chunks - 1) * chunk_size):image.shape[0], :]
-        _star_model = star_model[((N_chunks - 1) * chunk_size):image.shape[0], :]
+        _stellar_features = stellar_features[((N_chunks - 1) * chunk_size):image.shape[0], :]
         if regularization:
             reg_mn_chunk = reg_mean_map[((N_chunks - 1) * chunk_size):image.shape[0], :]
             reg_std_chunk = reg_std_map[((N_chunks - 1) * chunk_size):image.shape[0], :]
@@ -236,7 +236,7 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, star_model=None, N_n
         wvs_list.append(_im_wvs)
         noise_list.append(_new_noise)
         badpixs_list.append(_new_badpixs)
-        starmodel_list.append(_star_model)
+        starmodel_list.append(_stellar_features)
         if regularization:
             reg_mean_map_list.append(reg_mn_chunk)
             reg_std_map_list.append(reg_std_chunk)
@@ -274,7 +274,7 @@ def _task_fit_3dspline(paras):
     """
 
     """
-    stamp_ids, x_nodes, y_nodes,wv_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map, types_tuple = paras
+    stamp_ids, x_nodes, y_nodes,wv_nodes, wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map, types_tuple = paras
     mp_float_type, mp_bp_type = types_tuple
 
 
@@ -284,7 +284,7 @@ def _task_fit_3dspline(paras):
     scaled_x_np = _arraytonumpy(shared_scaled_x, shared_data_shape, dtype=mp_float_type)
     scaled_y_np = _arraytonumpy(shared_scaled_y, shared_data_shape, dtype=mp_float_type)
     bp_np = _arraytonumpy(shared_bp, shared_data_shape, dtype=mp_float_type)
-    star_model_np = _arraytonumpy(shared_star_model, shared_data_shape, dtype=mp_float_type)
+    stellar_features_np = _arraytonumpy(shared_stellar_features, shared_data_shape, dtype=mp_float_type)
     bestfit_model_np = _arraytonumpy(shared_bestfit_model, shared_data_shape, dtype=mp_float_type)
 
     spline3d_paras_np = _arraytonumpy(shared_spline3d_paras, shared_spline3d_paras_shape, dtype=mp_float_type)
@@ -308,7 +308,7 @@ def _task_fit_3dspline(paras):
                (scaled_y_np>y_nodes[l0]) & (scaled_y_np<y_nodes[l3]) & \
                (wvs_np>np.min(wv_nodes)) & (wvs_np<np.max(wv_nodes))
     bool_map_from_bp = (np.isfinite(bp_np) * np.isfinite(data_np) * np.isfinite(noise_np) * (noise_np != 0)* \
-                        np.isfinite(wvs_np)* np.isfinite(star_model_np))
+                        np.isfinite(wvs_np)* np.isfinite(stellar_features_np))
     where_data_finite = np.where(extended_bool_map*bool_map_from_bp)
 
     N_pix_threshold = np.size(wv_nodes)* np.size(_y_nodes)* np.size(_x_nodes)
@@ -339,7 +339,7 @@ def _task_fit_3dspline(paras):
     M_3dspline = M_spline_x_tiled * M_spline_y_tiled * M_spline_wvs_tiled
     M_3dspline = M_3dspline.reshape((M_3dspline.shape[0], -1)) # flatten the last 3 dimensions
 
-    M = M_3dspline * star_model_np[where_data_finite][:, None]
+    M = M_3dspline * stellar_features_np[where_data_finite][:, None]
 
     INvalidpara = np.where(~(np.nansum(M > np.nanmax(M) * 0.001, axis=0) != 0))
     M[:, INvalidpara[0]] = 0 # Deactivate those columns in the model matrix
@@ -379,7 +379,7 @@ def _task_fit_3dspline(paras):
 
 def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
                  stamp_size = (0.2,0.2),N_overlap_nodes = 2,
-                 star_model=None,
+                 stellar_features=None,
                  threshold=10, reg_mean_map=None, reg_std_map=None,
                  max_cores = 1):
     """
@@ -425,12 +425,12 @@ def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
     bp_np = _arraytonumpy(bp_mp, data_shape, dtype=mp_float_type)
     bp_np[:] = copy(dataobj.bad_pixels)
 
-    star_model_mp = RawArray(mp_float_type, nx * ny)
-    star_model_np = _arraytonumpy(star_model_mp, data_shape, dtype=mp_float_type)
-    if star_model is None:
-        star_model_np[:] = np.ones(dataobj.data.shape)
+    stellar_features_mp = RawArray(mp_float_type, nx * ny)
+    stellar_features_np = _arraytonumpy(stellar_features_mp, data_shape, dtype=mp_float_type)
+    if stellar_features is None:
+        stellar_features_np[:] = np.ones(dataobj.data.shape)
     else:
-        star_model_np[:] = star_model
+        stellar_features_np[:] = stellar_features
 
     bestfit_model_mp = RawArray(mp_float_type, nx * ny)
     bestfit_model_np = _arraytonumpy(bestfit_model_mp, data_shape, dtype=mp_float_type)
@@ -482,7 +482,7 @@ def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
 
     _init_args = (
         data_mp, data_shape,
-        noise_mp, wvs_mp, scaled_x_mp, scaled_y_mp, bp_mp,star_model_mp,bestfit_model_mp,
+        noise_mp, wvs_mp, scaled_x_mp, scaled_y_mp, bp_mp,stellar_features_mp,bestfit_model_mp,
         spline3d_paras_mp, spline3d_paras_shape,spline3d_paras_err_mp
     )
 
@@ -493,7 +493,7 @@ def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
         for id,stamp_ids in enumerate(stamp_list):
 
             paras = stamp_ids, x_nodes, y_nodes,wv_nodes,\
-                    wv_ref, star_model, threshold, reg_mean_map, reg_std_map,types_tuple
+                    wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map,types_tuple
 
             _task_fit_3dspline(paras)
     else:
@@ -510,7 +510,7 @@ def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
         for id,stamp_ids in enumerate(stamp_list):
 
             paras = stamp_ids, x_nodes, y_nodes,wv_nodes,\
-                    wv_ref, star_model, threshold, reg_mean_map, reg_std_map,types_tuple
+                    wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map,types_tuple
             args_list.append(paras)
 
         try:
@@ -533,7 +533,7 @@ def _task_evaluate_3dspline(paras):
     """
 
     """
-    stamp_ids, x_nodes, y_nodes,wv_nodes, wv_ref, star_model, types_tuple = paras
+    stamp_ids, x_nodes, y_nodes,wv_nodes, wv_ref, stellar_features, types_tuple = paras
     mp_float_type, mp_bp_type = types_tuple
 
 
@@ -543,7 +543,7 @@ def _task_evaluate_3dspline(paras):
     scaled_x_np = _arraytonumpy(shared_scaled_x, shared_data_shape, dtype=mp_float_type)
     scaled_y_np = _arraytonumpy(shared_scaled_y, shared_data_shape, dtype=mp_float_type)
     bp_np = _arraytonumpy(shared_bp, shared_data_shape, dtype=mp_float_type)
-    star_model_np = _arraytonumpy(shared_star_model, shared_data_shape, dtype=mp_float_type)
+    stellar_features_np = _arraytonumpy(shared_stellar_features, shared_data_shape, dtype=mp_float_type)
     bestfit_model_np = _arraytonumpy(shared_bestfit_model, shared_data_shape, dtype=mp_float_type)
 
     spline3d_paras_np = _arraytonumpy(shared_spline3d_paras, shared_spline3d_paras_shape, dtype=mp_float_type)
@@ -566,7 +566,7 @@ def _task_evaluate_3dspline(paras):
     extended_bool_map = (scaled_x_np>x_nodes[k0]) & (scaled_x_np<x_nodes[k3]) & \
                (scaled_y_np>y_nodes[l0]) & (scaled_y_np<y_nodes[l3]) & \
                (wvs_np>np.min(wv_nodes)) & (wvs_np<np.max(wv_nodes))
-    bool_map_from_bp = (np.isfinite(bp_np) * np.isfinite(star_model_np))
+    bool_map_from_bp = (np.isfinite(bp_np) * np.isfinite(stellar_features_np))
     where_data_finite = np.where(extended_bool_map*bool_map_from_bp)
 
     N_pix_threshold = 3
@@ -597,7 +597,7 @@ def _task_evaluate_3dspline(paras):
     M_3dspline = M_spline_x_tiled * M_spline_y_tiled * M_spline_wvs_tiled
     M_3dspline = M_3dspline.reshape((M_3dspline.shape[0], -1)) # flatten the last 3 dimensions
 
-    M = M_3dspline * star_model_np[where_data_finite][:, None]
+    M = M_3dspline * stellar_features_np[where_data_finite][:, None]
     m = np.dot(M, np.ravel(spline3d_paras_np[:,l0:l3+1,k0:k3+1]))
     merr = np.dot(M, np.ravel(spline3d_paras_err_np[:,l0:l3+1,k0:k3+1]))
     combined_idx = tuple(w[inner_pixels] for w in where_data_finite)
@@ -609,25 +609,25 @@ def _task_evaluate_3dspline(paras):
 def evaluate_3dspline_grid(x_vec,y_vec,wv_sampling,spline3d_filename,
                            N_overlap_nodes = 2,max_cores = 1):
     wv_grid,y_grid,x_grid = np.meshgrid(wv_sampling,x_vec,y_vec,indexing='ij' )
-    star_model = None
+    stellar_features = None
     return evaluate_3dspline(x_grid,y_grid,wv_grid,
                           spline3d_filename,
-                     star_model=None,N_overlap_nodes = N_overlap_nodes,
+                     stellar_features=None,N_overlap_nodes = N_overlap_nodes,
                      max_cores = max_cores)
 
-def evaluate_3dspline_pointcloud(dataobj, spline3d_filename,star_model=None,
+def evaluate_3dspline_pointcloud(dataobj, spline3d_filename,stellar_features=None,
                            N_overlap_nodes=2, max_cores=1):
     ifux,ifuy = dataobj.get_ifu_coords()
     # if hasattr(dataobj,'star_func'):
-    #     star_model = dataobj.star_func(dataobj.wavelengths)
+    #     stellar_features = dataobj.star_func(dataobj.wavelengths)
     return evaluate_3dspline(ifux,ifuy, dataobj.wavelengths,
                              spline3d_filename,
-                             star_model=star_model, N_overlap_nodes=N_overlap_nodes,
+                             stellar_features=stellar_features, N_overlap_nodes=N_overlap_nodes,
                              max_cores=max_cores)
 
 def evaluate_3dspline(ifux,ifuy,wvs,
                       spline3d_filename,
-                 star_model=None,N_overlap_nodes = 2,
+                 stellar_features=None,N_overlap_nodes = 2,
                  max_cores = 1):
     """
 
@@ -676,12 +676,12 @@ def evaluate_3dspline(ifux,ifuy,wvs,
     bp_np = _arraytonumpy(bp_mp, data_shape, dtype=mp_float_type)
     bp_np[:] = np.full(data_shape,1, dtype=np.float32)
 
-    star_model_mp = RawArray(mp_float_type, data_size)
-    star_model_np = _arraytonumpy(star_model_mp, data_shape, dtype=mp_float_type)
-    if star_model is None:
-        star_model_np[:] = np.ones(ifux.shape)
+    stellar_features_mp = RawArray(mp_float_type, data_size)
+    stellar_features_np = _arraytonumpy(stellar_features_mp, data_shape, dtype=mp_float_type)
+    if stellar_features is None:
+        stellar_features_np[:] = np.ones(ifux.shape)
     else:
-        star_model_np[:] = star_model
+        stellar_features_np[:] = stellar_features
 
     bestfit_model_mp = RawArray(mp_float_type, data_size)
     bestfit_model_np = _arraytonumpy(bestfit_model_mp, data_shape, dtype=mp_float_type)
@@ -731,7 +731,7 @@ def evaluate_3dspline(ifux,ifuy,wvs,
 
     _init_args = (
         data_mp, data_shape,
-        noise_mp, wvs_mp, scaled_x_mp, scaled_y_mp, bp_mp,star_model_mp,bestfit_model_mp,
+        noise_mp, wvs_mp, scaled_x_mp, scaled_y_mp, bp_mp,stellar_features_mp,bestfit_model_mp,
         spline3d_paras_mp, spline3d_paras_shape,spline3d_paras_err_mp
     )
 
@@ -742,7 +742,7 @@ def evaluate_3dspline(ifux,ifuy,wvs,
         for id,stamp_ids in enumerate(stamp_list):
 
             paras = stamp_ids, x_nodes, y_nodes,wv_nodes,\
-                    wv_ref, star_model, types_tuple
+                    wv_ref, stellar_features, types_tuple
 
             _task_evaluate_3dspline(paras)
     else:
@@ -759,7 +759,7 @@ def evaluate_3dspline(ifux,ifuy,wvs,
         for id,stamp_ids in enumerate(stamp_list):
 
             paras = stamp_ids, x_nodes, y_nodes,wv_nodes,\
-                    wv_ref, star_model, types_tuple
+                    wv_ref, stellar_features, types_tuple
             args_list.append(paras)
 
         try:
@@ -783,7 +783,7 @@ def _tpool_init_3dspline(
     scaled_x : np.ndarray,
     scaled_y : np.ndarray,
     bp : np.ndarray,
-    star_model : np.ndarray,
+    stellar_features : np.ndarray,
     bestfit_model : np.ndarray,
     spline3d_paras : np.ndarray, spline3d_paras_shape : tuple,
     spline3d_paras_err : np.ndarray or None,
@@ -792,7 +792,7 @@ def _tpool_init_3dspline(
     Initialize shared global variables for the multiprocessing pool.
     """
     global shared_data, shared_data_shape, shared_noise, \
-        shared_wvs, shared_scaled_x, shared_scaled_y, shared_bp, shared_star_model,shared_bestfit_model, \
+        shared_wvs, shared_scaled_x, shared_scaled_y, shared_bp, shared_stellar_features,shared_bestfit_model, \
         shared_spline3d_paras, shared_spline3d_paras_shape,shared_spline3d_paras_err
 
     shared_data = data
@@ -803,7 +803,7 @@ def _tpool_init_3dspline(
     shared_scaled_x = scaled_x
     shared_scaled_y = scaled_y
     shared_bp = bp
-    shared_star_model = star_model
+    shared_stellar_features = stellar_features
     shared_bestfit_model = bestfit_model
 
     shared_spline3d_paras = spline3d_paras

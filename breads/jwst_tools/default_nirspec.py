@@ -18,10 +18,10 @@ wv_nodes_3D_dict["G235H"]["nrs2"] = np.linspace(2.40, 3.20, 5, endpoint=True)
 wv_nodes_3D_dict["G395H"]["nrs1"] = np.linspace(2.85, 4.119999999999999, 5, endpoint=True)
 wv_nodes_3D_dict["G395H"]["nrs2"] = np.linspace(4.07, 5.2999999999999945, 5, endpoint=True)
 
-x_nodes_3D_5x_dict = np.arange(-2, 2.0001, 0.02)
-y_nodes_3D_5x_dict = np.arange(-2, 2.0001, 0.02)
-x_nodes_3D_10x_dict = np.arange(-2, 2.0001, 0.01)
-y_nodes_3D_10x_dict = np.arange(-2, 2.0001, 0.01)
+x_nodes_3D_5x = np.arange(-2, 2.0001, 0.02)
+y_nodes_3D_5x = np.arange(-2, 2.0001, 0.02)
+x_nodes_3D_10x = np.arange(-2, 2.0001, 0.01)
+y_nodes_3D_10x = np.arange(-2, 2.0001, 0.01)
 
 
 wv_sampling_dict = {"G140H":{},"G235H":{},"G395H":{}}

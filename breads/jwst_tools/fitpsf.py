@@ -27,7 +27,7 @@ def fitpsf(dataobj, ref_dataobj = None,
            init_centroid=None, fit_centroid=True, fit_angle = False,
            ann_width=None, padding=None, sector_area=None,
            linear_interp=True, rotate_psf=0.0, flipx=False,debug_wv_range=None,overwrite=False,
-           stis_spectrum=None):
+           stis_spectrum=None,poly_deg_coords=2,poly_deg_flux=1):
     """Fit a model PSF (psfs, psfX, psfY) to a combined dataset (dataobj_list).
 
     Parameters
@@ -126,9 +126,15 @@ def fitpsf(dataobj, ref_dataobj = None,
         stpsfX = np.tile(webbpsf_x[None, :, :], (stpsfs.shape[0], 1, 1))
         stpsfY = np.tile(webbpsf_y[None, :, :], (stpsfs.shape[0], 1, 1))
         flipx = True
-    elif use_breadspsf is not None:
+    elif use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
+        if isinstance(use_breadspsf, bool) and use_breadspsf:
+            grating = dataobj.priheader['GRATING'].strip()
+            detector = dataobj.priheader['DETECTOR'].strip().lower()
+            use_breadspsf_str = f"J1757132_{grating}_{detector}.fits"
+        elif isinstance(use_breadspsf, str):
+            use_breadspsf_str = use_breadspsf
         BREADS_DATA_ENV = os.getenv('BREADS_DATA')
-        breadsPSF_path = os.path.join(BREADS_DATA_ENV, "BreadsPSF",use_breadspsf)
+        breadsPSF_path = os.path.join(BREADS_DATA_ENV, "BreadsPSF",use_breadspsf_str)
         hdulist = pyfits.open(breadsPSF_path)
         stpsfs = hdulist['EPSFS'].data
         psf_X = hdulist['X'].data
@@ -263,15 +269,11 @@ def fitpsf(dataobj, ref_dataobj = None,
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
 
-        use_stpsf=True
-        if use_stpsf:
-            use_stpsf_str = "_stpsf"
-        else:
-            use_stpsf_str = ""
-        poly_centroid_filename = out_filename.replace(".fits", "_poly_centroid_IWA{0:.2f}_OWA{1:.2f}{2}.txt".format(IWA,OWA,use_stpsf_str))
-        poly_fluxcal_filename = out_filename.replace(".fits", "_poly_fluxcal_IWA{0:.2f}_OWA{1:.2f}{2}.txt".format(IWA,OWA,use_stpsf_str))
+        poly_centroid_filename = out_filename.replace(".fits", "_poly_centroid_IWA{0:.2f}_OWA{1:.2f}.txt".format(IWA,OWA))
+        poly_fluxcal_filename = out_filename.replace(".fits", "_poly_fluxcal_IWA{0:.2f}_OWA{1:.2f}.txt".format(IWA,OWA))
         plot_filename = out_filename.replace(".fits", "_fitpsf_results.png")
-        analyze_fitpsf_results(dataobj,bestfit_paras,stis_spectrum=stis_spectrum,poly_centroid_filename=poly_centroid_filename,poly_fluxcal_filename=poly_fluxcal_filename,plot_filename=plot_filename)
+        analyze_fitpsf_results(dataobj,bestfit_paras,stis_spectrum=stis_spectrum,poly_deg_coords=poly_deg_coords,poly_deg_flux=poly_deg_flux,
+                               poly_centroid_filename=poly_centroid_filename,poly_fluxcal_filename=poly_fluxcal_filename,plot_filename=plot_filename,)
 
         plot_filename = out_filename.replace(".fits", "2d_plot.png")
         if debug_wv_range is not None:
@@ -702,16 +704,16 @@ def plot_fitpsf_2d_results(dataobj, bestfit_model, residuals, wv0=None,
     model_out = model_interp(inp[0], inp[1])
     res_out = res_interp(inp[0], inp[1])
     # If it's masked, convert back to regular array
-    if isinstance(res_out, np.ma.MaskedArray):
-        res_out = res_out.filled(np.nan)
+    # if isinstance(res_out, np.ma.MaskedArray):
+    #     res_out = res_out.filled(np.nan)
     all_outs = [data_out, model_out, res_out]
 
     # Shared vmin/vmax for Data & Model; separate symmetric scale for Residuals
     vmin_dm = 0
-    vmax_dm = np.nanpercentile(data_out, 95)
-    vmin_r,vmax_r = np.nanpercentile(res_out, [5,95])
+    vmax_dm = 10*median_abs_deviation(data_out[np.where(np.isfinite(data_out))])
+    vmax_r = 10*median_abs_deviation(res_out[np.where(np.isfinite(res_out))])
 
-    vmins = [vmin_dm, vmin_dm, vmin_r]
+    vmins = [vmin_dm, vmin_dm, -vmax_r]
     vmaxs = [vmax_dm, vmax_dm, vmax_r]
     cmaps = ["viridis", "viridis", "RdBu_r"]  # diverging cmap for residuals  "RdBu_r"
 

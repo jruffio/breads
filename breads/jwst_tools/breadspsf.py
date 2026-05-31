@@ -1,6 +1,6 @@
 import os
 import numpy as np
-
+from glob import glob
 import matplotlib.pyplot as plt
 
 from scipy.interpolate import interp1d
@@ -14,11 +14,18 @@ from astropy.table import Table
 from breads.jwst_tools.splines import evaluate_3dspline_grid
 from breads.jwst_tools.plotting import save_cube_as_gif
 
-def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,numthreads=1,stis_spectrum=None):
+def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,numthreads=1,stis_spectrum=None,
+                     overwrite=False):
     BREADS_DATA_ENV = os.getenv('BREADS_DATA')
     breadsPSF_DIR = os.path.join(BREADS_DATA_ENV, "BreadsPSF")
     if not os.path.exists(breadsPSF_DIR):
         os.makedirs(breadsPSF_DIR)
+
+    if not overwrite and len(glob(os.path.join(breadsPSF_DIR,basename))) >= 1:
+        with pyfits.open(os.path.join(breadsPSF_DIR,basename)) as hdul:
+            breadspsf = hdul["EPSFS"].data
+            breadspsf_err = hdul["EPSFS_ERR"].data
+        return breadspsf, breadspsf_err
 
     if basename is None:
         basename = "breadsPSF.fits"

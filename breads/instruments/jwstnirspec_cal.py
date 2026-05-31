@@ -614,7 +614,7 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                          im_ifuy,
                                                                                          noise=err,
                                                                                          badpixs=self.bad_pixels,
-                                                                                         star_model=self.star_func(im_wvs),
+                                                                                         stellar_features=self.star_func(im_wvs),
                                                                                          trace_id_map = _trace_id_map,
                                                                                          wv_nodes = self.wv_nodes,
                                                                                          ifuy_nodes=self.ifuy_nodes,
@@ -635,7 +635,7 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                              im_ifuy,
                                                                                              noise=err,
                                                                                              badpixs=self.bad_pixels*new_badpixs,
-                                                                                             star_model=self.star_func(im_wvs),
+                                                                                             stellar_features=self.star_func(im_wvs),
                                                                                              trace_id_map = _trace_id_map,
                                                                                              wv_nodes = self.wv_nodes,
                                                                                              ifuy_nodes=self.ifuy_nodes,
@@ -748,20 +748,20 @@ def _task_normslice_2dspline(paras):
     Parameters
     ----------
     paras : tuple containing many values
-        im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map
+        im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map
 
     Returns
     -------
 
     """
-    im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map = paras
+    im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map = paras
 
     new_im = np.zeros(im.shape)+np.nan#np.array(copy(im), '<f4')  # .byteswap().newbyteorder()
     new_noise = copy(noise)
     new_badpix = copy(badpix)
     res = np.zeros(im.shape) + np.nan
 
-    bool_map = np.isfinite(new_badpix) * np.isfinite(im) * np.isfinite(noise) * (noise != 0) * np.isfinite(star_model) * np.isfinite(im_ifuy)
+    bool_map = np.isfinite(new_badpix) * np.isfinite(im) * np.isfinite(noise) * (noise != 0) * np.isfinite(stellar_features) * np.isfinite(im_ifuy)
     where_data_finite = np.where(bool_map)
     if np.size(where_data_finite[0]) != 0:
         ravel_im_ifuy = im_ifuy[where_data_finite]
@@ -776,7 +776,7 @@ def _task_normslice_2dspline(paras):
     d = im[where_data_finite]
     d_err = noise[where_data_finite]
 
-    M = M_2dspline * star_model[where_data_finite][:, None]
+    M = M_2dspline * stellar_features[where_data_finite][:, None]
 
     validpara = np.where(np.nansum(M > np.nanmax(M) * 0.005, axis=0) != 0)
     M = M[:, validpara[0]]
@@ -815,7 +815,7 @@ def _task_normslice_2dspline(paras):
 
 
 def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,trace_id_map=None,
-                              star_model=None,  mypool=None,
+                              stellar_features=None,  mypool=None,
                               threshold=10,
                               N_wvs_nodes=20, wv_nodes=None, delta_ifuy=0.05, ifuy_nodes=None,
                               reg_mean_map=None, reg_std_map=None, wv_ref = None):
@@ -829,7 +829,7 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
     noise
     badpixs
     trace_id_map
-    star_model
+    stellar_features
     mypool
     threshold
     N_wvs_nodes
@@ -850,8 +850,8 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
         noise = np.ones(image.shape)
     if badpixs is None:
         badpixs = np.ones(image.shape)
-    if star_model is None:
-        star_model = np.ones(image.shape)
+    if stellar_features is None:
+        stellar_features = np.ones(image.shape)
     if trace_id_map is None:
         trace_id_map = np.zeros(image.shape)
 
@@ -895,7 +895,7 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
 
             paras = new_image[row_id_min:row_id_max,:], im_wvs[row_id_min:row_id_max,:], im_ifuy[row_id_min:row_id_max,:], \
                 new_noise[row_id_min:row_id_max,:], tmp_badpixs[row_id_min:row_id_max,:], wv_nodes,ifuy_nodes,wv_ref, \
-                star_model[row_id_min:row_id_max,:], threshold, reg_mean_map[id], reg_std_map[id]
+                stellar_features[row_id_min:row_id_max,:], threshold, reg_mean_map[id], reg_std_map[id]
 
             outputs = _task_normslice_2dspline(paras)
             partial_new_image, partial_new_noise, partial_new_badpixs, partial_new_res, partial_new_spline_paras = outputs
@@ -913,7 +913,7 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
         im_ifuy_list = []
         noise_list = []
         badpixs_list = []
-        star_model_list = []
+        stellar_features_list = []
         for id, trace_id in enumerate(unique_trace_ids):
             trace_mask = (trace_id_map == trace_id)
             where_in_trace = np.where(trace_mask)
@@ -927,13 +927,13 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
             im_ifuy_list.append(im_ifuy[row_id_min:row_id_max, :])
             noise_list.append(new_noise[row_id_min:row_id_max, :])
             badpixs_list.append(tmp_badpixs[row_id_min:row_id_max, :])
-            star_model_list.append(star_model[row_id_min:row_id_max, :])
+            stellar_features_list.append(stellar_features[row_id_min:row_id_max, :])
 
         outputs_list = mypool.map(_task_normslice_2dspline, zip(image_list, wvs_list, im_ifuy_list, noise_list, badpixs_list,
                                                       itertools.repeat(wv_nodes),
                                                       itertools.repeat(ifuy_nodes),
                                                       itertools.repeat(wv_ref),
-                                                      star_model_list,
+                                                      stellar_features_list,
                                                       itertools.repeat(threshold),
                                                       reg_mean_map,reg_std_map))
         for id,((row_id_min,row_id_max), outputs) in enumerate(zip(row_indices_list, outputs_list)):
