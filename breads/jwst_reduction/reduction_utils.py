@@ -18,6 +18,7 @@ import datetime
 from scipy.ndimage import generic_filter, gaussian_filter
 from scipy.ndimage import convolve1d
 from scipy.ndimage import convolve
+from scipy.ndimage import correlate
 from scipy.signal import fftconvolve
 from scipy.interpolate import interp1d
 import matplotlib.tri as tri
@@ -27,6 +28,7 @@ from astropy import constants as const
 from astropy import units as u
 from astropy.table import Table
 from scipy.optimize import minimize
+from astropy.convolution import convolve, Box2DKernel
 
 try:
     import jwst
@@ -49,6 +51,7 @@ from breads.jwst_tools.plotting import filter_big_triangles
 from breads.jwst_tools.fitpsf import fitpsf
 from breads.jwst_tools.spectra import combine_spectrum,combine_spectrum_1dspline
 import breads.jwst_tools.default_nirspec as default
+from breads.jwst_tools.build_cube import build_cube
 
 from collections import defaultdict
 
@@ -468,7 +471,134 @@ def fit_1f_noise_nirspec(im,noise,bkg_bad_pixels,N_nodes=40,mppool=None):
     return model_1f_noise
 
 
-def fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,targetname=None,mppool=None,use_stpsf=False,use_breadspsf=True,init_centroid=None):
+
+def _charge_transfer_model_col_fun(psf_image_col, tau=None, cutoff=0, power=1, kernel_radius=256):
+
+    extra_charges = psf_image_col - cutoff
+    extra_charges[np.where((extra_charges < 0) | ~np.isfinite(extra_charges))] = 0.0
+
+
+    vecy = np.arange(3 * (kernel_radius * 2 + 1))
+    vecy -= vecy[np.size(vecy) // 2]
+    vecy = np.abs(vecy)
+    if tau is None:
+        kernel = 1 / (vecy ** power)
+    else:
+        kernel = np.exp(-vecy / (tau / np.log(2))) / (vecy ** power)
+    kernel[np.size(vecy) // 2] = 0.0
+
+    ny = np.size(extra_charges)
+    _charge_transfer_model = np.zeros(ny)
+
+    _charge_transfer_model = convolve1d(extra_charges, weights=kernel / np.nansum(kernel), mode='constant')
+
+    return _charge_transfer_model[::3]
+
+
+def _chi2_charge_transfer_col(paras, data_col, bad_pixels_col, new_model_col, tau, kernel_radius=1024):
+    cutoff, power = paras
+    if tau is not None and tau <= 0:
+        return np.inf
+    if cutoff < 0:
+        return np.inf
+    if power <= 1.6 or power > 2.0:
+        return np.inf
+    _charge_transfer_model = _charge_transfer_model_col_fun(new_model_col, tau=tau, cutoff=cutoff, power=power,
+                                                            kernel_radius=kernel_radius)
+    scale = np.nansum(data_col * _charge_transfer_model) / np.nansum((_charge_transfer_model * bad_pixels_col) ** 2)
+    res = data_col - scale * _charge_transfer_model
+    chi2 = np.nansum(res ** 2)
+    return chi2
+
+
+def _task_charge_transfer_nirspec_col(_args):
+    data_col, bkg_bad_pixels_col, new_model_col,noise_ratio = _args
+    if noise_ratio <0.8:
+        return np.zeros(np.shape(data_col))
+    if np.nansum(new_model_col) == 0 or np.nansum(bkg_bad_pixels_col) == 0:
+        return np.zeros(np.shape(data_col))
+    tau = None  # No exponential decay term
+    cutoff0 = np.min([2000,np.nanmax(new_model_col)/2.,10*np.nanmax(np.abs(data_col*bkg_bad_pixels_col))])
+    # print(cutoff0,[2000,np.nanmax(new_model_col)/2.,10*np.nanmax(np.abs(data_col*bkg_bad_pixels_col))])
+    # cutoff0=3
+    power0 = 1.8
+    kernel_radius=1024
+
+    paras0 = [cutoff0, power0]  # your initial guesses
+    cutoff, power = paras0
+    paras0 = np.array(paras0)
+    simplex_init_steps = [cutoff0 / 2., power0 / 5.]
+    initial_simplex = np.concatenate([paras0[None, :], paras0[None, :] + np.diag(simplex_init_steps)], axis=0)
+
+    result = minimize(_chi2_charge_transfer_col, paras0, args=(data_col, bkg_bad_pixels_col, new_model_col,
+                                                               tau, kernel_radius), method='Nelder-Mead',
+                      options={"maxiter": 1e2, "initial_simplex": initial_simplex, "disp": False})
+    cutoff, power = result.x
+    # print(result.nit, [cutoff, power],paras0)
+    # if power < 1.0 or power > 3.0:
+    #     return np.zeros(np.shape(data_col))
+    charge_transfer_model_col = _charge_transfer_model_col_fun(new_model_col, tau=tau, cutoff=cutoff, power=power,kernel_radius=kernel_radius)
+    denum = np.nansum((charge_transfer_model_col * bkg_bad_pixels_col) ** 2)
+    if denum > 0:
+        scale = np.nansum(data_col * charge_transfer_model_col) / denum
+    else:
+        scale = 0.0
+
+    return scale * charge_transfer_model_col,[cutoff, power]
+
+
+# def _chi2_charge_transfer_col_cutoff_only(paras, data_col, bad_pixels_col, new_model_col, tau,power, kernel_radius=1024):
+#     cutoff = paras
+#     if tau is not None and tau <= 0:
+#         return np.inf
+#     if cutoff < 0:
+#         return np.inf
+#     if power <= 0: #or power > 2.0
+#         return np.inf
+#     _charge_transfer_model = _charge_transfer_model_col_fun(new_model_col, tau=tau, cutoff=cutoff, power=power,
+#                                                             kernel_radius=kernel_radius)
+#     scale = np.nansum(data_col* bad_pixels_col * _charge_transfer_model) / np.nansum((_charge_transfer_model * bad_pixels_col) ** 2)
+#     res = data_col - scale * _charge_transfer_model
+#     chi2 = np.nansum(res ** 2)
+#     return chi2
+#
+#
+# def _task_charge_transfer_nirspec_col_cutoff_only(_args):
+#     data_col, bkg_bad_pixels_col, new_model_col,noise_ratio = _args
+#     if noise_ratio <1.0:
+#         return np.zeros(np.shape(data_col))
+#     if np.nansum(new_model_col) == 0 or np.nansum(bkg_bad_pixels_col) == 0:
+#         return np.zeros(np.shape(data_col))
+#     tau = None  # No exponential decay term
+#     cutoff0 = np.min([2000,np.nanmax(new_model_col)/2.,10*np.nanmax(np.abs(data_col*bkg_bad_pixels_col))])
+#     # print(cutoff0,[2000,np.nanmax(new_model_col)/2.,10*np.nanmax(np.abs(data_col*bkg_bad_pixels_col))])
+#     # cutoff0=3
+#     power0 = 1.8
+#     kernel_radius=1024
+#
+#     paras0 = [cutoff0]  # your initial guesses
+#     cutoff = paras0
+#     paras0 = np.array(paras0)
+#     simplex_init_steps = [cutoff0 / 2.]
+#     initial_simplex = np.concatenate([paras0[None, :], paras0[None, :] + np.diag(simplex_init_steps)], axis=0)
+#
+#     result = minimize(_chi2_charge_transfer_col_cutoff_only, paras0, args=(data_col, bkg_bad_pixels_col, new_model_col,
+#                                                                tau,power0, kernel_radius), method='Nelder-Mead',
+#                       options={"maxiter": 1e2, "initial_simplex": initial_simplex, "disp": False})
+#     cutoff = result.x[0]
+#     print(result.nit, [cutoff],paras0)
+#     # if power < 1.0 or power > 3.0:
+#     #     return np.zeros(np.shape(data_col))
+#     charge_transfer_model_col = _charge_transfer_model_col_fun(new_model_col, tau=tau, cutoff=cutoff, power=power0,kernel_radius=kernel_radius)
+#     denum = np.nansum((charge_transfer_model_col * bkg_bad_pixels_col) ** 2)
+#     if denum > 0:
+#         scale = np.nansum(data_col * charge_transfer_model_col) / denum
+#     else:
+#         scale = 0.0
+#
+#     return scale * charge_transfer_model_col,[cutoff, power0]
+
+def fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,rn_noise,poisson_noise,targetname=None,mppool=None,use_stpsf=False,use_breadspsf=True,init_centroid=None):
     im = copy(rate_dataobj.data)
     wvs = rate_dataobj.wavelengths
     ny_ori, nx_ori = im.shape
@@ -540,7 +670,7 @@ def fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,targetname=None,mppo
                                                            init_centroid=init_centroid,
                                                            IWA=IWA, OWA=OWA, out_filename=_fitpsf_filename,
                                                            overwrite=False, mppool=mppool, debug_wv_range=None,
-                                                               poly_deg_coords=0)
+                                                               poly_deg_coords=1)
 
     # reinterpolate back onto the data point cloud sampling (instead of "regwvs")
     w_ori_new = np.full((ny_hd, nx_ori), np.nan)
@@ -551,88 +681,231 @@ def fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,targetname=None,mppo
         new_model[rowid, :] = np.interp(w_ori_new[rowid, :],rate_dataobj.wv_sampling,bestfit_model[rowid, :],
                                         left=np.nan, right=np.nan)
 
+    noise_ratio = poisson_noise/rn_noise*bkg_bad_pixels
+    # kernel = np.ones((50,50))
+    # noise_ratio_smooth = correlate(noise_ratio, kernel, mode='constant', cval=np.nan)
+    # noise_ratio_smooth = generic_filter(noise_ratio,
+    #                                     function = np.nanmedian,
+    #                                     size = 50,  # equivalent to your 50x50 kernel
+    #                                     mode = 'constant',
+    #                                     cval = np.nan)  # pad edges with NaN (same as your original)
+
+    # convolve handles NaNs natively - NaN pixels are interpolated over
+    noise_ratio_smooth = convolve(noise_ratio, Box2DKernel(10), boundary='fill', fill_value=np.nan)
+    noise_ratio_vec = np.nanmax(noise_ratio_smooth, axis=0)
+    window_size = 100
+    noise_ratio_vec_smooth = generic_filter(noise_ratio_vec, np.nanmedian, size=window_size)
+    # plt.figure()
+    # plt.imshow(w_ori_new,origin="lower")
+    # plt.figure()
+    # plt.imshow(new_model,origin="lower")
+    # plt.figure()
+    # plt.imshow(bestfit_model,origin="lower")
+    # plt.show()
 
     data = im * bkg_bad_pixels
     charge_transfer_model = np.zeros(data.shape)
 
-    if 1 or  mppool is None:
-        # for colid in range(data.shape[1]):
-        # for colid in np.arange(397,398):
-        for colid in np.arange(374,375):
-            print(colid)
-            _args = (data[:,colid],bkg_bad_pixels[:,colid],new_model[:,colid])
-            charge_transfer_model_col = _task_charge_transfer_nirspec_col(_args)
+    bestfit_paras_arr = np.full([2,data.shape[1]], np.nan)
+    if mppool is None:
+        for colid in range(data.shape[1]):
+        # for colid in [484]:
+            _args = (data[:,colid],bkg_bad_pixels[:,colid],new_model[:,colid],noise_ratio_vec_smooth[colid])
+            charge_transfer_model_col,paras = _task_charge_transfer_nirspec_col(_args)
             charge_transfer_model[:,colid] = charge_transfer_model_col
-        for colid in np.arange(397,398):
-            print(colid)
-            _args = (data[:,colid],bkg_bad_pixels[:,colid],new_model[:,colid])
-            charge_transfer_model_col = _task_charge_transfer_nirspec_col(_args)
-            charge_transfer_model[:,colid] = charge_transfer_model_col
+            print(colid,paras)
+            bestfit_paras_arr[:,colid] = paras
+            # bestfit_paras_arr[0,:] => cutoff for each column
+            # bestfit_paras_arr[1,:] => power
     else:
         results = list(tqdm(
-            mppool.imap(_task_charge_transfer_nirspec_col,zip(data.T,bkg_bad_pixels.T,new_model.T)),
+            mppool.imap(_task_charge_transfer_nirspec_col,zip(data.T,bkg_bad_pixels.T,new_model.T,noise_ratio_vec_smooth)),
             total=data.shape[1]
         ))
 
         for colid, col_result in enumerate(results):
-            charge_transfer_model[:, colid] = col_result
+            charge_transfer_model[:, colid] = col_result[0]
+            bestfit_paras_arr[:, colid] = col_result[1]
 
-    plt.figure(figsize=(12,8))
-    plt.plot(data[:,374], label="data",linestyle="--")
-    plt.plot(charge_transfer_model[:,374], label="charge_transfer_model",linestyle="--")
-    plt.plot(data[:,374]-charge_transfer_model[:,374], label="res",linestyle="--")
-    plt.legend()
-    plt.figure(figsize=(12,8))
-    plt.plot(data[:,397], label="data",linestyle="--")
-    plt.plot(charge_transfer_model[:,397], label="charge_transfer_model",linestyle="--")
-    plt.plot(data[:,397]-charge_transfer_model[:,397], label="res",linestyle="--")
-    plt.legend()
 
-    plt.figure(figsize=(12,8))
-    plt.plot(im[:,397], label="ori im")
-    plt.plot(new_model[::3,397], label="psf model")
-    plt.plot(data[:,397], label="data",linestyle="--")
-    plt.plot(charge_transfer_model[:,397], label="charge_transfer_model",linestyle="--")
-    plt.legend()
-    plt.show()
+
+    # for colid in [484]:
+    #     plt.figure(figsize=(12,8))
+    #     plt.title(f"colid: {colid}")
+    #     plt.plot(im[:,colid], label="im",linestyle="-")
+    #     plt.plot(data[:,colid], label="data",linestyle="--")
+    #     plt.plot(new_model[::3,colid], label="new_model",linestyle="-")
+    #     plt.plot(charge_transfer_model[:,colid], label="charge_transfer_model",linestyle="--")
+    #     plt.plot(data[:,colid]-charge_transfer_model[:,colid], label="res",linestyle="--")
+    #     plt.legend()
+    # plt.figure()
+    # plt.plot(noise_ratio_vec_smooth)
+    # print("coucou3")
+    # plt.show()
+    if 0:
+        cutoff_vec = copy(bestfit_paras_arr[0, :])
+        power_vec = copy(bestfit_paras_arr[1, :])
+        if "nrs1" in detector:
+            cutoff_vec[0:300] = np.nan
+            cutoff_vec[1900::] = np.nan
+            power_vec[0:300] = np.nan
+            power_vec[1900::] = np.nan
+        else:
+            cutoff_vec[0:150] = np.nan
+            cutoff_vec[(2048-300)::] = np.nan
+            power_vec[0:150] = np.nan
+            power_vec[(2048-300)::] = np.nan
+        window_size = 30
+        cutoff_smooth = generic_filter(cutoff_vec, np.nanmedian, size=window_size)
+        power_smooth = generic_filter(power_vec, np.nanmedian, size=window_size)
+        if "nrs1" in detector:
+            cutoff_smooth[0:300] = np.full_like(cutoff_smooth[0:300],cutoff_smooth[300])
+            cutoff_smooth[1900::] = np.full_like(cutoff_smooth[1900::],cutoff_smooth[1900-1])
+            power_smooth[0:300] = np.full_like(power_smooth[0:300],power_smooth[300])
+            power_smooth[1900::] = np.full_like(power_smooth[1900::],power_smooth[1900-1])
+        else:
+            cutoff_smooth[0:150] = np.full_like(cutoff_smooth[0:150],cutoff_smooth[150])
+            cutoff_smooth[(2048-300)::] = np.full_like(cutoff_smooth[(2048-300)::],cutoff_smooth[2048-300-1])
+            power_smooth[0:150] = np.full_like(power_smooth[0:150],power_smooth[150])
+            power_smooth[(2048-300)::] = np.full_like(power_smooth[(2048-300)::],power_smooth[2048-300-1])
+        plt.figure()
+        plt.subplot(2,1,1)
+        plt.title("cutoff")
+        plt.plot(bestfit_paras_arr[0,:])
+        plt.plot(cutoff_smooth)
+        plt.subplot(2,1,2)
+        plt.title("power")
+        plt.plot(bestfit_paras_arr[1,:])
+        plt.plot(power_smooth)
+        # plt.show()
+        for colid in range(data.shape[1]):
+            if np.nansum(new_model[:,colid]) == 0 or np.nansum(bkg_bad_pixels[:,colid]) == 0:
+                charge_transfer_model[:,colid] = np.zeros(np.shape(data[:,colid]))
+            print(colid)
+            cutoff,power = cutoff_smooth[colid],power_smooth[colid]
+            charge_transfer_model_col = _charge_transfer_model_col_fun(new_model[:,colid], tau=None, cutoff=cutoff, power=power,kernel_radius=1024)
+            denum = np.nansum((charge_transfer_model_col * bkg_bad_pixels[:,colid]) ** 2)
+            if denum > 0:
+                scale = np.nansum(data[:,colid]* bkg_bad_pixels[:,colid] * charge_transfer_model_col) / denum
+            else:
+                scale = 0.0
+            charge_transfer_model[:,colid] = scale * charge_transfer_model_col
+
+    # for colid in [500]:
+    #     plt.figure(figsize=(12,8))
+    #     plt.title(f"colid: {colid}")
+    #     plt.plot(im[:,colid], label="im",linestyle="-")
+    #     plt.plot(data[:,colid], label="data",linestyle="--")
+    #     plt.plot(new_model[::3,colid], label="new_model",linestyle="-")
+    #     plt.plot(charge_transfer_model[:,colid], label="charge_transfer_model",linestyle="--")
+    #     plt.plot(data[:,colid]-charge_transfer_model[:,colid], label="res",linestyle="--")
+    #     plt.legend()
+
+    # model_too_low_to_matter = np.where(np.nanmax(charge_transfer_model/rn_noise,axis=0)<100)[0]
+    # charge_transfer_model[:,model_too_low_to_matter] = 0
+
+    # print("ratio",,np.nanmax(new_model[:,750],axis=0),np.nanmax(rn_noise[:,750],axis=0))
+    # print("ratio",np.nanmax(charge_transfer_model[:,270]/rn_noise[:,270],axis=0),np.nanmax(new_model[:,270],axis=0),np.nanmax(rn_noise[:,270],axis=0))
+
+    # for colid in [100,1240,1242]:
+    #     plt.figure(figsize=(12,8))
+    #     plt.title(f"colid: {colid}")
+    #     plt.plot(im[:,colid], label="im",linestyle="-")
+    #     plt.plot(data[:,colid], label="data",linestyle="--")
+    #     plt.plot(new_model[::3,colid], label="new_model",linestyle="-")
+    #     plt.plot(charge_transfer_model[:,colid], label="charge_transfer_model",linestyle="--")
+    #     plt.plot(data[:,colid]-charge_transfer_model[:,colid], label="res",linestyle="--")
+    #     plt.legend()
+
+    # print("coucou2")
+    # plt.figure()
+    # plt.subplot(2,1,1)
+    # plt.title("cutoff")
+    # plt.plot(bestfit_paras_arr[0,:])
+    # plt.subplot(2,1,2)
+    # plt.title("power")
+    # plt.plot(bestfit_paras_arr[1,:])
+    #
+
+    # plt.figure(figsize=(12,8))
+    # plt.plot(im[:,459], label="ori im")
+    # plt.plot(new_model[::3,459], label="psf model")
+    # plt.plot(data[:,459], label="data",linestyle="--")
+    # plt.plot(charge_transfer_model[:,459], label="charge_transfer_model",linestyle="--")
+    # plt.legend()
+    # plt.show()
+    # exit()
 
     return charge_transfer_model
 
-def _get_bkg_bad_pixels(rate_dataobj,cal_im,dq_rate):
+def _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map,dq_rate,extend_sat=1):
+    # kernel = np.ones((3, 3))
+    # mask = copy(cal_trace_id_map)
+    # mask[np.where(~np.isfinite(cal_trace_id_map))] = 0
+    # mask = correlate(mask, kernel, mode='constant', cval=0.0)
+    # mask[np.where(mask==0)] = np.nan
+
+    # plt.subplot(1,2,1)
+    # plt.imshow(cal_trace_id_map,origin="lower")
+    # plt.subplot(1,2,2)
+    # plt.imshow(mask,origin="lower")
+    # plt.show()
 
     detector = rate_dataobj.priheader['DETECTOR'].strip().lower()
     im = rate_dataobj.data
     noise = rate_dataobj.noise
 
-    cal_mask = np.ones(cal_im.shape)
-    cal_mask[np.where(np.isnan((cal_im)))] = np.nan
-
     # Simplifying bad pixel map following convention in this package as: nan = bad, 1 = good
     bkg_bad_pixels = np.full(rate_dataobj.data.shape, np.nan)  # array full of nans
     # We select only the background pixels:
-    bkg_bad_pixels[np.where(np.isnan(cal_mask))] = 1  # every pixel that is not in a cal slice is actually good here
+    bkg_bad_pixels[np.where(np.isnan(cal_trace_id_map))] = 1  # every pixel that is not in a cal slice is actually good here
     # Pixels marked as "do not use" are marked as bad (nan = bad, 1 = good):
-    bkg_bad_pixels[np.where(untangle_dq(dq_rate, verbose=True)[0, :, :])] = np.nan
+    untangle_dq_rate = untangle_dq(dq_rate, verbose=True)
+    do_not_use_dq_rate = untangle_dq_rate[0, :, :]
+    saturated_dq_rate = untangle_dq_rate[1, :, :]
+    bkg_bad_pixels[np.where(do_not_use_dq_rate)] = np.nan
     bkg_bad_pixels[np.where(np.isnan(im))] = np.nan
     # Removing any data with zero noise
     where_zero_noise = np.where(noise == 0)
     noise[where_zero_noise] = np.nan
     bkg_bad_pixels[where_zero_noise] = np.nan
 
+
+    if "nrs1" in detector:
+        finite_mask = np.isfinite(cal_trace_id_map[:, 0:450])
+        has_finite = finite_mask.any(axis=1)
+        # argmax on bool finds the first True (leftmost finite)
+        id_to_mask = np.argmax(finite_mask, axis=1)  # shape (nrows,)
+        col_idx = np.arange(450)
+        mask2d = col_idx[None, :] < id_to_mask[:, None]  # shape (nrows, 450)
+        mask2d &= has_finite[:, None]
+        bkg_bad_pixels[:, 0:450][mask2d] = np.nan
+
+    elif "nrs2" in detector:
+        finite_mask = np.isfinite(cal_trace_id_map[:, 1550:])
+        has_finite = finite_mask.any(axis=1)
+        # flip to find last True via argmax on reversed array
+        id_to_mask = (finite_mask.shape[1] - 1) - np.argmax(finite_mask[:, ::-1], axis=1)
+        col_idx = np.arange(finite_mask.shape[1])
+        mask2d = col_idx[None, :] > id_to_mask[:, None]
+        mask2d &= has_finite[:, None]
+        bkg_bad_pixels[:, 1550:][mask2d] = np.nan
+
     # Extend the slices masks to the edge of the detector, because there is still real flux there at the edge of the spectral filter.
     # There is some hard coded stuff here, but hopefully nothing too dangerous.
-    if "nrs1" in detector:
-        for rowid in range(im.shape[0]):
-            finite_ids = np.where(np.isfinite(cal_mask[rowid, 0:450]))[0]
-            if len(finite_ids) != 0:
-                id_to_mask = np.min(finite_ids)
-                bkg_bad_pixels[rowid, 0:id_to_mask] = np.nan
-    elif "nrs2" in detector:
-        for rowid in range(im.shape[0]):
-            finite_ids = np.where(np.isfinite(cal_mask[rowid, 1550::]))[0]
-            if len(finite_ids) != 0:
-                id_to_mask = np.max(finite_ids)
-                bkg_bad_pixels[rowid, 1550 + id_to_mask::] = np.nan
+    # if "nrs1" in detector:
+    #     for rowid in range(im.shape[0]):
+    #         finite_ids = np.where(np.isfinite(_cal_trace_id_map[rowid, 0:450]))[0]
+    #         if len(finite_ids) != 0:
+    #             id_to_mask = np.min(finite_ids)
+    #             bkg_bad_pixels[rowid, 0:id_to_mask] = np.nan
+    # elif "nrs2" in detector:
+    #     for rowid in range(im.shape[0]):
+    #         finite_ids = np.where(np.isfinite(_cal_trace_id_map[rowid, 1550::]))[0]
+    #         if len(finite_ids) != 0:
+    #             id_to_mask = np.max(finite_ids)
+    #             bkg_bad_pixels[rowid, 1550 + id_to_mask::] = np.nan
+
 
     # identify additional bad pixels from sliding median window and sigma clipping
     mad_threshold = 5
@@ -644,74 +917,27 @@ def _get_bkg_bad_pixels(rate_dataobj,cal_im,dq_rate):
         new_badpix[rowid, np.where((row_data_masking > mad_threshold))[0]] = np.nan
     bkg_bad_pixels *= new_badpix
 
-    return bkg_bad_pixels
+    # plt.figure()
+    # plt.imshow(bkg_bad_pixels,origin="lower")
+    # plt.figure()
+    # plt.imshow(saturated_dq_rate,origin="lower")
 
-def _charge_transfer_model_col_fun(psf_image_col, tau=None, cutoff=0, power=1, kernel_radius=256):
-    extra_charges = psf_image_col - cutoff
-    extra_charges[np.where((extra_charges < 0) | ~np.isfinite(extra_charges))] = 0.0
+    kernel = np.ones((2*extend_sat+1, 2*extend_sat+2))
+    mask = saturated_dq_rate.astype(float)
+    mask = correlate(mask, kernel, mode='constant', cval=0.0)
+    bkg_bad_pixels[np.where(mask!=0)] = np.nan
 
-    vecy = np.arange(3 * (kernel_radius * 2 + 1))
-    vecy -= vecy[np.size(vecy) // 2]
-    vecy = np.abs(vecy)
-    if tau is None:
-        kernel = 1 / (vecy ** power)
-    else:
-        kernel = np.exp(-vecy / (tau / np.log(2))) / (vecy ** power)
-    kernel[np.size(vecy) // 2] = 0.0
-
-    ny = np.size(extra_charges)
-    _charge_transfer_model = np.zeros(ny)
-
-    _charge_transfer_model = convolve1d(extra_charges, weights=kernel / np.nansum(kernel), mode='constant')
-
-    return _charge_transfer_model[::3]
-
-
-def _chi2_charge_transfer_col(paras, data_col, bad_pixels_col, new_model_col, tau, kernel_radius=1024):
-    cutoff, power = paras
-    if tau is not None and tau <= 0:
-        return np.inf
-    if cutoff < 0:
-        return np.inf
-    if power <= 0: #or power > 2.0
-        return np.inf
-    _charge_transfer_model = _charge_transfer_model_col_fun(new_model_col, tau=tau, cutoff=cutoff, power=power,
-                                                            kernel_radius=kernel_radius)
-    scale = np.nansum(data_col * _charge_transfer_model) / np.nansum((_charge_transfer_model * bad_pixels_col) ** 2)
-    res = data_col - scale * _charge_transfer_model
-    chi2 = np.nansum(res ** 2)
-    return chi2
-
-
-def _task_charge_transfer_nirspec_col(_args):
-    data_col, bkg_bad_pixels_col, new_model_col = _args
-    tau = None  # No exponential decay term
-    cutoff0 = 2000 #np.nanmax(new_model_col) / 10
-    power0 = 1.8
-    kernel_radius=1024
-
-    paras0 = [cutoff0, power0]  # your initial guesses
-    paras0 = np.array(paras0)
-    simplex_init_steps = [cutoff0 / 2., power0 / 5.]
-    initial_simplex = np.concatenate([paras0[None, :], paras0[None, :] + np.diag(simplex_init_steps)], axis=0)
-
-    result = minimize(_chi2_charge_transfer_col, paras0, args=(data_col, bkg_bad_pixels_col, new_model_col,
-                                                               tau, kernel_radius), method='Nelder-Mead',
-                      options={"maxiter": 1e2, "initial_simplex": initial_simplex, "disp": False})
-    cutoff, power = result.x
-    print(result.nit, cutoff, power,paras0)
-    charge_transfer_model_col = _charge_transfer_model_col_fun(new_model_col, tau=tau, cutoff=cutoff, power=power,kernel_radius=kernel_radius)
-    # charge_transfer_model_col = _charge_transfer_model_col_fun(new_model_col, tau=tau, cutoff=cutoff0, power=power0,kernel_radius=kernel_radius)
-    scale = np.nansum(data_col * charge_transfer_model_col) / np.nansum((charge_transfer_model_col * bkg_bad_pixels_col) ** 2)
-
-    # plt.plot(scale * charge_transfer_model_col)
+    # plt.figure()
+    # plt.imshow(mask,origin="lower")
+    # plt.figure()
+    # plt.imshow(bkg_bad_pixels,origin="lower")
     # plt.show()
 
-    return scale * charge_transfer_model_col
+    return bkg_bad_pixels
 
 def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
                                 clean_1f_noise=True,model_charge_transfer=False,
-                              utils_dir=None, init_centroid=None,mppool=None,targetname=None):
+                              utils_dir=None, init_centroid=None,mppool=None,targetname=None,extend_sat=2):
     """
     Remove the 1/f noise  and/or the charge transferfrom rate files of the NIRSpec IFU.
     Inspired by NSClean but different implementation using column-wise splines.
@@ -765,28 +991,40 @@ def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
     im = hdul["SCI"].data
     new_rate_im = copy(im)
     noise = hdul["ERR"].data
+    rn_noise = np.sqrt(hdul["VAR_RNOISE"].data)
+    poisson_noise = np.sqrt(hdul["VAR_POISSON"].data)
     dq_rate = hdul["DQ"].data
     ny, nx = im.shape
 
     rate_dataobj = JWSTNirspec_cal(cal_filename, utils_dir=utils_dir)
-    cal_im = copy(rate_dataobj.data)
+    preproc_task_list = [["compute_coordinates_arrays", {'targname': targetname}, True, True]]
+    rate_dataobj.run_preproc_list(preproc_task_list=preproc_task_list)
+    cal_trace_id_map = rate_dataobj.trace_id_map
+    # cal_im = copy(rate_dataobj.data)
     rate_dataobj.data = copy(im)
     rate_dataobj.noise = noise
 
-    # bkg_bad_pixels = _get_bkg_bad_pixels(rate_dataobj,cal_im, dq_rate)
-    _tmp = "/stow/jruffio/data/JWST/nirspec/bet_Pic/obsnum07_8063/G395H_utils/bad_pixels.npy"
-    # np.save(_tmp,bkg_bad_pixels)
-    bkg_bad_pixels = np.load(_tmp)
+    _tmp = os.path.join(rate_dataobj.utils_dir,os.path.basename(rate_dataobj.filename)+"_bad_pixels_tmp.npy")
+    if not os.path.exists(_tmp):
+        bkg_bad_pixels = _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map, dq_rate,extend_sat=extend_sat)
+        np.save(_tmp,bkg_bad_pixels)
+    else:
+        bkg_bad_pixels = np.load(_tmp)
 
     priheader.add_history('Processed with BREADS (https://github.com/jruffio/breads)')
 
     if model_charge_transfer:
-        charge_transfer_model = fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,targetname=targetname,mppool=mppool,
+        charge_transfer_model = fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,rn_noise,poisson_noise,targetname=targetname,mppool=mppool,
                                                             use_stpsf=False,use_breadspsf=True,init_centroid=init_centroid)
         priheader.add_history('Subtracted charge transfer')
 
         new_rate_im -= charge_transfer_model
 
+    # plt.figure()
+    # plt.imshow(charge_transfer_model)
+    # plt.figure()
+    # plt.imshow(new_rate_im)
+    # plt.show()
     if clean_1f_noise:
         model_1f_noise = fit_1f_noise_nirspec(new_rate_im,noise,bkg_bad_pixels,N_nodes,mppool=mppool)
         priheader.add_history('Applied 1/f noise subtraction using column-wise spline')
@@ -808,7 +1046,8 @@ def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
     return new_rate_file
 
 def clean_rate_nirspec(rate_files, stage2_dir, output_dir, N_nodes=40, clean_1f_noise=True,model_charge_transfer=False,
-                    utils_dir=None, init_centroid=None, overwrite=False, save_plots=True,targetname=None, mppool=None):
+                    utils_dir=None, init_centroid=None, overwrite=False, save_plots=True,targetname=None, mppool=None,
+                       extend_sat=2):
     """
     Remove the 1/f noise and optionally the charge transfer from rate files. The cleaned rate.fits files are saved in output_dir.
     An initial reduction of the rate.fits and cal.fits (stage 1 and 2) need to be available before running this function.
@@ -870,7 +1109,7 @@ def clean_rate_nirspec(rate_files, stage2_dir, output_dir, N_nodes=40, clean_1f_
         N_files_processed += 1
         clean_rate_nirspec_per_file(rate_file, stage2_dir, output_dir,N_nodes=N_nodes,
                                   clean_1f_noise=clean_1f_noise,model_charge_transfer=model_charge_transfer, utils_dir=utils_dir,
-                                  init_centroid=init_centroid,targetname=targetname, mppool=mppool)
+                                  init_centroid=init_centroid,targetname=targetname, mppool=mppool,extend_sat=extend_sat)
         # Print out the time benchmark
         time1 = time.perf_counter()
         print(f"\tNoise Clean Runtime so far: {time1 - time0:0.4f} seconds\n")
@@ -1000,7 +1239,7 @@ def recenter_coordinates_of_sequence_nirspec(cal_files, utils_dir,combined_contn
 
 
 def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnorm_spec_filename,fitpsf_filename_perframe_suffix,
-                                             init_centroid=None,
+                                           init_centroid=None,
                                              wv_sampling=None,
                                              mask_charge_transfer_radius=None,ra_dec_point_sources=None,
                                              IWA_init=0.0, OWA_init=1.0, frac_init_bandpass=0.005,
@@ -1012,7 +1251,38 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
                                              use_stpsf = True,
                                              use_breadspsf = None,
                                              poly_deg_coords = 2,
-                                            plot_combined = True):
+                                           plot_combined = True,
+                                           wv_min = None, wv_max = None,):
+    """
+
+        cal_files:
+        utils_dir:
+        combined_contnorm_spec_filename:
+        fitpsf_filename_perframe_suffix:
+        init_centroid:
+        wv_sampling:
+        mask_charge_transfer_radius:
+        ra_dec_point_sources:
+        IWA_init:
+        OWA_init:
+        frac_init_bandpass:
+        IWA:
+        OWA:
+        mppool:
+        overwrite:
+        targetname:
+        stis_spectrum:
+        use_stpsf:
+        use_breadspsf:
+        poly_deg_coords:
+        plot_combined:
+        wv_min : float
+            Don't include wavelength less than wv_min in the fit. If None, default is 10% of the bandpass mask on the edges.
+        wv_max : float
+            Don't include wavelength greater than wv_max in the fit. If None, default is 10% of the bandpass mask on the edges.
+
+    """
+
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
 
@@ -1037,6 +1307,16 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
                          ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": None,
                                                       "combined_contnorm_filename": combined_contnorm_spec_filename}],
                          ["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}]]
+
+    N_files_to_be_processed = 0
+    for filename in cal_files:
+        fitpsf_filename_perframe = os.path.join(utils_dir, os.path.basename(filename).replace(".fits",fitpsf_filename_perframe_suffix + ".fits"))
+        poly_centroid_filename = fitpsf_filename_perframe.replace(".fits", "_poly_centroid_IWA{0:.2f}_OWA{1:.2f}.txt".format(IWA,OWA))
+        poly_fluxcal_filename = fitpsf_filename_perframe.replace(".fits", "_poly_fluxcal_IWA{0:.2f}_OWA{1:.2f}.txt".format(IWA,OWA))
+        if overwrite or len(glob(poly_centroid_filename)) == 0:
+            N_files_to_be_processed +=1
+    if N_files_to_be_processed == 0:
+        return
 
     if plot_combined:
         fig = plt.figure(figsize=(12, 10))
@@ -1063,9 +1343,22 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
             dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir)
             dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
 
+            if init_centroid is None:
+                # Derive the first guess centrois from a narrow wavelength region
+                bandpass = dataobj.wv_sampling[-1] - dataobj.wv_sampling[0]
+                midwv = (dataobj.wv_sampling[-1] + dataobj.wv_sampling[0]) / 2.0
+                debug_wv_range = [midwv - frac_init_bandpass * bandpass, midwv + frac_init_bandpass * bandpass]
+                bestfit_paras, _, _, _ = fitpsf(dataobj,use_stpsf=use_stpsf, use_breadspsf=use_breadspsf,
+                                                IWA=IWA_init, OWA=OWA_init, out_filename=None,
+                                                overwrite=True, mppool=mppool, debug_wv_range=debug_wv_range,
+                                                poly_deg_coords=0)
+                _init_centroid = np.array([np.nanmedian(bestfit_paras[0, :, 2]), np.nanmedian(bestfit_paras[0, :, 3])])
+            else:
+                _init_centroid=  np.array(init_centroid)
+
             # Applying some rough coordinate correction before applying the masks
             if mask_charge_transfer_radius is not None or ra_dec_point_sources is not None:
-                dataobj.apply_coords_offset(_tmp_centroid)
+                dataobj.apply_coords_offset(_init_centroid)
 
             # Do some masking
             if mask_charge_transfer_radius is not None:
@@ -1078,27 +1371,16 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
 
             # undoing the rough coordinate correction because we don't want this to bias the centroid later
             if mask_charge_transfer_radius is not None or ra_dec_point_sources is not None:
-                dataobj.apply_coords_offset(-_tmp_centroid)
-
-            if init_centroid is None:
-                # Derive the first guess centrois from a narrow wavelength region
-                bandpass = dataobj.wv_sampling[-1] - dataobj.wv_sampling[0]
-                midwv = (dataobj.wv_sampling[-1] + dataobj.wv_sampling[0]) / 2.0
-                debug_wv_range = [midwv - frac_init_bandpass * bandpass, midwv + frac_init_bandpass * bandpass]
-                bestfit_paras, _, _, _ = fitpsf(dataobj,use_stpsf=use_stpsf, use_breadspsf=use_breadspsf,
-                                                IWA=IWA_init, OWA=OWA_init, out_filename=None,
-                                                overwrite=True, mppool=mppool, debug_wv_range=debug_wv_range,
-                                                poly_deg_coords=0)
-                init_centroid = (np.nanmedian(bestfit_paras[0, :, 2]), np.nanmedian(bestfit_paras[0, :, 3]))
-
+                dataobj.apply_coords_offset(-_init_centroid)
             ######
             # Fit the whole wavelength range
             bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=use_stpsf,use_breadspsf=use_breadspsf,
-                                                                   init_centroid=init_centroid,
+                                                                   init_centroid=_init_centroid,
                                                                    IWA=IWA, OWA=OWA, out_filename=fitpsf_filename_perframe,
                                                                    overwrite=False, mppool=mppool, debug_wv_range=None,
                                                                    stis_spectrum=stis_spectrum,
-                                                                   poly_deg_coords=poly_deg_coords)
+                                                                   poly_deg_coords=poly_deg_coords,
+                                                                   wv_min = wv_min, wv_max = wv_max)
 
             if plot_combined:
                 _med_bestfit_paras = np.nanmean(bestfit_paras, axis=0)
@@ -1146,6 +1428,140 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
         splitbasename = os.path.basename(cal_files[0]).split("_")
         out_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3] + fitpsf_filename_perframe_suffix + "_all_in_one.png")
         plt.savefig(out_filename, dpi=200)
+    plt.close('all')
+
+
+def breadsPSF_RDI_nirspec(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename,
+                          centroid_suffix,rdi_suffix="_RDI",
+                          ra_vec=None, dec_vec=None,
+                         wv_sampling=None,
+                         mask_charge_transfer_radius=None,ra_dec_point_sources=None,
+                         IWA=0.0, OWA=2.0,ann_width=0.5,
+                         mppool=None,
+                         overwrite=False,
+                         targetname=None,
+                         use_stpsf = True,
+                         use_breadspsf = None,
+                          load_pickle = True,
+                          save_pickle = True,
+                          ifucoords = False):
+
+    if not os.path.exists(utils_dir):
+        os.makedirs(utils_dir)
+
+    if use_breadspsf is not None:
+        use_stpsf = False
+
+    grating = fits.getheader(cal_files[0])['GRATING'].strip()
+    detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
+
+    if ra_vec is None:
+        ra_vec = np.arange(-2, 2, 0.05)
+    if dec_vec is None:
+        dec_vec = np.arange(-2, 2, 0.05)
+
+    if wv_sampling is None:
+        wv_sampling = default.wv_sampling_dict[grating][detector]
+
+    # Define a series of processing tasks to be performed on each input file.
+    # coords_filename = glob(fitpsf_filename.replace(".fits","_poly_centroid*.txt"))[0]
+    preproc_task_list = [["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}],
+                         ["compute_coordinates_arrays", {'targname': targetname}],
+                         ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": None,
+                                                      "combined_contnorm_filename": combined_contnorm_spec_filename}],
+                         ["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}]]
+
+    splitbasename = os.path.basename(cal_files[0]).split("_")
+    if ifucoords:
+        pickle_suffix = rdi_suffix + "_ifu_regwvs"
+    else:
+        pickle_suffix = rdi_suffix + "_sky_regwvs"
+    pickle_filename = os.path.join(utils_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+ pickle_suffix+".pkl")
+    if load_pickle and len(glob(pickle_filename)) >= 1:
+        RDI_combdataobj = JWSTNirspec_multiple_cals.load(pickle_filename)
+    else:
+        dataobj_list = []
+        residuals_list = []
+        for filename in cal_files:
+            dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir)
+            dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
+
+            coords_filename_filter = centroid_suffix + "_poly_centroid_*.txt"
+            coords_filename = glob(os.path.join(utils_dir,os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+            dataobj.apply_coords_offset(coords_filename = coords_filename)
+
+            # Do some masking
+            if mask_charge_transfer_radius is not None:
+                dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
+            # mask planets before computing the star spectrum
+            if ra_dec_point_sources is not None:
+                for ra_pl, dec_pl in ra_dec_point_sources:
+                    if "sky" in dataobj.breads_header['COORDS']:
+                        x_pl,y_pl = ra_pl, dec_pl
+                    elif "ifu" in dataobj.breads_header['COORDS']:
+                        _out = dataobj.get_ifu_coords(ras=ra_pl, decs=dec_pl)
+                        x_pl,y_pl = float(_out[0]),float(_out[1])
+                    where_pl = dataobj.where_point_source([x_pl / 1000., y_pl / 1000.], 0.16)
+                    dataobj.bad_pixels[where_pl] = np.nan
+
+            if ifucoords:
+                dataobj.set_coords2ifu()
+
+            rdi_filename_perframe = os.path.join(utils_dir,os.path.basename(filename).replace(".fits", rdi_suffix + ".fits"))
+            # if overwrite or len(glob(rdi_filename_perframe)) == 0:
+            ######
+            # Fit the whole wavelength range
+            # _debug_wv_range = [4.5, 4.51]
+            # IWA = 0.3
+            # OWA = 1.0
+            # ann_width = None
+            # print(IWA,OWA,ann_width)
+            bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=use_stpsf,use_breadspsf=use_breadspsf,
+                                                                   IWA=IWA, OWA=OWA, ann_width = ann_width,padding=0.05,
+                                                                   out_filename=rdi_filename_perframe,
+                                                                   overwrite=overwrite, mppool=None, debug_wv_range=None,
+                                                                   poly_deg_coords=0)
+            # exit()
+            # else:
+            #     with fits.open(rdi_filename_perframe) as hdulist:
+            #         residuals = hdulist['RESIDUAL'].data
+            residuals_list.append(residuals)
+
+            dataobj_list.append(dataobj)
+
+    combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
+    build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+"_cube"+rdi_suffix+"_nosub.fits")
+    # _mppool=None
+    _debug_wv_range = [4.5, 4.51]
+    _mppool = mppool
+    # _debug_wv_range=None
+    _overwrite = True
+    out = build_cube(combdataobj,ra_vec, dec_vec,
+               use_breadspsf = True,use_stpsf = False,
+               out_filename=build_cube_filename,overwrite=_overwrite,
+               mppool=_mppool, aper_radius=0.15,
+               debug_wv_range=_debug_wv_range, N_pix_min=None)
+
+    for dataobj,residuals in zip(dataobj_list,residuals_list):
+        dataobj.data = residuals
+    # combined data object
+    RDI_combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
+    if save_pickle:
+        RDI_combdataobj.save(suffix=pickle_suffix)
+
+    build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+"_cube"+rdi_suffix+".fits")
+    # _mppool=None
+    _debug_wv_range = [4.5, 4.51]
+    _mppool = mppool
+    # _debug_wv_range=None
+    _overwrite = True
+    out = build_cube(RDI_combdataobj,ra_vec, dec_vec,
+               use_breadspsf = True,use_stpsf = False,
+               out_filename=build_cube_filename,overwrite=_overwrite,
+               mppool=_mppool, aper_radius=0.15,
+               debug_wv_range=_debug_wv_range, N_pix_min=None)
+    # flux_cube, fluxerr_cube, ra_grid, dec_grid = out
+    return out
 
 ###########################################################################
 # Host Star PSF Subtraction 
@@ -1438,7 +1854,8 @@ def compute_starlight_subtraction(cal_files, utils_dir, wv_nodes=None, combined_
 def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_filename,
                       wv_nodes=None,x_nodes=None,y_nodes=None,save_pickle=False, load_pickle=False,
                       coords_filename_filter = None,numthreads=1,spline3d_suffix = "",
-                      centroid_per_frame=True, overwrite=False):
+                      centroid_per_frame=True, overwrite=False,mask_charge_transfer_radius=None,
+                      stamp_size = (0.2,0.2)):
 
     grating = fits.getheader(cal_files[0])['GRATING'].strip()
     detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
@@ -1446,11 +1863,11 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
         wv_nodes= default.wv_nodes_3D_dict[grating][detector]
     if x_nodes is None:
         x_nodes=default.x_nodes_3D_5x
-    if y_nodes:
+    if y_nodes is None:
         y_nodes=default.y_nodes_3D_5x
 
     splitbasename = os.path.basename(cal_files[0]).split("_")
-    pickle_filename = os.path.join(utils_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+ ".pkl")
+    pickle_filename = os.path.join(utils_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+ "_sky"+spline3d_suffix+".pkl")
     if load_pickle and len(glob(pickle_filename)) >= 1:
         combdataobj = JWSTNirspec_multiple_cals.load(pickle_filename)
     else:
@@ -1468,6 +1885,9 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
                 coords_filename = glob(os.path.join(utils_dir,os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
                 dataobj.apply_coords_offset(coords_filename = coords_filename)
 
+            if mask_charge_transfer_radius is not None:
+                dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
+
             dataobj_list.append(dataobj)
 
         # combined data object
@@ -1477,28 +1897,36 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
             coords_filename = glob(os.path.join(utils_dir,os.path.basename(combdataobj.filename).replace(".fits", coords_filename_filter)))[0]
             combdataobj.apply_coords_offset(coords_filename = coords_filename)
 
-        if save_pickle:
-            combdataobj.save()
+        combdataobj.default_filenames["compute_starspectrum_contnorm_3dspline"] = (
+            combdataobj.default_filenames["compute_starspectrum_contnorm_3dspline"].replace(".fits",spline3d_suffix + ".fits"))
+        combdataobj.default_filenames["compute_starsubtraction_3dspline"] = (
+            combdataobj.default_filenames["compute_starsubtraction_3dspline"].replace(".fits",spline3d_suffix + ".fits"))
 
-    combdataobj.default_filenames["compute_starspectrum_contnorm_3dspline"] = (
-        combdataobj.default_filenames["compute_starspectrum_contnorm_3dspline"].replace(".fits",spline3d_suffix+".fits"))
-    combdataobj.default_filenames["compute_starsubtraction_3dspline"] = (
-        combdataobj.default_filenames["compute_starsubtraction_3dspline"].replace(".fits",spline3d_suffix+".fits"))
+        if save_pickle:
+            combdataobj.save(filename=pickle_filename)
+
 
     if not overwrite and os.path.exists(combdataobj.default_filenames["compute_starsubtraction_3dspline"]):
         return combdataobj
 
     _out = combdataobj.reload_starspectrum_contnorm_3dspline()
-    if _out is None:
+    if overwrite or _out is None:
         _out = combdataobj.compute_starspectrum_contnorm_3dspline(save_utils=True,max_cores=numthreads,
                                                        wv_nodes=wv_nodes,
                                                        x_nodes=x_nodes,
-                                                       y_nodes=y_nodes)
+                                                       y_nodes=y_nodes,
+                                                       stamp_size = stamp_size)
     # new_wavelengths, combined_fluxes = _out[0],_out[1]
-    # new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline3d_paras,spline3d_paras_err,wv_nodes,x_nodes,y_nodes = _out
+    new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline3d_paras,spline3d_paras_err,wv_nodes,x_nodes,y_nodes = _out
+    # exit()
 
-    _out = combdataobj.compute_starsubtraction_3dspline(save_utils=True,max_cores=numthreads,only_identify_badpix=True)
-    # subtracted_im, spline_cont0, spline3d_paras, spline3d_paras_err, wv_nodes, x_nodes, y_nodes = _out
+    _out = combdataobj.compute_starsubtraction_3dspline(save_utils=True,max_cores=numthreads,iterative=True,
+                                                        threshold_badpix=10,only_identify_badpix=True)
+    subtracted_im, spline_cont0, spline3d_paras, spline3d_paras_err, wv_nodes, x_nodes, y_nodes = _out
+
+    # plt.imshow(spline3d_paras[2,:,:],origin="lower")
+    # plt.colorbar()
+    # plt.show()
 
     return combdataobj
 
@@ -1508,7 +1936,8 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
 
 
 def run_complete_stage1_2_nirspec(uncal_files, output_root_dir, utils_dir, overwrite=False,numthreads=1,
-                          clean_1f_noise = True, model_charge_transfer=False,mppool=None,targetname=None):
+                          clean_1f_noise = True, model_charge_transfer=False,mppool=None,targetname=None,
+                                  extend_sat=2):
     """
     Overarching top-level function to invoke stage1, stage2, 1/f noise cleaning code on rate maps, and stage2 again with cleaned rate maps.
 
@@ -1547,7 +1976,8 @@ def run_complete_stage1_2_nirspec(uncal_files, output_root_dir, utils_dir, overw
             # Subtract charge transfer
             _rate_files = clean_rate_nirspec(_rate_files, stage2_outdir, stage1_clean_outdir, N_nodes=40,utils_dir=utils_dir,
                                              overwrite=overwrite, save_plots=True,mppool=mppool,targetname=targetname,
-                                             clean_1f_noise=clean_1f_noise,model_charge_transfer=model_charge_transfer)
+                                             clean_1f_noise=clean_1f_noise,model_charge_transfer=model_charge_transfer,
+                                             extend_sat=extend_sat)
 
             cal_files[grating] = run_stage2_nirspec(_rate_files, stage2_clean_outdir, skip_cubes=True,
                                                    overwrite=overwrite, TA=False, cleanflicker_skip=False, save_plots=True)

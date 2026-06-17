@@ -1,6 +1,8 @@
 import itertools
 import sys
 import numpy as np
+from glob import glob
+import os
 
 import astropy.io.fits as pyfits
 import matplotlib.pyplot as plt
@@ -30,25 +32,30 @@ def _build_cube_task(inputs):
         Complex nested bunch of stuff... TODO figure out and document
 
     """
-    X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min, ifu_name = inputs
+    X, Y, Z, Zerr, Zbp, wv_sampling, psf_interp_paras, wv_id, wv,  ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name = inputs
 
     psf_interp = _interp_psf(psf_interp_paras)
 
-    outs = []
-    for ra_id, ra in enumerate(ra_vec):
-        for dec_id, dec in enumerate(dec_vec):
-
+    ny,nx = ifux_grid.shape
+    mfflux_arr = np.full_like(ifux_grid,np.nan)
+    mffluxerr_arr = np.full_like(ifux_grid,np.nan)
+    for k in range(ny):
+        for l in range(nx):
+            ra, dec = ifux_grid[k,l],ifuy_grid[k,l]
             R = np.sqrt((X - ra) ** 2 + (Y - dec) ** 2)
-            if ifu_name == 'nirspec':
-                Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
-                where_finite = np.where(np.isfinite(Zbp) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
-            elif ifu_name == 'miri':
-                where_finite = np.where(np.isfinite(Zbp) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
-            else:
-                raise ValueError('ifu_name must be either nirspec or miri')
+            # if ifu_name == 'nirspec':
+            #     Zerr_masking = Zerr / median_abs_deviation(Zerr[np.where(np.isfinite(Zerr))])
+            #     where_finite = np.where(np.isfinite(Zbp) * (Zerr_masking < 5e1) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
+            # elif ifu_name == 'miri':
+            #     where_finite = np.where(np.isfinite(Zbp) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
+            # else:
+            #     raise ValueError('ifu_name must be either nirspec or miri')
+
+            where_finite = np.where(np.isfinite(Zbp) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
 
             if np.size(where_finite[0]) < N_pix_min:
-                outs.append([ra_id, dec_id, np.nan, np.nan]) #changed from continue
+                mfflux_arr[k,l] = np.nan
+                mffluxerr_arr[k,l] = np.nan
             else:
                 X_fin = X[where_finite]
                 Y_fin = Y[where_finite]
@@ -63,8 +70,10 @@ def _build_cube_task(inputs):
 
                 res = Z_fin - mfflux * M
                 noise_factor = np.nanstd(res / Zerr_fin)
-                outs.append([ra_id, dec_id, mfflux, mffluxerr * noise_factor])
-    return outs
+                mfflux_arr[k,l] = mfflux
+                mffluxerr_arr[k,l] = mffluxerr * noise_factor
+
+    return mfflux_arr,mffluxerr_arr
 
 def _interp_psf(paras):
     """ Interpolate PSF
@@ -73,7 +82,7 @@ def _interp_psf(paras):
     ----------
     paras : tuple
         Contains the following:
-        linear_interp, wepsf, wifuX, wifuY, wv_id, east2V2_deg
+        linear_interp, wepsf, wifuX, wifuY, wv_id, flipx
 
 
     Returns
@@ -83,9 +92,9 @@ def _interp_psf(paras):
         specified coordinates.
 
     """
-    linear_interp, wepsf, wifuX, wifuY, wv_id, east2V2_deg = paras
+    linear_interp, wepsf, wifuX, wifuY, wv_id, flipx = paras
     wX, wY, wZ = wifuX.ravel(), wifuY.ravel(), wepsf.flatten()
-    wX, wY = rotate_coordinates(wX, wY, -east2V2_deg, flipx=True)
+    wX, wY = rotate_coordinates(wX, wY, 0, flipx=flipx)
 
     wherepsffinite = np.where(np.isfinite(wZ))
     wX, wY, wZ = wX[wherepsffinite], wY[wherepsffinite], wZ[wherepsffinite]
@@ -96,139 +105,187 @@ def _interp_psf(paras):
 
     return webbpsf_interp
 
-def build_cube(combdataobj, psfs, psfX, psfY, ra_vec, dec_vec, out_filename=None,
-                    linear_interp=True, mppool=None, aper_radius=0.5,
-                    debug_init=None, debug_end=None, N_pix_min=None):
-    """ Build a datacube, based on the forward modeling processed results
+def build_cube(dataobj,
+               x_vec, y_vec,
+               use_stpsf = False, use_breadspsf = None,
+               psfs=None, psfX = None, psfY = None,flipx=False,
+               out_filename=None,overwrite=False,
+               linear_interp=True, mppool=None, aper_radius=0.5,
+               debug_wv_range=None, N_pix_min=None):
+    """ Build a datacube by fitting a PSF at every wavelength and location
 
     Parameters
     ----------
-    combdataobj
-    psfs
-    psfX
-    psfY
-    ra_vec
-    dec_vec
-    out_filename
-    linear_interp : bool
-        Use linear interpolation (TODO document what is being interpolated ?)
-    mppool : multiprocessing.Pool or None
-        if a multiprocessing Pool is supplied, the calculation will use that pool to run in parallel.
-        Otherwise it will run in serial on a single process.
-    aper_radius : float
-        Aperture radius
-    debug_init : int or None
-        Minimum wavelength image to limit the calculation. Optional, for debugging.
-    debug_end : int or None
-        Maximum wavelength image to limit the calculation. Optional, for debugging.
-    N_pix_min
 
     Returns
     -------
     flux_cube, fluxerr_cube, ra_grid, dec_grid
 
     """
-    if "regwvs" not in combdataobj.coords:
-        raise Exception("This data object needs to be interpolated on regular wavelength grid. See dataobj.compute_interpdata_regwvs")
+    if 'MJy/sr' not in dataobj.breads_header["DATAUNIT"]:
+        raise Exception("Input data should be MJy/sr, not "+dataobj.breads_header["DATAUNIT"])
 
-    if mppool is not None:
-        print('Setting parallel_flag = True')
-        parallel_flag = True
+    if "regwvs" not in dataobj.breads_header['COORDS']:
+        raise ValueError("Data needs to be interpolated on a regular wavelength grid. Please run compute_interpdata_regwvs().")
+
+    if out_filename is not None and not overwrite:
+        if len(glob(out_filename)) >= 1:
+            print("File found. Not recomputing. Instead loading "+out_filename)
+            with pyfits.open(out_filename) as hdul:
+                flux_cube = hdul["FLUX"].data
+                fluxerr_cube = hdul["FLUXERR"].data
+                ra_grid = hdul["RA"].data
+                dec_grid = hdul["DEC"].data
+                wv_sampling = hdul["WAVE"].data
+            return flux_cube, fluxerr_cube, ra_grid, dec_grid,wv_sampling
+
+
+    if use_stpsf:
+        webbpsf_reload = dataobj.reload_webbpsf_model()
+        if webbpsf_reload is None:
+            print("Did not find a STPSF, computing it now, but it will take a while.")
+            webbpsf_reload = dataobj.compute_webbpsf_model(save_utils=True, mppool= mppool)
+        _, _, psfs, _, webbpsf_x, webbpsf_y, _, _ = webbpsf_reload
+        psfX = np.tile(webbpsf_x[None, :, :], (psfs.shape[0], 1, 1))
+        psfY = np.tile(webbpsf_y[None, :, :], (psfs.shape[0], 1, 1))
+        flipx = True
+        out_units = "MJy"
+    elif use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
+        BREADS_DATA_ENV = os.getenv('BREADS_DATA')
+        if isinstance(use_breadspsf, bool) and use_breadspsf:
+            grating = dataobj.priheader['GRATING'].strip()
+            detector = dataobj.priheader['DETECTOR'].strip().lower()
+            if os.path.exists(os.path.join(BREADS_DATA_ENV, "BreadsPSF",f"HD163466_J1757132_{grating}_{detector}.fits")):
+                use_breadspsf_str = f"HD163466_J1757132_{grating}_{detector}.fits"
+            elif os.path.exists(os.path.join(BREADS_DATA_ENV, "BreadsPSF",f"J1757132_{grating}_{detector}.fits")):
+                use_breadspsf_str = f"J1757132_{grating}_{detector}.fits"
+            else:
+                raise Exception(f"Adequate BreadsPSFs files not found in {BREADS_DATA_ENV}. Please download these files. ")
+        elif isinstance(use_breadspsf, str):
+            use_breadspsf_str = use_breadspsf
+        breadsPSF_path = os.path.join(BREADS_DATA_ENV, "BreadsPSF",use_breadspsf_str)
+        hdulist = pyfits.open(breadsPSF_path)
+        psfs = hdulist['EPSFS'].data
+        psf_X = hdulist['X'].data
+        psf_Y = hdulist['Y'].data
+        _wv_sampling = hdulist['WAVE'].data
+        if not hasattr(dataobj, "wv_sampling"):
+            if not np.allclose(dataobj.wv_sampling, _wv_sampling):
+                raise Exception("BreadsPSF wavelength sampling is different from the one in the data object.")
+        psfX = np.tile(psf_X[None, :, :], (psfs.shape[0], 1, 1))
+        psfY = np.tile(psf_Y[None, :, :], (psfs.shape[0], 1, 1))
+        units_str = hdulist['EPSFS'].header["BUNIT"].strip()
+        hdulist.close()
+        flipx = False
+        if units_str == "[MJy/sr]/[1MJy]":
+            out_units = "MJy"
+        else:
+            out_units = "Unknown"
+
+
+
+    # only process frames with wavelength index between debug_init and debug_end
+    if debug_wv_range is None:
+        # debug_wv_range = (dataobj.wv_sampling[0],dataobj.wv_sampling[-1])
+        debug_init = 0
+        debug_end = np.size(dataobj.wv_sampling)
     else:
-        print('Setting parallel_flag = False')
-        parallel_flag = False
+        debug_init = np.searchsorted(dataobj.wv_sampling, debug_wv_range[0], side='right')
+        debug_end = np.searchsorted(dataobj.wv_sampling, debug_wv_range[1], side='left')
+        print("Debugging mode. Only fitting wavelengths between:", debug_wv_range)
 
-    ifu_name = combdataobj.ifu_name
 
-    wv_sampling = combdataobj.wv_sampling
-    east2V2_deg = combdataobj.east2V2_deg
-    all_interp_ra = combdataobj.dra_as_array
-    all_interp_dec = combdataobj.ddec_as_array
-    all_interp_flux = combdataobj.data
-    all_interp_err = combdataobj.noise
-    all_interp_badpix = combdataobj.bad_pixels
+    _x,_y = dataobj.get_ifu_coords()
+    _d = dataobj.data
+    _e = dataobj.noise
+    _bp = dataobj.noise
 
+    ifu_name = dataobj.ifu_name
     if ifu_name == 'miri':
-        all_interp_ra = all_interp_ra.transpose()
-        all_interp_dec = all_interp_dec.transpose()
-        all_interp_flux = all_interp_flux.transpose()
-        all_interp_err = all_interp_err.transpose()
-        all_interp_badpix = all_interp_badpix.transpose()
+        raise Exception("Not yet implemented.")
+        # all_interp_ra = all_interp_ra.transpose()
+        # all_interp_dec = all_interp_dec.transpose()
+        # all_interp_flux = all_interp_flux.transpose()
+        # all_interp_err = all_interp_err.transpose()
+        # all_interp_badpix = all_interp_badpix.transpose()
 
-    if hasattr(combdataobj, "filelist"):
-        N_dithers = len(combdataobj.filelist)
+    if hasattr(dataobj, "filelist"):
+        N_dithers = len(dataobj.filelist)
     else:
         N_dithers = 1
 
-    ra_grid, dec_grid = np.meshgrid(ra_vec, dec_vec)
+    # convert init_centroid to ifu coordinates if coordinates are sky originally. Fitting is done in ifu coordinates.
+    if "sky" in dataobj.breads_header['COORDS']:
+        ra_grid, dec_grid = np.meshgrid(x_vec, y_vec)
+        ifux_grid, ifuy_grid = dataobj.get_ifu_coords(ras=ra_grid, decs=dec_grid)
+    elif "ifu" in dataobj.breads_header['COORDS']:
+        ifux_grid, ifuy_grid = np.meshgrid(x_vec, y_vec)
 
-    flux_cube = np.full((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1]), np.nan)
-    fluxerr_cube = np.full((np.size(wv_sampling), ra_grid.shape[0], ra_grid.shape[1]), np.nan)
-
-    # only process frames with wavelength index between debug_init and debug_end
-    if debug_init is None:
-        debug_init = 0
-    if debug_end is None:
-        debug_end = np.size(wv_sampling)
-    print(f'Processing wavelength indices in range: {debug_init} to {debug_end}')
+    flux_cube = np.full((np.size(dataobj.wv_sampling), ifux_grid.shape[0], ifux_grid.shape[1]), np.nan)
+    fluxerr_cube = np.full((np.size(dataobj.wv_sampling), ifux_grid.shape[0], ifux_grid.shape[1]), np.nan)
 
     if N_pix_min is None:
         N_pix_min = (np.pi * aper_radius ** 2 / 0.01 * N_dithers) / 4
 
     #step 1 prepare list of inputs
     inputs = []
-    for wv_id, wv in enumerate(wv_sampling):
+    for wv_id, wv in enumerate(dataobj.wv_sampling):
         if not (debug_init <= wv_id < debug_end):
             continue
         rprint("prepping build_cube inputs... id: {} wave: {}".format(wv_id,wv))
 
-        psf_interp_paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, east2V2_deg
+        psf_interp_paras = linear_interp, psfs[wv_id, :, :], psfX[wv_id, :, :], psfY[wv_id, :, :], wv_id, flipx
 
-        X = all_interp_ra[:, wv_id]
-        Y = all_interp_dec[:, wv_id]
-        Z = all_interp_flux[:, wv_id]
-        Zerr = all_interp_err[:, wv_id]
-        Zbp = all_interp_badpix[:, wv_id]
-
-        inputs.append([X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg,
+        inputs.append([_x[:, wv_id], _y[:, wv_id], _d[:, wv_id], _e[:, wv_id], _bp[:, wv_id],
+                       dataobj.wv_sampling,
                        psf_interp_paras,
-                       wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min, ifu_name])
+                       wv_id, wv, ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name])
 
     #step 2 map _build_cube_task over input list
-    if parallel_flag:
+    if mppool is None:
+        print(f"\tPerforming serial _build_cube_task at {debug_end - debug_init} wavelengths.")
+
+        outputs = []
+        # Iterate calculation serially, also showing a progress bar of percentage completion
+        for j,inp in enumerate(tqdm(inputs, total=len(inputs), ncols=100)):
+            mfflux_arr,mffluxerr_arr = _build_cube_task(inp)
+            flux_cube[debug_init+j, :, :] = mfflux_arr
+            fluxerr_cube[debug_init+j, :, :] = mffluxerr_arr
+    else:
         print('starting parallel _build_cube_task...')
         # Iterate calculation in parallel, showing a progress bar of percentage completion
         outputs = list(tqdm(mppool.imap(_build_cube_task, inputs), total=len(inputs), ncols=100))
-    else:
-        print('starting serial _build_cube_task...')
-        outputs = []
-        # Iterate calculation serially, also showing a progress bar of percentage completion
-        for inp in tqdm(inputs, total=len(inputs), ncols=100):
-            outputs.append(_build_cube_task(inp))
 
-    #step 3 iterate over outputs and save values
-    for j, inp in enumerate(inputs):
-        X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min, ifu_name = inp
-        rprint('cubing outputs... id: {} wave: {}'.format(wv_id,wv))
-        outs = outputs[j]
-        for o in outs:
-            ra_id, dec_id, flux, err = o
-            flux_cube[wv_id, dec_id, ra_id] = flux
-            fluxerr_cube[wv_id, dec_id, ra_id] = err
+        #step 3 iterate over outputs and save values
+        for j, inp in enumerate(inputs):
+            rprint('cubing outputs... id: {} wave: {}'.format(debug_init+j,dataobj.wv_sampling[debug_init+j]))
+            mfflux_arr,mffluxerr_arr = outputs[j]
+            flux_cube[debug_init+j, :, :] = mfflux_arr
+            fluxerr_cube[debug_init+j, :, :] = mffluxerr_arr
 
     if out_filename is not None:
-        if debug_init != 0 or debug_end != np.size(wv_sampling):
-            out_filename = out_filename.replace(".fits","_from{0}to{1}.fits".format(debug_init,debug_end))
+        if debug_init != 0 or debug_end != np.size(dataobj.wv_sampling):
+            out_filename = out_filename.replace(".fits","_from{0}_to_{1}um_{2}_{3}id.fits".format(debug_wv_range[0],debug_wv_range[1],debug_init,debug_end))
         print("saving",out_filename)
+
+        _hdr_flux = pyfits.Header({'BUNIT': out_units})
+
+        if "sky" in dataobj.breads_header['COORDS']:
+            _x_out = ra_grid
+            _y_out = dec_grid
+        elif "ifu" in dataobj.breads_header['COORDS']:
+            _x_out = ifux_grid
+            _y_out = ifuy_grid
         hdulist = pyfits.HDUList()
-        hdulist.append(pyfits.PrimaryHDU(data=flux_cube))
-        hdulist.append(pyfits.ImageHDU(data=fluxerr_cube, name='FLUXERR_CUBE'))
-        hdulist.append(pyfits.ImageHDU(data=ra_grid, name='RA'))
-        hdulist.append(pyfits.ImageHDU(data=dec_grid, name='DEC'))
-        hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WAVE'))
+        hdulist.append(pyfits.PrimaryHDU(header=dataobj.breads_header))
+        hdulist.append(pyfits.ImageHDU(data=flux_cube, name='FLUX',header=_hdr_flux))
+        hdulist.append(pyfits.ImageHDU(data=fluxerr_cube, name='FLUXERR',header=_hdr_flux))
+        hdulist.append(pyfits.ImageHDU(data=_x_out, name='X'))
+        hdulist.append(pyfits.ImageHDU(data=_y_out, name='Y'))
+        hdulist.append(pyfits.ImageHDU(data=dataobj.wv_sampling, name='WAVE'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
-    return flux_cube, fluxerr_cube, ra_grid, dec_grid
+    return flux_cube, fluxerr_cube, _x_out, _y_out,dataobj.wv_sampling
 
 
 def cube_matchedfilter(flux_cube, fluxerr_cube, wv_sampling, ra_grid, dec_grid, planet_f, rv=0,

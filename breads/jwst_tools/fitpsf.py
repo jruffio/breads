@@ -27,7 +27,8 @@ def fitpsf(dataobj, ref_dataobj = None,
            init_centroid=None, fit_centroid=True, fit_angle = False,
            ann_width=None, padding=None, sector_area=None,
            linear_interp=True, rotate_psf=0.0, flipx=False,debug_wv_range=None,overwrite=False,
-           stis_spectrum=None,poly_deg_coords=2,poly_deg_flux=1):
+           stis_spectrum=None,poly_deg_coords=2,poly_deg_flux=1,
+            wv_min = None,wv_max = None):
     """Fit a model PSF (psfs, psfX, psfY) to a combined dataset (dataobj_list).
 
     Parameters
@@ -82,6 +83,10 @@ def fitpsf(dataobj, ref_dataobj = None,
     stis_spectrum : str
         Filename of a calspec file. e.g. 1808347_stiswfc_006.fits from https://www.stsci.edu/hst/instrumentation/reference-data-for-calibration-and-tools/astronomical-catalogs/calspec
         Used for flux calibration derivation.
+    wv_min : float
+        Don't include wavelength less than wv_min in the fit. If None, default is 10% of the bandpass mask on the edges.
+    wv_max : float
+        Don't include wavelength greater than wv_max in the fit. If None, default is 10% of the bandpass mask on the edges.
 
     Returns
     -------
@@ -130,7 +135,8 @@ def fitpsf(dataobj, ref_dataobj = None,
         if isinstance(use_breadspsf, bool) and use_breadspsf:
             grating = dataobj.priheader['GRATING'].strip()
             detector = dataobj.priheader['DETECTOR'].strip().lower()
-            use_breadspsf_str = f"J1757132_{grating}_{detector}.fits"
+            use_breadspsf_str = f"HD163466_J1757132_{grating}_{detector}.fits"
+            # use_breadspsf_str = f"J1757132_{grating}_{detector}_hd.fits"
         elif isinstance(use_breadspsf, str):
             use_breadspsf_str = use_breadspsf
         BREADS_DATA_ENV = os.getenv('BREADS_DATA')
@@ -273,7 +279,8 @@ def fitpsf(dataobj, ref_dataobj = None,
         poly_fluxcal_filename = out_filename.replace(".fits", "_poly_fluxcal_IWA{0:.2f}_OWA{1:.2f}.txt".format(IWA,OWA))
         plot_filename = out_filename.replace(".fits", "_fitpsf_results.png")
         analyze_fitpsf_results(dataobj,bestfit_paras,stis_spectrum=stis_spectrum,poly_deg_coords=poly_deg_coords,poly_deg_flux=poly_deg_flux,
-                               poly_centroid_filename=poly_centroid_filename,poly_fluxcal_filename=poly_fluxcal_filename,plot_filename=plot_filename,)
+                               poly_centroid_filename=poly_centroid_filename,poly_fluxcal_filename=poly_fluxcal_filename,plot_filename=plot_filename,
+                           wv_min = wv_min,wv_max = wv_max)
 
         plot_filename = out_filename.replace(".fits", "2d_plot.png")
         if debug_wv_range is not None:
@@ -458,7 +465,9 @@ def _fitpsf_costfunc(paras, _x, _y, data, error, _webbpsf_interp):
     chi2 = np.nansum((res / error) ** 2)
     return chi2
 
-def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_flux=1, stis_spectrum=None,poly_centroid_filename=None,poly_fluxcal_filename=None,plot_filename=None):
+def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_flux=1, stis_spectrum=None,
+                           poly_centroid_filename=None,poly_fluxcal_filename=None,plot_filename=None,
+                           wv_min = None,wv_max = None):
     """
     Analyze the results of fitpsf, including fitting polynomials to the best fit centroids as a function of wavelength, and deriving a flux calibration if a stis_spectrum is provided.
 
@@ -477,6 +486,10 @@ def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_fl
         If not None, save the polynomial coefficients for the flux calibration fits to this filename as a text file.
     plot_filename : str
         If not None, save a plot of the best fit fluxes and centroids as a function of wavelength.
+    wv_min : float
+        Don't include wavelength less than wv_min in the fit. If None, default is 10% of the bandpass mask on the edges.
+    wv_max : float
+        Don't include wavelength greater than wv_max in the fit. If None, default is 10% of the bandpass mask on the edges.
 
     Returns
     -------
@@ -490,8 +503,14 @@ def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_fl
     """
     _med_bestfit_paras = np.nanmean(bestfit_paras, axis=0)
 
-    _wv_min = dataobj.wv_sampling[0] + 0.1 * (dataobj.wv_sampling[-1] - dataobj.wv_sampling[0])
-    _wv_max = dataobj.wv_sampling[-1] - 0.1 * (dataobj.wv_sampling[-1] - dataobj.wv_sampling[0])
+    if wv_min is None:
+        _wv_min = dataobj.wv_sampling[0] + 0.1 * (dataobj.wv_sampling[-1] - dataobj.wv_sampling[0])
+    else:
+        _wv_min = wv_min
+    if wv_max is None:
+        _wv_max = dataobj.wv_sampling[-1] - 0.1 * (dataobj.wv_sampling[-1] - dataobj.wv_sampling[0])
+    else:
+        _wv_max = wv_max
     wherefinite = np.where(np.isfinite(_med_bestfit_paras[:, 2]) * (dataobj.wv_sampling > _wv_min) * (dataobj.wv_sampling < _wv_max))
     poly_p_x = np.polyfit(dataobj.wv_sampling[wherefinite], _med_bestfit_paras[:, 2][wherefinite], deg=poly_deg_coords)
 
@@ -688,11 +707,11 @@ def plot_fitpsf_2d_results(dataobj, bestfit_model, residuals, wv0=None,
     unit = dataobj.breads_header['DATAUNIT']
 
     # -- Layout: 3 touching image panels + 1 scatter panel with a gap ----------
-    fig = plt.figure(figsize=(12, 4))
+    fig = plt.figure(figsize=(15, 4))
 
     # GridSpec: 4 columns; cols 0-2 are image panels (no space between them),
     # col 3 is the scatter plot with a wider gap on the left.
-    gs = fig.add_gridspec(1, 5, width_ratios=[1, 1, 1, 0.3, 1],
+    gs = fig.add_gridspec(1, 7, width_ratios=[1, 1, 1, 0.3, 1,0.3, 1],
                           wspace=0, hspace=0,  # no space between image panels
                           left=0.06, right=0.97, top=0.78, bottom=0.13)
 
@@ -760,12 +779,14 @@ def plot_fitpsf_2d_results(dataobj, bestfit_model, residuals, wv0=None,
     ax4 = fig.add_subplot(gs[0, 4])
 
     d_vals = dataobj.data[where_good[0], wv0_index]
+    e_vals = dataobj.noise[where_good[0], wv0_index]
     m_vals = bestfit_model[where_good[0], wv0_index]
     r_vals = residuals[where_good[0], wv0_index]
 
-    ax4.scatter(x, d_vals, color="tab:blue", s=4, label="Data", zorder=2)
-    ax4.scatter(x, m_vals, color="tab:orange", s=4, label=label_model, zorder=1)
-    ax4.scatter(x, r_vals, color="gray", s=4, label="Residuals", zorder=3)
+    # ax4.errorbar(x, d_vals,yerr=e_vals, color="tab:blue",label="Data", zorder=3,alpha=0.5,fmt="none")
+    ax4.scatter(x, d_vals, color="tab:blue", s=4, label="Data", zorder=3)
+    ax4.scatter(x, m_vals, color="tab:orange", s=4, label=label_model, zorder=2)
+    ax4.scatter(x, r_vals, color="gray", s=4, label="Residuals", zorder=4)
     ax4.invert_xaxis()
 
     if "ifu" in dataobj.breads_header['COORDS']:
@@ -775,6 +796,19 @@ def plot_fitpsf_2d_results(dataobj, bestfit_model, residuals, wv0=None,
     ax4.set_ylabel(f"Flux ({unit})", fontsize=9)
     ax4.legend(fontsize=8, markerscale=2)
     ax4.tick_params(labelsize=8)
+
+
+    # -- Scatter panel ---------------------------------------------------------
+    ax5 = fig.add_subplot(gs[0, 6])
+
+    ax5.scatter(x, r_vals/e_vals, color="tab:blue", s=4)
+    ax5.invert_xaxis()
+    if "ifu" in dataobj.breads_header['COORDS']:
+        ax5.set_xlabel('IFU x (as)', fontsize=9)
+    else:
+        ax5.set_xlabel(r'$\Delta$RA (as)', fontsize=9)
+    ax5.set_ylabel(f"Rel. Err.", fontsize=9)
+    ax5.tick_params(labelsize=8)
 
     if plot_filename is not None:
         plt.savefig(plot_filename, dpi=200, bbox_inches='tight')

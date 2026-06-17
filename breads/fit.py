@@ -1,4 +1,5 @@
 from copy import copy
+from warnings import warn
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -74,20 +75,22 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     else:
         _bounds = (copy(bounds[0]), copy(bounds[1]))
         if any(np.any(np.isfinite(arr)) for arr in _bounds): #check if there is finite boundaries
-            raise Warning("The calculation of log prob is only theoretically accurate if no finite bounds are used...")
+            warning_text = "The calculation of log prob is only theoretically accurate if no finite bounds are used..."
+            warn(warning_text)
 
     # Will reject the column(s) full of 0 of the model matrix M (without regularization)
     validpara = np.where(np.any(M_no_reg != 0, axis=0))
 
-    if len(fm_out) == 4 and "N_planet_linparas" in extra_outputs.keys():
-        N_planet_paras = extra_outputs["N_planet_linparas"]
-    else:
-        N_planet_paras = 1
-    if np.min(validpara[0]) >= N_planet_paras:
-        # the first linear parameters are invalid which means that the companion cannot be fitted
-        # Hence, we return nan for the best fit linear parameters and -inf for their probability
-        raise Warning("Companion cannot be fitted, returning nan arrays")
-        return _invalid_outputs(N_linpara)
+    # if len(fm_out) == 4 and "N_planet_linparas" in extra_outputs.keys():
+    #     N_planet_paras = extra_outputs["N_planet_linparas"]
+    # else:
+    #     N_planet_paras = 1
+    # if np.min(validpara[0]) >= N_planet_paras:
+    #     # the first linear parameters are invalid which means that the companion cannot be fitted
+    #     # Hence, we return nan for the best fit linear parameters and -inf for their probability
+    #     warning_text = "Companion cannot be fitted, returning nan arrays"
+    #     warn(warning_text)
+    #     return _invalid_outputs(N_linpara)
 
     M_no_reg = M_no_reg[:, validpara[0]]  # Filtering the column(s) full of 0
     _bounds = (np.array(_bounds[0])[validpara[0]], np.array(_bounds[1])[validpara[0]]) #Selecting the bounds for the valid parameters

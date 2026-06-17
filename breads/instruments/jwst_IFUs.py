@@ -505,7 +505,7 @@ class JWST_IFUs(ABC):
             ifuX, ifuY = self.get_ifu_coords()
             self.x, self.y = ifuX, ifuY
             self.breads_header['COORDS'] = self.breads_header['COORDS'].replace("sky","ifu")
-            if hasattr(self, 'webbpsf_interp'):
+            if hasattr(self, 'webbpsf_interp') and self.webbpsf_interp is not None:
                 # Need to recompute the quick webbpsf interpolator with the correct orientation
                 wX, wY = rotate_coordinates(self.webbpsf_X.flatten(), self.webbpsf_Y.flatten(), -0.0, flipx=True)
                 self.webbpsf_interp = CloughTocher2DInterpolator((wX, wY), self.webbpsf_im.flatten(),fill_value=0.0)
@@ -1825,9 +1825,10 @@ class JWST_IFUs(ABC):
                 dx_nodes = x_nodes[1]-x_nodes[0]
                 dy_nodes = y_nodes[1]-y_nodes[0]
                 extent = [x_nodes[0]-dx_nodes/2.0,x_nodes[-1]+dx_nodes/2.0,y_nodes[0]-dy_nodes/2.0,y_nodes[-1]+dy_nodes/2.0]
-                vmax = np.nanmax(spline3d_paras_np[:,np.size(y_nodes)//2,np.size(x_nodes)//2])/5.
-                save_cube_as_gif(spline3d_paras_np,filename=out_filename.replace(".fits", ".gif"),
-                                 fps=3,vmin=0,vmax=vmax,extent=extent,wv_nodes=wv_nodes)
+                spline3d_paras_toplot = np.nanmedian(spline3d_paras_np,axis=(0,1))
+                vmax = 4+np.log10(np.abs(median_abs_deviation(spline3d_paras_toplot[np.where(np.isfinite(spline3d_paras_toplot))])))
+                save_cube_as_gif(np.log10(np.abs(spline3d_paras_toplot)),filename=out_filename.replace(".fits", ".gif"),
+                                 fps=3,vmin=vmax-6,vmax=vmax,extent=extent,wv_nodes=wv_nodes)
 
                 wl = np.asarray(new_wavelengths)
                 fl = np.asarray(combined_fluxes)
@@ -1941,7 +1942,7 @@ class JWST_IFUs(ABC):
 
 
     def compute_starsubtraction_3dspline(self,  save_utils=False,max_cores=1,
-                                         threshold_badpix=10,save_plots=True,
+                                         threshold_badpix=10,save_plots=True,iterative=False,
                                          only_identify_badpix = False,
                                          combined_contnorm_filename = None):
         """
@@ -1983,22 +1984,26 @@ class JWST_IFUs(ABC):
         if self.verbose:
             print(f"Computing star subtraction with 3d splines")
 
-        reg_mean_map_init = spline_paras0
-        reg_std_map_init = spline_paras0_err*10
+        reg_mean_map_init =  np.nanmedian(spline_paras0,axis=(0,1))
+        reg_std_map_init =  np.nanmedian(spline_paras0_err,axis=(0,1))*10
         # where_low_snr_prior = np.where((spline_paras0/spline_paras0_err)<5)
         # reg_mean_map_init[where_low_snr_prior] = np.nan
         # reg_std_map_init[where_low_snr_prior] = np.nan
 
         stellar_features = self.star_func(self.wavelengths)
 
-        _out = fit_3dspline(self, x_nodes,y_nodes,wv_nodes,stamp_size = stamp_size,stellar_features=stellar_features,
-                            reg_mean_map=reg_mean_map_init, reg_std_map=reg_std_map_init,
-                            max_cores=max_cores,threshold=threshold_badpix)
-        spline_cont0, _, new_badpixs, subtracted_im, spline3d_paras_np, spline3d_paras_err_np = _out
+        if iterative:
+            N_iter = 2
+        else:
+            N_iter = 1
 
-        mad_res = median_abs_deviation(subtracted_im[np.where(np.isfinite(subtracted_im*new_badpixs))])
+        for k in range(N_iter):
+            _out = fit_3dspline(self, x_nodes,y_nodes,wv_nodes,stamp_size = stamp_size,stellar_features=stellar_features,
+                                reg_mean_map=reg_mean_map_init, reg_std_map=reg_std_map_init,
+                                max_cores=max_cores,threshold=threshold_badpix)
+            spline_cont0, _, new_badpixs, subtracted_im, spline3d_paras_np, spline3d_paras_err_np = _out
+            self.bad_pixels = self.bad_pixels * new_badpixs
 
-        self.bad_pixels = self.bad_pixels * new_badpixs
         subtracted_im[np.where(np.isnan(subtracted_im))] = 0
 
         if save_utils:
@@ -2032,12 +2037,14 @@ class JWST_IFUs(ABC):
             hdulist.close()
 
             if save_plots:
+                mad_res = median_abs_deviation(subtracted_im[np.where(np.isfinite(subtracted_im*self.bad_pixels))])
                 dx_nodes = x_nodes[1]-x_nodes[0]
                 dy_nodes = y_nodes[1]-y_nodes[0]
                 extent = [x_nodes[0]-dx_nodes/2.0,x_nodes[-1]+dx_nodes/2.0,y_nodes[0]-dy_nodes/2.0,y_nodes[-1]+dy_nodes/2.0]
-                vmax = np.nanmax(spline3d_paras_np[:,np.size(y_nodes)//2,np.size(x_nodes)//2])/5.
-                save_cube_as_gif(spline3d_paras_np,filename=out_filename.replace(".fits", ".gif"),
-                                 fps=3,vmin=0,vmax=vmax,extent=extent,wv_nodes=wv_nodes)
+                spline3d_paras_toplot = np.nanmedian(spline3d_paras_np,axis=(0,1))
+                vmax = 4+np.log10(np.abs(median_abs_deviation(spline3d_paras_toplot[np.where(np.isfinite(spline3d_paras_toplot))])))
+                save_cube_as_gif(np.log10(np.abs(spline3d_paras_toplot)),filename=out_filename.replace(".fits", ".gif"),
+                                 fps=3,vmin=vmax-6,vmax=vmax,extent=extent,wv_nodes=wv_nodes)
 
                 plt.figure(figsize=(16, 8))
                 plt.subplot(1, 2, 1)
@@ -2747,14 +2754,14 @@ class JWST_IFUs(ABC):
 
         return fig
 
-    def save(self, filename = None) -> None:
+    def save(self, filename = None,suffix=None) -> None:
         """Save the object to a pickle file."""
         if filename is None:
-            suffix = ""
-            if bool(self.breads_header["DATA_HPF"]):
-                suffix = suffix + "_HPF"+self.breads_header["HPF_TYPE"]
-            if "regwvs" in self.breads_header['COORDS']:
-                suffix = suffix + "_regwvs"
+            if suffix is None:
+                suffix = ""
+                if bool(self.breads_header["DATA_HPF"]):
+                    suffix = suffix + "_HPF"+self.breads_header["HPF_TYPE"]
+                suffix = suffix + "_"+self.breads_header['COORDS'].replace(" ","_")
             pickle_filename = os.path.join(self.utils_dir,os.path.basename(self.filename).replace(".fits",suffix+".pkl"))
         else:
             pickle_filename = filename
