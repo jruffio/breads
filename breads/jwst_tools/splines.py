@@ -327,14 +327,16 @@ def _task_fit_3dspline(paras):
 
     N_pix_threshold = 3#np.size(wv_nodes)* np.size(_y_nodes)* np.size(_x_nodes)
     if np.size(where_data_finite[0]) < N_pix_threshold:
+        # print("exit 1")
         return None
 
     inner_bool_map = (scaled_x_np[where_data_finite]>x_nodes[np.max([k1-1,0])]) & (scaled_x_np[where_data_finite]<x_nodes[k2]) & \
                (scaled_y_np[where_data_finite]>y_nodes[np.max([l1-1,0])]) & (scaled_y_np[where_data_finite]<y_nodes[l2]) & \
                (wvs_np[where_data_finite]>np.min(wv_nodes)) & (wvs_np[where_data_finite]<np.max(wv_nodes))
     inner_pixels = np.where(inner_bool_map)
-    if np.size(inner_pixels[0]) < N_pix_threshold:
-        return None
+    # if np.size(inner_pixels[0]) < N_pix_threshold:
+    #     # print("exit 2")
+    #     return None
 
     _d = data_np[where_data_finite]
     _x = scaled_x_np[where_data_finite]
@@ -344,6 +346,9 @@ def _task_fit_3dspline(paras):
 
 
     M_spline_x = get_spline_model(_x_nodes, _x, spline_degree=3)
+    # plt.plot(np.linspace(_x_nodes[0],_x_nodes[-1],400),
+    #          get_spline_model(_x_nodes, np.linspace(_x_nodes[0],_x_nodes[-1],400), spline_degree=3)[:,5])
+    # plt.show()
     M_spline_y = get_spline_model(_y_nodes, _y, spline_degree=3)
     M_spline_wvs = get_spline_model(wv_nodes, _w, spline_degree=3)
 
@@ -355,18 +360,33 @@ def _task_fit_3dspline(paras):
 
     M = M_3dspline * stellar_features_np[where_data_finite][:, None]
 
-    INvalidpara = np.where(~(np.nansum(M > np.nanmax(M) * 0.001, axis=0) != 0))
+    INvalidpara = np.where(~(np.nansum(M > np.nanmax(M) * 0.01, axis=0) != 0))
     M[:, INvalidpara[0]] = 0 # Deactivate those columns in the model matrix
 
     if reg_mean_map is not None and reg_std_map is not None:
-        d_reg, s_reg = np.ravel(reg_mean_map[:, l0:l3 + 1, k0:k3 + 1]), np.ravel(reg_std_map[:, l0:l3 + 1, k0:k3 + 1])
+        d_reg, s_reg = np.ravel(reg_mean_map[:, l0:l3 + 1, k0:k3 + 1]), np.ravel(reg_std_map[:, l0:l3 + 1, k0:k3 + 1])#/1e6
     else:
         d_reg, s_reg = None, None
+    # d_reg, s_reg = None, None
 
     _results = fitfm(nonlin_paras=[_d,M,_e,d_reg,s_reg],dataobj=Instrument(),fm_func=_tmp_fm,fm_paras={},
                     marginalize_noise_scaling=False, scale_noise=False)
     bestfit_log_prob, rchi2, linparas, linparas_err = _results
+    # plt.figure()
+    # print(linparas)
+    # # print(np.where(~np.isfinite(_d)))
+    # # print(np.where(~np.isfinite(_e)))
+    # # print(np.where(~np.isfinite(M)))
+    # # plt.scatter(_y,_d,s=1,label="data")
+    #
+    # plt.figure()
+    # plt.plot(_e)
+    # plt.plot(_d)
+    # # validpara = np.where((np.nansum(M > np.nanmax(M) * 0.001, axis=0)))
+    # # plt.scatter(_y,M[:,validpara[0][0]],s=1,label="data")
+    # plt.show()
     if np.all(np.isnan(linparas)):
+        # print("exit 3")
         return None
     paras_canvas = np.reshape(linparas, (np.size(wv_nodes), np.size(_y_nodes), np.size(_x_nodes)))
     paras_err_canvas = np.reshape(linparas_err, (np.size(wv_nodes), np.size(_y_nodes), np.size(_x_nodes)))
@@ -390,6 +410,25 @@ def _task_fit_3dspline(paras):
     combined_inner_pixels = tuple(w[where_bad] for w in inner_pixels)
     combined_idx = tuple(w[combined_inner_pixels] for w in where_data_finite)
     bp_np[combined_idx] = np.nan
+
+    # plt.figure()
+    # plt.imshow(reg_mean_map[2, l0:l3 + 1, k0:k3 + 1],origin='lower')
+    # plt.figure()
+    # plt.imshow(reg_std_map[2, l0:l3 + 1, k0:k3 + 1],origin='lower')
+
+    # plt.figure()
+    # plt.scatter(_y,_d,s=1,label="data")
+    # # plt.show()
+    #
+    # plt.figure()
+    # plt.scatter(_y,_d,s=1,label="data")
+    # plt.scatter(_y,m,s=1,label="model")
+    # plt.scatter(_y,_d-m,s=1,label="res")
+    # plt.legend()
+    #
+    # plt.figure()
+    # plt.imshow(paras_canvas[2,:,:],origin='lower')
+    # plt.show()
 
     return #paras_canvas[:,(l1-l0):(l2-l0+1),(k1-k0):(k2-k0+1)],paras_err_canvas[:,(l1-l0):(l2-l0+1),(k1-k0):(k2-k0+1)]
 
@@ -487,11 +526,11 @@ def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
     N_stamps = len(stamp_list)
 
     if 0:
-        stamp_list = stamp_list[(220):222]
+        stamp_list = stamp_list[(840-41*0):(840-41*0+1)]
         # for stamp_id,stamp_tuple in enumerate(stamp_list):
-        #     k0,k1,k2,k3,l0,l1,l2,l3 = stamp_tuple
+        #     k0,k1,k2,k3,l0,l1,l2,l3,m0,m1 = stamp_tuple
         #     print("stamp_id",stamp_id,stamp_id % len(x_chunk_starts_ids),(stamp_id-(stamp_id % len(x_chunk_starts_ids)))//len(x_chunk_starts_ids))
-        #     print(k0,k1,k2,k3,l0,l1,l2,l3)
+        #     print(k0,k1,k2,k3,l0,l1,l2,l3,m0,m1)
         #     print("x", x_nodes[k0],x_nodes[k1],x_nodes[k2],x_nodes[k3])
         #     print("y", y_nodes[l0],y_nodes[l1],y_nodes[l2],y_nodes[l3])
         # N_stamps = len(stamp_list)
@@ -515,6 +554,8 @@ def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
                     wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map,types_tuple
 
             _task_fit_3dspline(paras)
+        # print("coucou here")
+        # exit()
     else:
 
         ctx = mp.get_context("spawn")  # avoids unsafe fork after OpenMP init
@@ -597,8 +638,8 @@ def _task_evaluate_3dspline(paras):
                (scaled_y_np[where_data_finite]>y_nodes[np.max([l1-1,0])]) & (scaled_y_np[where_data_finite]<y_nodes[l2]) & \
                (wvs_np[where_data_finite]>np.min(wv_nodes)) & (wvs_np[where_data_finite]<np.max(wv_nodes))
     inner_pixels = np.where(inner_bool_map)
-    if np.size(inner_pixels[0]) < N_pix_threshold:
-        return
+    # if np.size(inner_pixels[0]) < N_pix_threshold:
+    #     return
 
     # _d = data_np[where_data_finite]
     _x = scaled_x_np[where_data_finite]
@@ -631,22 +672,32 @@ def _task_evaluate_3dspline(paras):
     # print("Current extended stamp values ",x_nodes[k0],x_nodes[k3],y_nodes[l0],y_nodes[l3])
     # # plt.figure()
     # _xxn,_yyn = np.meshgrid(_x_nodes, _y_nodes)
-    # print(_xxn.shape,spline3d_paras_np[2,l0:l3+1,k0:k3+1].shape)
-    # # plt.subplot(1,2,1)
-    # # plt.scatter(_xxn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
-    # # plt.subplot(1,2,2)
-    # # plt.scatter(_yyn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
+    # print(_xxn.shape,spline3d_paras_np[m0,m1,2,l0:l3+1,k0:k3+1].shape)
+    # plt.subplot(1,2,1)
+    # plt.scatter(_xxn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
+    # plt.subplot(1,2,2)
+    # plt.scatter(_yyn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
     # plt.figure()
     # plt.imshow(spline3d_paras_np[2,l0:l3+1,k0:k3+1],origin="lower")
-    #
+
     # plt.figure()
     # plt.imshow(bestfit_model_np[bestfit_model_np.shape[0]//2,:,:],origin="lower")
+    # plt.show()
+
+    # plt.figure()
+    # dx = x_nodes[1] - x_nodes[0]
+    # dy = y_nodes[1] - y_nodes[0]
+    # extent = [x_nodes[0] - dx / 2.0, x_nodes[-1] + dx / 2.0, y_nodes[0] - dy / 2.0, y_nodes[-1] + dy / 2.0]
+    # # plt.imshow(np.log10(np.abs(spline3d_paras_np[m0,m1,2,:,:])),origin="lower",extent=extent)
+    # plt.imshow(np.log10(np.abs(np.nanmean((spline3d_paras_np[:,:,2,:,:]),axis=(0,1)))),origin="lower",extent=extent)
+    # plt.clim([0,10])
     #
     # plt.figure()
     # dx = x_nodes[1] - x_nodes[0]
     # dy = y_nodes[1] - y_nodes[0]
     # extent = [x_nodes[0] - dx / 2.0, x_nodes[-1] + dx / 2.0, y_nodes[0] - dy / 2.0, y_nodes[-1] + dy / 2.0]
-    # plt.imshow(np.log10(np.abs(spline3d_paras_np[2,:,:])),origin="lower",extent=extent)
+    # plt.imshow(np.log10(np.abs(spline3d_paras_np[m0,m1,2,:,:])),origin="lower",extent=extent)
+    # # plt.imshow(np.log10(np.abs(np.nanmean((spline3d_paras_np[:,:,2,:,:]),axis=(0,1)))),origin="lower",extent=extent)
     # plt.clim([0,10])
     # plt.show()
     #
@@ -672,7 +723,7 @@ def evaluate_3dspline_grid(x_vec,y_vec,wv_sampling,spline3d_filename,
     stellar_features = None
     return evaluate_3dspline(x_grid,y_grid,wv_grid,
                           spline3d_filename,
-                     stellar_features=None,N_overlap_nodes = N_overlap_nodes,
+                     stellar_features=stellar_features,N_overlap_nodes = N_overlap_nodes,
                      max_cores = max_cores,stamp_size=stamp_size)
 
 def evaluate_3dspline_pointcloud(dataobj, spline3d_filename,stellar_features=None,
@@ -762,7 +813,7 @@ def evaluate_3dspline(ifux,ifuy,wvs,
     spline3d_paras_err_mp = RawArray(mp_float_type, 2*2* N_wv_nodes * N_y_nodes * N_x_nodes)
     spline3d_paras_err_np = _arraytonumpy(spline3d_paras_err_mp, spline3d_paras_shape, dtype=mp_float_type)
     spline3d_paras_err_np[:] = copy(spline3d_paras_err)
-    spline3d_paras_err[np.where(~np.isfinite(spline3d_paras_err))] = 0
+    spline3d_paras_err_np[np.where(~np.isfinite(spline3d_paras_err_np))] = 0
 
     ###################
     # create the small stamps for calculating the 3D spline in.
@@ -789,16 +840,18 @@ def evaluate_3dspline(ifux,ifuy,wvs,
     N_stamps = len(stamp_list)
 
     if 0:
+        print(spline3d_filename)
         # stamp_list = stamp_list[200:221]
-        # stamp_list = stamp_list[219:221]
-        for stamp_id,stamp_tuple in enumerate(stamp_list):
-            k0,k1,k2,k3,l0,l1,l2,l3 = stamp_tuple
-            print("stamp_id",stamp_id)
-            print("x", x_nodes[k0],x_nodes[k1],x_nodes[k2],x_nodes[k3])
-            print("y", y_nodes[l0],y_nodes[l1],y_nodes[l2],y_nodes[l3])
-        N_stamps = len(stamp_list)
-        print(N_overlap_nodes)
-        exit()
+        stamp_list = stamp_list[243:245]
+        # stamp_list = stamp_list[(840-41*0)::41]
+        # for stamp_id,stamp_tuple in enumerate(stamp_list):
+        #     k0,k1,k2,k3,l0,l1,l2,l3,m0,m1 = stamp_tuple
+        #     print("stamp_id",stamp_id)
+        #     print("x", x_nodes[k0],x_nodes[k1],x_nodes[k2],x_nodes[k3])
+        #     print("y", y_nodes[l0],y_nodes[l1],y_nodes[l2],y_nodes[l3])
+        # N_stamps = len(stamp_list)
+        # print(N_overlap_nodes)
+        # exit()
 
     _init_args = (
         data_mp, data_shape,
@@ -963,10 +1016,10 @@ def plot_3dspline_residuals(combdataobj, overwrite = False):
     wv_nodes = hdulist['wv_nodes'].data
     hdulist.close()
 
-    for slice_id in _unique_ids:
-        # if slice_id < 7 or slice_id >= 11:
-        #     continue
-        for l in range(n_files):  # n_files
+    for l in range(n_files):  # n_files
+        for slice_id in _unique_ids:
+            # if slice_id < 7 or slice_id >= 11:
+            #     continue
             # combdataobj_r = np.sqrt(combdataobj.x ** 2 + combdataobj.y ** 2)
             where_finite = np.where(
                 # (np.abs(combdataobj.x[(l*2048):((l+1)*2048),:])<1.00) &

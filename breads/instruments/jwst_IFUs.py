@@ -34,7 +34,7 @@ from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_el
 from breads.utils import get_spline_model
 from breads.utils import get_breads_commit
 from breads.jwst_tools.plotting import save_cube_as_gif,point_cloud_interpolator_2d
-from breads.jwst_tools.splines import fit_3dspline,normalize_rows
+from breads.jwst_tools.splines import fit_3dspline,normalize_rows,evaluate_3dspline_pointcloud
 from breads.jwst_tools.spectra import combine_spectrum
 from breads.jwst_tools.build_cube import rprint
 
@@ -1227,7 +1227,7 @@ class JWST_IFUs(ABC):
     #     return ra_offset, dec_offset
 
     def compute_starspectrum_contnorm(self,  save_utils=False, mppool=None,spec_R_sampling=None, threshold_badpix=10,
-                                      wv_nodes=None, N_nodes=40, iterative=True):
+                                      wv_nodes=None, N_nodes=40, iterative=True,spline3d_prior_filename=None):
         """ Compute star spectrum normalized by the continuum.
         See Figure 4 in Ruffio+2024 (https://ui.adsabs.harvard.edu/abs/2024AJ....168...73R/abstract).
 
@@ -1275,24 +1275,39 @@ class JWST_IFUs(ABC):
         if self.verbose:
             print(f"Computing stellar spectrum (continuum normalized)")
 
-        # Define the regularization in the form of priors on the value of the flux at the position of the spline nodes
-        reg_mean_map0 = np.zeros((im.shape[0], np.size(wv_nodes))) # The flux values at each position of the nodes
-        reg_std_map0 = np.zeros((im.shape[0], np.size(wv_nodes))) # The corresponding width of the Gaussian prior at each nodes
-        for rowid, row in enumerate(im):
-            row_bp = bad_pixels[rowid, :]
-            if np.nansum(np.isfinite(row * row_bp)) == 0:
-                continue
-            # Set the prior to the median value of the row for each node
-            median_row = np.nanmedian(row * row_bp)
-            stddev_row = np.nanstd(row * row_bp)
-            reg_mean_map0[rowid, :] = median_row
-            # Set the width of the prior to its mean to have fairly unconstraining priors
-            reg_std_map0[rowid, :] = np.max([np.abs(median_row),stddev_row])
+        if spline3d_prior_filename is not None:
+            if mppool is None:
+                max_cores = 1
+            else:
+                max_cores = mppool.max_cores
+
+            _out = evaluate_3dspline_pointcloud(self, spline3d_prior_filename, max_cores=max_cores)
+            stellar_features, _ = _out
+
+            reg_mean_map0 = None
+            reg_std_map0 = None
+        else:
+            stellar_features = None
+
+            # Define the regularization in the form of priors on the value of the flux at the position of the spline nodes
+            reg_mean_map0 = np.zeros((im.shape[0], np.size(wv_nodes))) # The flux values at each position of the nodes
+            reg_std_map0 = np.zeros((im.shape[0], np.size(wv_nodes))) # The corresponding width of the Gaussian prior at each nodes
+            for rowid, row in enumerate(im):
+                row_bp = bad_pixels[rowid, :]
+                if np.nansum(np.isfinite(row * row_bp)) == 0:
+                    continue
+                # Set the prior to the median value of the row for each node
+                median_row = np.nanmedian(row * row_bp)
+                stddev_row = np.nanstd(row * row_bp)
+                reg_mean_map0[rowid, :] = median_row
+                # Set the width of the prior to its mean to have fairly unconstraining priors
+                reg_std_map0[rowid, :] = np.max([np.abs(median_row),stddev_row])
 
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
                                                                               badpixs=bad_pixels,
                                                                               wv_nodes=wv_nodes, mppool=mppool,
                                                                               threshold=threshold_badpix,
+                                                                              stellar_features = stellar_features,
                                                                               regularization=True,
                                                                               reg_mean_map=reg_mean_map0,
                                                                               reg_std_map=reg_std_map0)
@@ -1304,6 +1319,7 @@ class JWST_IFUs(ABC):
             spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=new_badpixs,
                                                                                   wv_nodes=wv_nodes, mppool=mppool,
                                                                                   threshold=threshold_badpix,
+                                                                                  stellar_features = stellar_features,
                                                                                   regularization=True,
                                                                                   reg_mean_map=reg_mean_map1,
                                                                                   reg_std_map=reg_std_map1)
@@ -1322,16 +1338,19 @@ class JWST_IFUs(ABC):
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
         self.breads_header['STCONTRS'] = spec_R_sampling
         self.breads_header['STCONTTH'] = threshold_badpix
-        self.breads_header["STCONTFN"] = ""
+        if spline3d_prior_filename is not None:
+            self.breads_header['SP3DPRFI'] = spline3d_prior_filename
+        self.breads_header['STCONTFN'] = ""
 
         if save_utils:
             self._save_starspectrum_contnorm(save_utils, new_wavelengths, combined_fluxes, combined_errors,
-                                             spline_cont0, spline_paras0, wv_nodes, normalized_im)
+                                             spline_cont0, spline_paras0, wv_nodes, normalized_im,stellar_features)
 
         return new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, wv_nodes
 
 
-    def _save_starspectrum_contnorm(self, save_utils, new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, wv_nodes, normalized_im):
+    def _save_starspectrum_contnorm(self, save_utils, new_wavelengths, combined_fluxes, combined_errors, spline_cont0,
+                                    spline_paras0, wv_nodes, normalized_im,stellar_features):
         """Save the continuum normalized star spectrum in a fits file.
 
         No.    Name      Ver    Type      Cards   Dimensions   Format
@@ -1378,6 +1397,8 @@ class JWST_IFUs(ABC):
         hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
         hdulist.append(pyfits.ImageHDU(data=wv_nodes, name='wv_nodes'))
         hdulist.append(pyfits.ImageHDU(data=normalized_im, name='CONT_NORM_IM'))
+        if stellar_features is not None:
+            hdulist.append(pyfits.ImageHDU(data=stellar_features, name='STELLAR_FEATURES'))
         hdulist.append(pyfits.ImageHDU(header=self.breads_header, name='BREADS'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
@@ -1546,7 +1567,12 @@ class JWST_IFUs(ABC):
             self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
 
         # _get_starsub_inputs() takes care of transposing the images for MIRI compared to NIRSpec
-        im, im_wvs, err, bad_pixels, reg_mean_map, reg_std_map = self._get_starsub_inputs(load_starspectrum_contnorm)
+        im, im_wvs, err, bad_pixels, reg_mean_map, reg_std_map,stellar_features0 = self._get_starsub_inputs(load_starspectrum_contnorm)
+
+        if stellar_features0 is None:
+            stellar_features = self.star_func(im_wvs)
+        else:
+            stellar_features = stellar_features0 * self.star_func(im_wvs)
 
         # Fit the model twice, the first time is used to identify and mask outliers from sigma clipping with threshold_badpix.
         if iterative:
@@ -1557,7 +1583,7 @@ class JWST_IFUs(ABC):
             star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
                                                                                   badpixs=bad_pixels,
                                                                                   wv_nodes=self.wv_nodes,
-                                                                                  stellar_features=self.star_func(im_wvs),
+                                                                                  stellar_features=stellar_features,
                                                                                   threshold=threshold_badpix,
                                                                                   mppool=mppool,
                                                                                   regularization=True,
@@ -1643,16 +1669,24 @@ class JWST_IFUs(ABC):
             load_starspectrum_contnorm = self.default_filenames["compute_starspectrum_contnorm"]
 
         hdulist = pyfits.open(load_starspectrum_contnorm)
-        spline_paras0 = hdulist["SPLINE_PARAS0"].data
+        spline_paras0 = hdulist['SPLINE_PARAS0'].data
+        if 'STELLAR_FEATURES' in hdulist:
+            stellar_features0 = hdulist['STELLAR_FEATURES'].data
+        else:
+            stellar_features0 = None
         hdulist.close()
 
-        wherenan = np.where(np.isnan(spline_paras0))
-        reg_mean_map = copy(spline_paras0)
-        reg_mean_map[wherenan] = np.tile(np.nanmedian(spline_paras0, axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
-        reg_std_map = np.abs(spline_paras0)
-        reg_std_map[wherenan] = np.tile(np.nanmax(np.abs(spline_paras0), axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
-        reg_std_map = reg_std_map
-        reg_std_map = np.clip(reg_std_map, 1e-11, np.inf)
+        if stellar_features0 is None:
+            wherenan = np.where(np.isnan(spline_paras0))
+            reg_mean_map = copy(spline_paras0)
+            reg_mean_map[wherenan] = np.tile(np.nanmedian(spline_paras0, axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
+            reg_std_map = np.abs(spline_paras0)
+            reg_std_map[wherenan] = np.tile(np.nanmax(np.abs(spline_paras0), axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
+            reg_std_map = reg_std_map
+            reg_std_map = np.clip(reg_std_map, 1e-11, np.inf)
+        else:
+            reg_mean_map = None
+            reg_std_map = None
 
         im = np.copy(self.data)
         im_wvs = np.copy(self.wavelengths)
@@ -1660,7 +1694,7 @@ class JWST_IFUs(ABC):
 
         bad_pixels = np.copy(self.bad_pixels)
 
-        return im, im_wvs, err, bad_pixels, reg_mean_map, reg_std_map
+        return im, im_wvs, err, bad_pixels, reg_mean_map, reg_std_map,stellar_features0
 
 
     def reload_starsubtraction(self, load_filename=None):
@@ -1748,7 +1782,7 @@ class JWST_IFUs(ABC):
         if self.verbose:
             print(f"Computing stellar spectrum with 3d spline (continuum normalized)")
 
-        if 1: # initialize regularization
+        if 0: # initialize regularization
             reg_mean_map_init = np.full((len(wv_nodes), len(y_nodes), len(x_nodes) ),np.nan)
             reg_std_map_init = np.full((len(wv_nodes), len(y_nodes), len(x_nodes) ),np.nan)
 
@@ -1984,11 +2018,15 @@ class JWST_IFUs(ABC):
         if self.verbose:
             print(f"Computing star subtraction with 3d splines")
 
-        reg_mean_map_init =  np.nanmedian(spline_paras0,axis=(0,1))
-        reg_std_map_init =  np.nanmedian(spline_paras0_err,axis=(0,1))*10
-        # where_low_snr_prior = np.where((spline_paras0/spline_paras0_err)<5)
-        # reg_mean_map_init[where_low_snr_prior] = np.nan
-        # reg_std_map_init[where_low_snr_prior] = np.nan
+        if 0:
+            reg_mean_map_init =  np.nanmedian(spline_paras0,axis=(0,1))
+            reg_std_map_init =  np.nanmedian(spline_paras0_err,axis=(0,1))*10
+            # where_low_snr_prior = np.where((spline_paras0/spline_paras0_err)<5)
+            # reg_mean_map_init[where_low_snr_prior] = np.nan
+            # reg_std_map_init[where_low_snr_prior] = np.nan
+        else:
+            reg_mean_map_init = None
+            reg_std_map_init = None
 
         stellar_features = self.star_func(self.wavelengths)
 

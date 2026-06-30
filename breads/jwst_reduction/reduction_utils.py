@@ -1004,12 +1004,13 @@ def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
     rate_dataobj.data = copy(im)
     rate_dataobj.noise = noise
 
-    _tmp = os.path.join(rate_dataobj.utils_dir,os.path.basename(rate_dataobj.filename)+"_bad_pixels_tmp.npy")
-    if not os.path.exists(_tmp):
-        bkg_bad_pixels = _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map, dq_rate,extend_sat=extend_sat)
-        np.save(_tmp,bkg_bad_pixels)
-    else:
-        bkg_bad_pixels = np.load(_tmp)
+    bkg_bad_pixels = _get_bkg_bad_pixels(rate_dataobj, cal_trace_id_map, dq_rate, extend_sat=extend_sat)
+    # _tmp = os.path.join(rate_dataobj.utils_dir,os.path.basename(rate_dataobj.filename)+"_bad_pixels_tmp.npy")
+    # if not os.path.exists(_tmp):
+    #     bkg_bad_pixels = _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map, dq_rate,extend_sat=extend_sat)
+    #     np.save(_tmp,bkg_bad_pixels)
+    # else:
+    #     bkg_bad_pixels = np.load(_tmp)
 
     priheader.add_history('Processed with BREADS (https://github.com/jruffio/breads)')
 
@@ -1431,20 +1432,25 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
     plt.close('all')
 
 
-def breadsPSF_RDI_nirspec(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename,
-                          centroid_suffix,rdi_suffix="_RDI",
-                          ra_vec=None, dec_vec=None,
-                         wv_sampling=None,
-                         mask_charge_transfer_radius=None,ra_dec_point_sources=None,
-                         IWA=0.0, OWA=2.0,ann_width=0.5,
-                         mppool=None,
-                         overwrite=False,
-                         targetname=None,
-                         use_stpsf = True,
-                         use_breadspsf = None,
-                          load_pickle = True,
-                          save_pickle = True,
-                          ifucoords = False):
+def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename,centroid_suffix,
+                    mode = "raw",suffix="_breads_cube",
+                    x_vec=None, y_vec=None, wv_sampling=None,
+                    mask_charge_transfer_radius=None,ra_dec_point_sources=None,
+                    aper_radius=0.15,
+                    RDI_IWA=None, RDI_OWA=None, RDI_ann_width=0.5,RDI_use_stpsf = False,RDI_use_breadspsf = True,
+                    mppool=None,
+                    overwrite=False,
+                    targetname=None,
+                    use_stpsf = False,use_breadspsf = True,
+                    load_pickle = True,
+                    save_pickle = True,
+                    ifucoords = False):
+    # - modes:
+    # 	- raw
+    # 	- 1dspline
+    # 	- 1dspline_with_prior
+    # 	- RDI
+    # 	- ASDI
 
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
@@ -1455,10 +1461,10 @@ def breadsPSF_RDI_nirspec(cal_files, utils_dir,out_dir,combined_contnorm_spec_fi
     grating = fits.getheader(cal_files[0])['GRATING'].strip()
     detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
 
-    if ra_vec is None:
-        ra_vec = np.arange(-2, 2, 0.05)
-    if dec_vec is None:
-        dec_vec = np.arange(-2, 2, 0.05)
+    if x_vec is None:
+        x_vec = np.arange(-2, 2, 0.05)
+    if y_vec is None:
+        y_vec = np.arange(-2, 2, 0.05)
 
     if wv_sampling is None:
         wv_sampling = default.wv_sampling_dict[grating][detector]
@@ -1466,19 +1472,48 @@ def breadsPSF_RDI_nirspec(cal_files, utils_dir,out_dir,combined_contnorm_spec_fi
     # Define a series of processing tasks to be performed on each input file.
     # coords_filename = glob(fitpsf_filename.replace(".fits","_poly_centroid*.txt"))[0]
     preproc_task_list = [["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}],
-                         ["compute_coordinates_arrays", {'targname': targetname}],
-                         ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": None,
-                                                      "combined_contnorm_filename": combined_contnorm_spec_filename}],
-                         ["compute_interpdata_regwvs", {"wv_sampling": wv_sampling}]]
+                         ["compute_coordinates_arrays", {'targname': targetname}]]
+
+    if "1dspline" in mode:
+        # todo add breads PSf prior in 1d spline if mode == "1dspline_with_prior"
+        _task = ["compute_starsubtraction", {"threshold_badpix": 10, "mppool": None,"combined_contnorm_filename": combined_contnorm_spec_filename}]
+        preproc_task_list.append(_task)
+    else:
+        _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": None,"combined_contnorm_filename": combined_contnorm_spec_filename}]
+        preproc_task_list.append(_task)
+
+    # - steps:
+    # 	- if 1d spline
+    # 		- starsub1d (+ 3d prior option?)
+    # 	- elif RDI per frame (input roll2 breadsPSF)
+    # 		- fitpsf
+    # 	- combdataobj
+    # 	- if ASDI (input roll2 breadsPSF; probably need to mask the planet here)
+    # 		- evaluate 3dspline from breadsPSF
+    # 	- elif RDI from comb (input roll2 breadsPSF)
+    # 		- fitpsf
 
     splitbasename = os.path.basename(cal_files[0]).split("_")
+
+
+    build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+suffix+".fits")
+    if os.path.exists(build_cube_filename):
+        with fits.open(build_cube_filename) as hdulist:
+            flux_cube = hdulist['FLUX'].data
+            fluxerr_cube = hdulist['FLUXERR'].data
+            x_grid = hdulist['X'].data
+            y_grid = hdulist['Y'].data
+            wv_sampling = hdulist['WAVE'].data
+        return flux_cube, fluxerr_cube, x_grid, y_grid,wv_sampling
+
     if ifucoords:
-        pickle_suffix = rdi_suffix + "_ifu_regwvs"
+        pickle_suffix = suffix + "_ifu_regwvs"
     else:
-        pickle_suffix = rdi_suffix + "_sky_regwvs"
+        pickle_suffix = suffix + "_sky_regwvs"
     pickle_filename = os.path.join(utils_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+ pickle_suffix+".pkl")
+
     if load_pickle and len(glob(pickle_filename)) >= 1:
-        RDI_combdataobj = JWSTNirspec_multiple_cals.load(pickle_filename)
+        combdataobj = JWSTNirspec_multiple_cals.load(pickle_filename)
     else:
         dataobj_list = []
         residuals_list = []
@@ -1493,7 +1528,7 @@ def breadsPSF_RDI_nirspec(cal_files, utils_dir,out_dir,combined_contnorm_spec_fi
             # Do some masking
             if mask_charge_transfer_radius is not None:
                 dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
-            # mask planets before computing the star spectrum
+            # mask point sources
             if ra_dec_point_sources is not None:
                 for ra_pl, dec_pl in ra_dec_point_sources:
                     if "sky" in dataobj.breads_header['COORDS']:
@@ -1507,61 +1542,65 @@ def breadsPSF_RDI_nirspec(cal_files, utils_dir,out_dir,combined_contnorm_spec_fi
             if ifucoords:
                 dataobj.set_coords2ifu()
 
-            rdi_filename_perframe = os.path.join(utils_dir,os.path.basename(filename).replace(".fits", rdi_suffix + ".fits"))
-            # if overwrite or len(glob(rdi_filename_perframe)) == 0:
-            ######
-            # Fit the whole wavelength range
-            # _debug_wv_range = [4.5, 4.51]
-            # IWA = 0.3
-            # OWA = 1.0
-            # ann_width = None
-            # print(IWA,OWA,ann_width)
-            bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=use_stpsf,use_breadspsf=use_breadspsf,
-                                                                   IWA=IWA, OWA=OWA, ann_width = ann_width,padding=0.05,
-                                                                   out_filename=rdi_filename_perframe,
-                                                                   overwrite=overwrite, mppool=None, debug_wv_range=None,
-                                                                   poly_deg_coords=0)
-            # exit()
-            # else:
-            #     with fits.open(rdi_filename_perframe) as hdulist:
-            #         residuals = hdulist['RESIDUAL'].data
-            residuals_list.append(residuals)
+            if "RDI" in mode:
+                rdi_filename_perframe = os.path.join(utils_dir,os.path.basename(filename).replace(".fits", "_fitpsf"+ suffix + ".fits"))
+                if RDI_use_breadspsf:
+                    RDI_use_stpsf = False
+                if overwrite or len(glob(rdi_filename_perframe)) == 0:
+                    bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=RDI_use_stpsf,use_breadspsf=RDI_use_breadspsf,
+                                                                           IWA=RDI_IWA, OWA=RDI_OWA, ann_width = RDI_ann_width,padding=0.05,
+                                                                           out_filename=rdi_filename_perframe,
+                                                                           overwrite=overwrite, mppool=None, debug_wv_range=None,
+                                                                           poly_deg_coords=0)
+                else:
+                    with fits.open(rdi_filename_perframe) as hdulist:
+                        residuals = hdulist['RESIDUAL'].data
+
+                dataobj.data = residuals
 
             dataobj_list.append(dataobj)
 
-    combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
-    build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+"_cube"+rdi_suffix+"_nosub.fits")
-    # _mppool=None
-    _debug_wv_range = [4.5, 4.51]
-    _mppool = mppool
-    # _debug_wv_range=None
-    _overwrite = True
-    out = build_cube(combdataobj,ra_vec, dec_vec,
-               use_breadspsf = True,use_stpsf = False,
-               out_filename=build_cube_filename,overwrite=_overwrite,
-               mppool=_mppool, aper_radius=0.15,
-               debug_wv_range=_debug_wv_range, N_pix_min=None)
+        combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
 
-    for dataobj,residuals in zip(dataobj_list,residuals_list):
-        dataobj.data = residuals
-    # combined data object
-    RDI_combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
-    if save_pickle:
-        RDI_combdataobj.save(suffix=pickle_suffix)
 
-    build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+"_cube"+rdi_suffix+".fits")
+        combdataobj.compute_interpdata_regwvs(wv_sampling = wv_sampling)
+
+        if save_pickle:
+            combdataobj.save(suffix=pickle_suffix)
+
     # _mppool=None
-    _debug_wv_range = [4.5, 4.51]
+    # _debug_wv_range = [4.5, 4.51]
     _mppool = mppool
-    # _debug_wv_range=None
-    _overwrite = True
-    out = build_cube(RDI_combdataobj,ra_vec, dec_vec,
-               use_breadspsf = True,use_stpsf = False,
+    _debug_wv_range=None
+    _overwrite = False
+    out = build_cube(combdataobj,x_vec, y_vec,
+               use_breadspsf = use_breadspsf,use_stpsf = use_stpsf,
                out_filename=build_cube_filename,overwrite=_overwrite,
-               mppool=_mppool, aper_radius=0.15,
+               mppool=_mppool, aper_radius=aper_radius,
                debug_wv_range=_debug_wv_range, N_pix_min=None)
-    # flux_cube, fluxerr_cube, ra_grid, dec_grid = out
-    return out
+    flux_cube, fluxerr_cube, x_grid, y_grid, wv_sampling = out
+
+    # for dataobj,residuals in zip(dataobj_list,residuals_list):
+    #     dataobj.data = residuals
+    # # combined data object
+    # RDI_combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
+
+
+
+    # build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+"_cube"+rdi_suffix+".fits")
+    # # _mppool=None
+    # _debug_wv_range = [4.5, 4.51]
+    # _mppool = mppool
+    # # _debug_wv_range=None
+    # _overwrite = True
+    # out = build_cube(RDI_combdataobj,ra_vec, dec_vec,
+    #            use_breadspsf = True,use_stpsf = False,
+    #            out_filename=build_cube_filename,overwrite=_overwrite,
+    #            mppool=_mppool, aper_radius=0.15,
+    #            debug_wv_range=_debug_wv_range, N_pix_min=None)
+    # # flux_cube, fluxerr_cube, ra_grid, dec_grid = out
+
+    return flux_cube, fluxerr_cube, x_grid, y_grid,wv_sampling
 
 ###########################################################################
 # Host Star PSF Subtraction 
@@ -1730,7 +1769,9 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_
 def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_spec_filename,
                                         wv_nodes=None,coords_offset = None,
                                         mask_charge_transfer_radius=None, mppool=None,
-                                        ra_dec_point_sources=None, overwrite=False,targetname=None):
+                                        ra_dec_point_sources=None,aper_rad=None,
+                                        overwrite=False,targetname=None,
+                                        spline3d_prior_filename=None):
     """
 
     Parameters
@@ -1764,7 +1805,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
             ["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True],# True,True means "save data and load if you can"
             ["compute_coordinates_arrays", {'targname': targetname}, True, True],
             ["apply_coords_offset", {"coords_offset": coords_offset}],
-            ["compute_starspectrum_contnorm", {"wv_nodes": wv_nodes,"threshold_badpix": 100, "iterative": False,
+            ["compute_starspectrum_contnorm", {"wv_nodes": wv_nodes,"threshold_badpix": 100, "iterative": False,"spline3d_prior_filename":spline3d_prior_filename,
                                                "mppool": mppool}, True, True],
             ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool, "iterative": False}, False, True],# don't save, but load, temporary reduction only
             ["compute_starspectrum_contnorm", {"wv_nodes": wv_nodes,"threshold_badpix": 100, "iterative": False,
@@ -1779,8 +1820,10 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
                 dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
             # mask planets before computing the star spectrum
             if ra_dec_point_sources is not None:
+                if aper_rad is None:
+                    aper_rad = 0.16
                 for ra_pl, dec_pl in ra_dec_point_sources:
-                    where_pl = dataobj.where_point_source([ra_pl / 1000., dec_pl / 1000.], 0.16)
+                    where_pl = dataobj.where_point_source([ra_pl / 1000., dec_pl / 1000.], aper_rad)
                     dataobj.bad_pixels[where_pl] = np.nan
 
             dataobj_list.append(dataobj)
@@ -1854,7 +1897,7 @@ def compute_starlight_subtraction(cal_files, utils_dir, wv_nodes=None, combined_
 def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_filename,
                       wv_nodes=None,x_nodes=None,y_nodes=None,save_pickle=False, load_pickle=False,
                       coords_filename_filter = None,numthreads=1,spline3d_suffix = "",
-                      centroid_per_frame=True, overwrite=False,mask_charge_transfer_radius=None,
+                      centroid_per_frame=True, overwrite=False,mask_charge_transfer_radius=None,ra_dec_point_sources=None,aper_rad =None,
                       stamp_size = (0.2,0.2)):
 
     grating = fits.getheader(cal_files[0])['GRATING'].strip()
@@ -1887,6 +1930,13 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
 
             if mask_charge_transfer_radius is not None:
                 dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
+
+            if ra_dec_point_sources is not None:
+                if aper_rad is None:
+                    aper_rad = 0.16
+                for ra_pl, dec_pl in ra_dec_point_sources:
+                    where_pl = dataobj.where_point_source([ra_pl / 1000., dec_pl / 1000.], aper_rad)
+                    dataobj.bad_pixels[where_pl] = np.nan
 
             dataobj_list.append(dataobj)
 

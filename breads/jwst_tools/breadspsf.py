@@ -17,7 +17,7 @@ from breads.jwst_tools.splines import evaluate_3dspline_grid
 from breads.jwst_tools.plotting import save_cube_as_gif
 
 def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,numthreads=1,stis_spectrum=None,
-                     overwrite=False,units_str = None,stamp_size=None):
+                     overwrite=False,units_str = None):
     BREADS_DATA_ENV = os.getenv('BREADS_DATA')
     breadsPSF_DIR = os.path.join(BREADS_DATA_ENV, "BreadsPSF")
     if not os.path.exists(breadsPSF_DIR):
@@ -32,8 +32,6 @@ def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,
     if basename is None:
         basename = "breadsPSF.fits"
 
-    _out = evaluate_3dspline_grid(x_vec, y_vec, wv_sampling, spline3d_filename, max_cores=numthreads,stamp_size=stamp_size)
-    breadspsf, breadspsf_err = _out
 
     hdulist = pyfits.open(spline3d_filename)
     wv_nodes = hdulist["wv_nodes"].data
@@ -42,7 +40,11 @@ def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,
     spline3d_paras = hdulist["SPLINE_PARAS0"].data
     spline3d_paras_err = hdulist["SPLINE_PARAS0_ERR"].data
     breads_header = hdulist['BREADS'].header
+    stamp_size = (hdulist['BREADS'].header['3DSPLSSX'], hdulist['BREADS'].header['3DSPLSSY'])
     hdulist.close()
+
+    _out = evaluate_3dspline_grid(x_vec, y_vec, wv_sampling, spline3d_filename, max_cores=numthreads,stamp_size=stamp_size)
+    breadspsf, breadspsf_err = _out
 
     if stis_spectrum is not None:
         stis_table = Table(pyfits.getdata(stis_spectrum, 1))
@@ -157,15 +159,19 @@ def merge_breadspsfs(breadsPSF_basename_init, J1757132_breadsPSF_basename,breads
         xx = np.tile(xx[None, :, :], (2,2,np.size(wv_nodes1), 1, 1))
         yy = np.tile(yy[None, :, :], (2,2,np.size(wv_nodes1), 1, 1))
         rr = np.tile(rr[None, :, :], (2,2,np.size(wv_nodes1), 1, 1))
-        where_good = np.where(np.isfinite(spline3d_paras0) & np.isfinite(spline3d_paras1) & np.isfinite(spline3d_paras_err0) &
+        where_good = np.where(np.isfinite(spline3d_paras0) & np.isfinite(spline3d_paras1) & np.isfinite(spline3d_paras_err0) & (spline3d_paras_err0>1e7)&
                               np.isfinite(spline3d_paras_err1) & (np.abs(xx) < dist_mask) & (np.abs(yy) < dist_mask) &
                               (np.abs(xx) >= mask_charge_transfer_radius) & np.abs(rr >= (2 * mask_charge_transfer_radius)))
 
-        num = np.nansum(spline3d_paras0[where_good] * spline3d_paras1[where_good] / (
-                spline3d_paras_err0[where_good] ** 2 + spline3d_paras_err1[where_good] ** 2))  #
-        denum = np.nansum(spline3d_paras1[where_good] ** 2 / (
-                spline3d_paras_err0[where_good] ** 2 + spline3d_paras_err1[where_good] ** 2))  #
+        lower = np.percentile(spline3d_paras_err0[where_good], 0.01)
+        err0 =  np.clip(spline3d_paras_err0[where_good], a_min=lower, a_max=None)
+        lower = np.percentile(spline3d_paras_err1[where_good], 0.01)
+        err1 =  np.clip(spline3d_paras_err1[where_good], a_min=lower, a_max=None)
+
+        num = np.nansum(spline3d_paras0[where_good] * spline3d_paras1[where_good] / (err0 ** 2 + err1 ** 2))
+        denum = np.nansum(spline3d_paras1[where_good] ** 2 / (err0 ** 2 + err1 ** 2))
         scaling = num / denum
+
         spline3d_paras1_scaled = scaling * spline3d_paras1
         spline3d_paras1_scaled_err = scaling * spline3d_paras_err1
 
@@ -186,7 +192,7 @@ def merge_breadspsfs(breadsPSF_basename_init, J1757132_breadsPSF_basename,breads
         spline3d_paras_combined_err = 1 / np.sqrt(denum)
 
         plt.figure()
-        mid_id = spline3d_paras0.shape[1]//2
+        mid_id = spline3d_paras0.shape[3]//2
         plt.errorbar(x_nodes0, np.nanmedian(spline3d_paras0,axis=(0,1))[2, mid_id, :],
                      yerr=np.nanmedian(spline3d_paras_err0,axis=(0,1))[2, mid_id, :],
                      label='J1757132 (faint)', fmt="")

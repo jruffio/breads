@@ -132,14 +132,16 @@ def fitpsf(dataobj, ref_dataobj = None,
         stpsfY = np.tile(webbpsf_y[None, :, :], (stpsfs.shape[0], 1, 1))
         flipx = True
     elif use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
+        BREADS_DATA_ENV = os.getenv('BREADS_DATA')
         if isinstance(use_breadspsf, bool) and use_breadspsf:
             grating = dataobj.priheader['GRATING'].strip()
             detector = dataobj.priheader['DETECTOR'].strip().lower()
-            use_breadspsf_str = f"HD163466_J1757132_{grating}_{detector}.fits"
-            # use_breadspsf_str = f"J1757132_{grating}_{detector}_hd.fits"
+            if os.path.exists(os.path.join(BREADS_DATA_ENV, "BreadsPSF", f"HD163466_J1757132_{grating}_{detector}.fits")):
+                use_breadspsf_str = f"HD163466_J1757132_{grating}_{detector}.fits"
+            else:
+                use_breadspsf_str = f"J1757132_{grating}_{detector}.fits"
         elif isinstance(use_breadspsf, str):
             use_breadspsf_str = use_breadspsf
-        BREADS_DATA_ENV = os.getenv('BREADS_DATA')
         breadsPSF_path = os.path.join(BREADS_DATA_ENV, "BreadsPSF",use_breadspsf_str)
         hdulist = pyfits.open(breadsPSF_path)
         stpsfs = hdulist['EPSFS'].data
@@ -277,7 +279,7 @@ def fitpsf(dataobj, ref_dataobj = None,
 
         poly_centroid_filename = out_filename.replace(".fits", "_poly_centroid_IWA{0:.2f}_OWA{1:.2f}.txt".format(IWA,OWA))
         poly_fluxcal_filename = out_filename.replace(".fits", "_poly_fluxcal_IWA{0:.2f}_OWA{1:.2f}.txt".format(IWA,OWA))
-        plot_filename = out_filename.replace(".fits", "_fitpsf_results.png")
+        plot_filename = out_filename.replace(".fits", "_results.png")
         analyze_fitpsf_results(dataobj,bestfit_paras,stis_spectrum=stis_spectrum,poly_deg_coords=poly_deg_coords,poly_deg_flux=poly_deg_flux,
                                poly_centroid_filename=poly_centroid_filename,poly_fluxcal_filename=poly_fluxcal_filename,plot_filename=plot_filename,
                            wv_min = wv_min,wv_max = wv_max)
