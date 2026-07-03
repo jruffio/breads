@@ -1279,7 +1279,7 @@ class JWST_IFUs(ABC):
             if mppool is None:
                 max_cores = 1
             else:
-                max_cores = mppool.max_cores
+                max_cores = mppool._processes
 
             _out = evaluate_3dspline_pointcloud(self, spline3d_prior_filename, max_cores=max_cores)
             stellar_features, _ = _out
@@ -1303,24 +1303,32 @@ class JWST_IFUs(ABC):
                 # Set the width of the prior to its mean to have fairly unconstraining priors
                 reg_std_map0[rowid, :] = np.max([np.abs(median_row),stddev_row])
 
+        if reg_mean_map0 is None and reg_std_map0 is None:
+            regularization = False
+        else:
+            regularization = True
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
                                                                               badpixs=bad_pixels,
                                                                               wv_nodes=wv_nodes, mppool=mppool,
                                                                               threshold=threshold_badpix,
                                                                               stellar_features = stellar_features,
-                                                                              regularization=True,
+                                                                              regularization=regularization,
                                                                               reg_mean_map=reg_mean_map0,
                                                                               reg_std_map=reg_std_map0)
         if iterative:
-            reg_mean_map1 = copy(spline_paras0)
-            where_nan = np.where(np.isnan(reg_mean_map1))
-            reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
-            reg_std_map1 = np.abs(reg_mean_map1)
+            if regularization:
+                reg_mean_map1 = copy(spline_paras0)
+                where_nan = np.where(np.isnan(reg_mean_map1))
+                reg_mean_map1[where_nan] = reg_mean_map0[where_nan]
+                reg_std_map1 = np.abs(reg_mean_map1)
+            else:
+                reg_mean_map1 = None
+                reg_std_map1 = None
             spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=new_badpixs,
                                                                                   wv_nodes=wv_nodes, mppool=mppool,
                                                                                   threshold=threshold_badpix,
                                                                                   stellar_features = stellar_features,
-                                                                                  regularization=True,
+                                                                                  regularization=regularization,
                                                                                   reg_mean_map=reg_mean_map1,
                                                                                   reg_std_map=reg_std_map1)
 
@@ -1579,6 +1587,12 @@ class JWST_IFUs(ABC):
             Nit = 2
         else:
             Nit = 1
+
+        if reg_mean_map is None and reg_std_map is None:
+            regularization = False
+        else:
+            regularization = True
+
         for i in range(Nit):
             star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
                                                                                   badpixs=bad_pixels,
@@ -1586,7 +1600,7 @@ class JWST_IFUs(ABC):
                                                                                   stellar_features=stellar_features,
                                                                                   threshold=threshold_badpix,
                                                                                   mppool=mppool,
-                                                                                  regularization=True,
+                                                                                  regularization=regularization,
                                                                                   reg_mean_map=reg_mean_map,
                                                                                   reg_std_map=reg_std_map)
             bad_pixels = bad_pixels * new_badpixs

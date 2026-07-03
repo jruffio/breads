@@ -608,7 +608,7 @@ def _task_evaluate_3dspline(paras):
     spline3d_paras_np = _arraytonumpy(shared_spline3d_paras, shared_spline3d_paras_shape, dtype=mp_float_type)
     spline3d_paras_err_np = _arraytonumpy(shared_spline3d_paras_err, shared_spline3d_paras_shape, dtype=mp_float_type)
 
-    _mins,_maxs = np.nanmin(scaled_x_np,axis=(1,2)),np.nanmax(scaled_x_np,axis=(1,2))
+    # _mins,_maxs = np.nanmin(scaled_x_np,axis=(1,2)),np.nanmax(scaled_x_np,axis=(1,2))
 
     # k0 : left index of stamp in x direction including extended margins
     # k1 : left index of stamp in x direction (defines the first index that will be saved in the output)
@@ -671,17 +671,17 @@ def _task_evaluate_3dspline(paras):
     # print("Current stamp values ",x_nodes[k1],x_nodes[k2],y_nodes[l1],y_nodes[l2])
     # print("Current extended stamp values ",x_nodes[k0],x_nodes[k3],y_nodes[l0],y_nodes[l3])
     # # plt.figure()
-    # _xxn,_yyn = np.meshgrid(_x_nodes, _y_nodes)
-    # print(_xxn.shape,spline3d_paras_np[m0,m1,2,l0:l3+1,k0:k3+1].shape)
-    # plt.subplot(1,2,1)
-    # plt.scatter(_xxn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
-    # plt.subplot(1,2,2)
-    # plt.scatter(_yyn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
+    # # _xxn,_yyn = np.meshgrid(_x_nodes, _y_nodes)
+    # # print(_xxn.shape,spline3d_paras_np[m0,m1,2,l0:l3+1,k0:k3+1].shape)
+    # # plt.subplot(1,2,1)
+    # # plt.scatter(_xxn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
+    # # plt.subplot(1,2,2)
+    # # plt.scatter(_yyn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
+    # # plt.figure()
+    # # plt.imshow(spline3d_paras_np[0,0,2,l0:l3+1,k0:k3+1],origin="lower")
+    #
     # plt.figure()
-    # plt.imshow(spline3d_paras_np[2,l0:l3+1,k0:k3+1],origin="lower")
-
-    # plt.figure()
-    # plt.imshow(bestfit_model_np[bestfit_model_np.shape[0]//2,:,:],origin="lower")
+    # plt.imshow(bestfit_model_np,origin="lower")
     # plt.show()
 
     # plt.figure()
@@ -841,8 +841,8 @@ def evaluate_3dspline(ifux,ifuy,wvs,
 
     if 0:
         print(spline3d_filename)
-        # stamp_list = stamp_list[200:221]
-        stamp_list = stamp_list[243:245]
+        stamp_list = stamp_list[200:221]
+        # stamp_list = stamp_list[243:245]
         # stamp_list = stamp_list[(840-41*0)::41]
         # for stamp_id,stamp_tuple in enumerate(stamp_list):
         #     k0,k1,k2,k3,l0,l1,l2,l3,m0,m1 = stamp_tuple

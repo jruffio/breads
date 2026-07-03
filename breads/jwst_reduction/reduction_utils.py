@@ -52,6 +52,7 @@ from breads.jwst_tools.fitpsf import fitpsf
 from breads.jwst_tools.spectra import combine_spectrum,combine_spectrum_1dspline
 import breads.jwst_tools.default_nirspec as default
 from breads.jwst_tools.build_cube import build_cube
+from breads.jwst_tools.splines import evaluate_3dspline_pointcloud
 
 from collections import defaultdict
 
@@ -1432,12 +1433,13 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
     plt.close('all')
 
 
-def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename,centroid_suffix,
-                    mode = "raw",suffix="_breads_cube",
+def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename,coords_filename_filter,
+                    mode = "raw",suffix=None,contnorm_suffix=None,
                     x_vec=None, y_vec=None, wv_sampling=None,
                     mask_charge_transfer_radius=None,ra_dec_point_sources=None,
                     aper_radius=0.15,
                     RDI_IWA=None, RDI_OWA=None, RDI_ann_width=0.5,RDI_use_stpsf = False,RDI_use_breadspsf = True,
+                    ASDI_contnorm_3dspline_filename=None,ASDI_starsub_3dspline_filename=None,
                     mppool=None,
                     overwrite=False,
                     targetname=None,
@@ -1448,9 +1450,11 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
     # - modes:
     # 	- raw
     # 	- 1dspline
-    # 	- 1dspline_with_prior
     # 	- RDI
     # 	- ASDI
+
+    if suffix is None:
+        suffix = mode
 
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
@@ -1469,18 +1473,6 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
     if wv_sampling is None:
         wv_sampling = default.wv_sampling_dict[grating][detector]
 
-    # Define a series of processing tasks to be performed on each input file.
-    # coords_filename = glob(fitpsf_filename.replace(".fits","_poly_centroid*.txt"))[0]
-    preproc_task_list = [["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}],
-                         ["compute_coordinates_arrays", {'targname': targetname}]]
-
-    if "1dspline" in mode:
-        # todo add breads PSf prior in 1d spline if mode == "1dspline_with_prior"
-        _task = ["compute_starsubtraction", {"threshold_badpix": 10, "mppool": None,"combined_contnorm_filename": combined_contnorm_spec_filename}]
-        preproc_task_list.append(_task)
-    else:
-        _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": None,"combined_contnorm_filename": combined_contnorm_spec_filename}]
-        preproc_task_list.append(_task)
 
     # - steps:
     # 	- if 1d spline
@@ -1496,7 +1488,7 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
     splitbasename = os.path.basename(cal_files[0]).split("_")
 
 
-    build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+suffix+".fits")
+    build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+"_"+suffix+"_cube.fits")
     if os.path.exists(build_cube_filename):
         with fits.open(build_cube_filename) as hdulist:
             flux_cube = hdulist['FLUX'].data
@@ -1507,21 +1499,42 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
         return flux_cube, fluxerr_cube, x_grid, y_grid,wv_sampling
 
     if ifucoords:
-        pickle_suffix = suffix + "_ifu_regwvs"
+        pickle_suffix = "_"+suffix + "_ifu_regwvs"
     else:
-        pickle_suffix = suffix + "_sky_regwvs"
+        pickle_suffix = "_"+suffix + "_sky_regwvs"
     pickle_filename = os.path.join(utils_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+ pickle_suffix+".pkl")
 
     if load_pickle and len(glob(pickle_filename)) >= 1:
         combdataobj = JWSTNirspec_multiple_cals.load(pickle_filename)
     else:
         dataobj_list = []
-        residuals_list = []
         for filename in cal_files:
             dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir)
+
+            if contnorm_suffix is not None:
+                dataobj.default_filenames["compute_starspectrum_contnorm"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits","_"+contnorm_suffix+".fits")
+                dataobj.default_filenames["compute_advanced_badpix"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits","_"+contnorm_suffix+".fits")
+                dataobj.default_filenames["compute_starsubtraction"] = dataobj.default_filenames["compute_starsubtraction"].replace(".fits","_"+contnorm_suffix+".fits")
+
+            # Define a series of processing tasks to be performed on each input file.
+            # coords_filename = glob(fitpsf_filename.replace(".fits","_poly_centroid*.txt"))[0]
+            preproc_task_list = [["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}],
+                                 ["compute_coordinates_arrays", {'targname': targetname}]]
+
+            if mode == "1dspline":
+                _task = ["compute_starsubtraction", {"threshold_badpix": 10, "mppool": mppool,
+                                                     "combined_contnorm_filename": combined_contnorm_spec_filename,
+                                                     "load_starspectrum_contnorm": None}]
+            elif mode =="1dspline_with_prior":
+                _task = ["compute_starsubtraction", {"threshold_badpix": 10, "mppool": mppool,
+                                                     "combined_contnorm_filename": combined_contnorm_spec_filename,
+                                                     "load_starspectrum_contnorm": dataobj.default_filenames["compute_starspectrum_contnorm"]}]
+            else:
+                _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool,
+                                                     "combined_contnorm_filename": combined_contnorm_spec_filename}]
+            preproc_task_list.append(_task)
             dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
 
-            coords_filename_filter = centroid_suffix + "_poly_centroid_*.txt"
             coords_filename = glob(os.path.join(utils_dir,os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
             dataobj.apply_coords_offset(coords_filename = coords_filename)
 
@@ -1543,30 +1556,50 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
                 dataobj.set_coords2ifu()
 
             if "RDI" in mode:
-                rdi_filename_perframe = os.path.join(utils_dir,os.path.basename(filename).replace(".fits", "_fitpsf"+ suffix + ".fits"))
+                rdi_filename_perframe = os.path.join(utils_dir,os.path.basename(filename).replace(".fits", "_fitpsf_"+ suffix + ".fits"))
                 if RDI_use_breadspsf:
                     RDI_use_stpsf = False
+                dataobj.compute_interpdata_regwvs(wv_sampling=wv_sampling,save_utils=False)
                 if overwrite or len(glob(rdi_filename_perframe)) == 0:
                     bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=RDI_use_stpsf,use_breadspsf=RDI_use_breadspsf,
                                                                            IWA=RDI_IWA, OWA=RDI_OWA, ann_width = RDI_ann_width,padding=0.05,
                                                                            out_filename=rdi_filename_perframe,
-                                                                           overwrite=overwrite, mppool=None, debug_wv_range=None,
-                                                                           poly_deg_coords=0)
+                                                                           overwrite=overwrite, mppool=mppool, debug_wv_range=None,
+                                                                           poly_deg_coords=0,linear_interp=False)
                 else:
                     with fits.open(rdi_filename_perframe) as hdulist:
                         residuals = hdulist['RESIDUAL'].data
-
                 dataobj.data = residuals
 
             dataobj_list.append(dataobj)
 
         combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
 
-
-        combdataobj.compute_interpdata_regwvs(wv_sampling = wv_sampling)
+        if mode != "RDI":
+            combdataobj.compute_interpdata_regwvs(wv_sampling = wv_sampling)
 
         if save_pickle:
             combdataobj.save(suffix=pickle_suffix)
+
+    if mode == "ASDI":
+        hdulist = fits.open(ASDI_contnorm_3dspline_filename)
+        new_wavelengths = hdulist["WAVE"].data
+        combined_fluxes = hdulist["COM_FLUXES"].data
+        hdulist.close()
+        star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+        # plt.figure()
+        # plt.plot(wv_sampling, star_func(wv_sampling))
+        # plt.show()
+
+        # ASDI_contnorm_3dspline_filename,ASDI_starsub_3dspline_filename
+        stellar_features = star_func(combdataobj.wavelengths)
+        max_cores = mppool._processes
+        _out = evaluate_3dspline_pointcloud(combdataobj, ASDI_starsub_3dspline_filename, max_cores=max_cores,stellar_features=stellar_features)
+        ASDI_model, _ = _out
+        # plt.plot(combdataobj.data[750,:])
+        # plt.plot(ASDI_model[750,:])
+        # plt.show()
+        combdataobj.data -= ASDI_model
 
     # _mppool=None
     # _debug_wv_range = [4.5, 4.51]
@@ -1767,7 +1800,8 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_
     return new_wavelengths, combined_fluxes, combined_errors,combined_star_func
 
 def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_spec_filename,
-                                        wv_nodes=None,coords_offset = None,
+                                        wv_nodes=None, suffix = None,
+                                        coords_offset = None,coords_filename_filter=None,
                                         mask_charge_transfer_radius=None, mppool=None,
                                         ra_dec_point_sources=None,aper_rad=None,
                                         overwrite=False,targetname=None,
@@ -1800,19 +1834,31 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
         if coords_offset is None:
             coords_offset = (0,0)
 
-        # Define a series of processing tasks to be performed on each input file.
-        preproc_task_list = [
-            ["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True],# True,True means "save data and load if you can"
-            ["compute_coordinates_arrays", {'targname': targetname}, True, True],
-            ["apply_coords_offset", {"coords_offset": coords_offset}],
-            ["compute_starspectrum_contnorm", {"wv_nodes": wv_nodes,"threshold_badpix": 100, "iterative": False,"spline3d_prior_filename":spline3d_prior_filename,
-                                               "mppool": mppool}, True, True],
-            ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool, "iterative": False}, False, True],# don't save, but load, temporary reduction only
-            ["compute_starspectrum_contnorm", {"wv_nodes": wv_nodes,"threshold_badpix": 100, "iterative": False,
-                                               "mppool": mppool}, True,False]]  # Save, but don't load, always overwrite the previous reduction
         dataobj_list = []
         for filename in cal_files:
             dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir)
+
+            if suffix is not None:
+                dataobj.default_filenames["compute_starspectrum_contnorm"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits","_"+suffix+".fits")
+                dataobj.default_filenames["compute_advanced_badpix"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits","_"+suffix+".fits")
+                dataobj.default_filenames["compute_starsubtraction"] = dataobj.default_filenames["compute_starsubtraction"].replace(".fits","_"+suffix+".fits")
+
+            if coords_filename_filter is not None:
+                coords_filename = glob(os.path.join(utils_dir,os.path.basename(dataobj.filename).replace(".fits", coords_filename_filter)))[0]
+                coords_offset = None
+            else:
+                coords_filename = None
+
+            # Define a series of processing tasks to be performed on each input file.
+            preproc_task_list = [
+                ["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True],# True,True means "save data and load if you can"
+                ["compute_coordinates_arrays", {'targname': targetname}, True, True],
+                ["apply_coords_offset", {"coords_offset": coords_offset,"coords_filename":coords_filename}],
+                ["compute_starspectrum_contnorm", {"wv_nodes": wv_nodes,"threshold_badpix": 100, "iterative": False,"spline3d_prior_filename":spline3d_prior_filename,
+                                                   "mppool": mppool}, True, True],
+                ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool, "iterative": False}, False, True],# don't save, but load, temporary reduction only
+                ["compute_starspectrum_contnorm", {"wv_nodes": wv_nodes,"threshold_badpix": 100, "iterative": False,"spline3d_prior_filename":spline3d_prior_filename,
+                                                   "mppool": mppool}, True,False]]  # Save, but don't load, always overwrite the previous reduction
             dataobj.run_preproc_list(preproc_task_list=preproc_task_list)
 
             # Do some masking
