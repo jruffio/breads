@@ -34,11 +34,16 @@ def _build_cube_task(inputs):
     """
     X, Y, Z, Zerr, Zbp, wv_sampling, psf_interp_paras, wv_id, wv,  ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name = inputs
 
-    psf_interp = _interp_psf(psf_interp_paras)
 
     ny,nx = ifux_grid.shape
     mfflux_arr = np.full_like(ifux_grid,np.nan)
     mffluxerr_arr = np.full_like(ifux_grid,np.nan)
+
+    psf_interp = _interp_psf(psf_interp_paras)
+
+    if psf_interp is None:
+        return mfflux_arr,mffluxerr_arr
+
     for k in range(ny):
         for l in range(nx):
             ra, dec = ifux_grid[k,l],ifuy_grid[k,l]
@@ -97,6 +102,9 @@ def _interp_psf(paras):
     wX, wY = rotate_coordinates(wX, wY, 0, flipx=flipx)
 
     wherepsffinite = np.where(np.isfinite(wZ))
+    if np.size(wherepsffinite[0]) == 0:
+        return None
+
     wX, wY, wZ = wX[wherepsffinite], wY[wherepsffinite], wZ[wherepsffinite]
     if linear_interp:
         webbpsf_interp = LinearNDInterpolator((wX, wY), wZ, fill_value=0.0)
@@ -134,8 +142,8 @@ def build_cube(dataobj,
             with pyfits.open(out_filename) as hdul:
                 flux_cube = hdul["FLUX"].data
                 fluxerr_cube = hdul["FLUXERR"].data
-                ra_grid = hdul["RA"].data
-                dec_grid = hdul["DEC"].data
+                ra_grid = hdul["X"].data
+                dec_grid = hdul["Y"].data
                 wv_sampling = hdul["WAVE"].data
             return flux_cube, fluxerr_cube, ra_grid, dec_grid,wv_sampling
 
@@ -198,7 +206,7 @@ def build_cube(dataobj,
     _x,_y = dataobj.get_ifu_coords()
     _d = dataobj.data
     _e = dataobj.noise
-    _bp = dataobj.noise
+    _bp = dataobj.bad_pixels
 
     ifu_name = dataobj.ifu_name
     if ifu_name == 'miri':

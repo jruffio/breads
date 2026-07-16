@@ -984,9 +984,9 @@ def _arraytonumpy(shared_array, shape=None, dtype=None):
 
 def plot_3dspline_residuals(combdataobj, overwrite = False):
     contnorm_spline3d_filename = combdataobj.default_filenames["compute_starspectrum_contnorm_3dspline"]
-    print(contnorm_spline3d_filename)
+    # print(contnorm_spline3d_filename)
     starsub_spline3d_filename = combdataobj.default_filenames["compute_starsubtraction_3dspline"]
-    print(starsub_spline3d_filename)
+    # print(starsub_spline3d_filename)
 
     if not overwrite and os.path.exists(os.path.join(combdataobj.utils_dir, os.path.basename(starsub_spline3d_filename).replace(".fits", ""))):
         return

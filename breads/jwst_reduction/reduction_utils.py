@@ -13,6 +13,8 @@ import itertools
 
 import multiprocessing as mp
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as PathEffects
+import matplotlib.gridspec as gridspec
 import plotly.graph_objects as go
 import datetime
 from scipy.ndimage import generic_filter, gaussian_filter
@@ -1473,23 +1475,11 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
     if wv_sampling is None:
         wv_sampling = default.wv_sampling_dict[grating][detector]
 
-
-    # - steps:
-    # 	- if 1d spline
-    # 		- starsub1d (+ 3d prior option?)
-    # 	- elif RDI per frame (input roll2 breadsPSF)
-    # 		- fitpsf
-    # 	- combdataobj
-    # 	- if ASDI (input roll2 breadsPSF; probably need to mask the planet here)
-    # 		- evaluate 3dspline from breadsPSF
-    # 	- elif RDI from comb (input roll2 breadsPSF)
-    # 		- fitpsf
-
     splitbasename = os.path.basename(cal_files[0]).split("_")
 
 
     build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+"_"+suffix+"_cube.fits")
-    if os.path.exists(build_cube_filename):
+    if not overwrite and os.path.exists(build_cube_filename):
         with fits.open(build_cube_filename) as hdulist:
             flux_cube = hdulist['FLUX'].data
             fluxerr_cube = hdulist['FLUXERR'].data
@@ -1538,11 +1528,15 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
             coords_filename = glob(os.path.join(utils_dir,os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
             dataobj.apply_coords_offset(coords_filename = coords_filename)
 
+            if "RDI" in mode:
+                dataobj.compute_interpdata_regwvs(wv_sampling=wv_sampling,save_utils=False)
+
             # Do some masking
             if mask_charge_transfer_radius is not None:
                 dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
             # mask point sources
             if ra_dec_point_sources is not None:
+                _badpix_map_cp = copy(dataobj.bad_pixels)
                 for ra_pl, dec_pl in ra_dec_point_sources:
                     if "sky" in dataobj.breads_header['COORDS']:
                         x_pl,y_pl = ra_pl, dec_pl
@@ -1559,17 +1553,18 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
                 rdi_filename_perframe = os.path.join(utils_dir,os.path.basename(filename).replace(".fits", "_fitpsf_"+ suffix + ".fits"))
                 if RDI_use_breadspsf:
                     RDI_use_stpsf = False
-                dataobj.compute_interpdata_regwvs(wv_sampling=wv_sampling,save_utils=False)
                 if overwrite or len(glob(rdi_filename_perframe)) == 0:
                     bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=RDI_use_stpsf,use_breadspsf=RDI_use_breadspsf,
                                                                            IWA=RDI_IWA, OWA=RDI_OWA, ann_width = RDI_ann_width,padding=0.05,
                                                                            out_filename=rdi_filename_perframe,
-                                                                           overwrite=overwrite, mppool=mppool, debug_wv_range=None,
+                                                                           overwrite=overwrite, mppool=mppool, debug_wv_range=None,#[4.5,4.51]
                                                                            poly_deg_coords=0,linear_interp=False)
                 else:
                     with fits.open(rdi_filename_perframe) as hdulist:
-                        residuals = hdulist['RESIDUAL'].data
-                dataobj.data = residuals
+                        bestfit_model = hdulist['BESTMODL'].data
+                dataobj.data -= bestfit_model
+                if ra_dec_point_sources is not None:
+                    dataobj.bad_pixels = _badpix_map_cp
 
             dataobj_list.append(dataobj)
 
@@ -1605,12 +1600,12 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
     # _debug_wv_range = [4.5, 4.51]
     _mppool = mppool
     _debug_wv_range=None
-    _overwrite = False
     out = build_cube(combdataobj,x_vec, y_vec,
                use_breadspsf = use_breadspsf,use_stpsf = use_stpsf,
-               out_filename=build_cube_filename,overwrite=_overwrite,
+               out_filename=build_cube_filename,overwrite=overwrite,
                mppool=_mppool, aper_radius=aper_radius,
-               debug_wv_range=_debug_wv_range, N_pix_min=None)
+               debug_wv_range=_debug_wv_range, N_pix_min=None,
+                     linear_interp=False)
     flux_cube, fluxerr_cube, x_grid, y_grid, wv_sampling = out
 
     # for dataobj,residuals in zip(dataobj_list,residuals_list):
@@ -1634,6 +1629,100 @@ def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename
     # # flux_cube, fluxerr_cube, ra_grid, dec_grid = out
 
     return flux_cube, fluxerr_cube, x_grid, y_grid,wv_sampling
+
+
+def extract_spectrum(cube_filename, out_filename, xy_coords):
+    x, y = xy_coords
+    with fits.open(cube_filename) as hdulist:
+        flux_cube = hdulist['FLUX'].data
+        fluxerr_cube = hdulist['FLUXERR'].data
+        x_grid = hdulist['X'].data
+        y_grid = hdulist['Y'].data
+        wv_sampling = hdulist['WAVE'].data
+    kmax, lmax = np.unravel_index(np.nanargmin(((x_grid - x) ** 2 + (y_grid - y) ** 2)), x_grid.shape)
+
+    r2comp_grid = np.sqrt((x_grid - x) ** 2 + (y_grid - y) ** 2)
+    r2star_grid = np.sqrt((x_grid) ** 2 + (y_grid) ** 2)
+    sep_comp = np.sqrt(x ** 2 + y ** 2)
+    speckles_mask = (r2star_grid > (sep_comp - 0.05)) * (r2star_grid < (sep_comp + 0.05))
+    whereannulus = np.where(speckles_mask)
+
+    speckles = flux_cube[:, whereannulus[0], whereannulus[1]]
+    speckle_std = np.nanstd(speckles, axis=1)
+    speckle_std[np.where(speckle_std == 0)] = np.nan
+    spectrum = flux_cube[:, kmax, lmax]
+    err = fluxerr_cube[:, kmax, lmax]
+    spectrum_Flambda = (spectrum * u.MJy * const.c / (wv_sampling * u.um) ** 2).to(
+        u.W * u.m ** -2 / u.um).value
+    err_Flambda = (err * u.MJy * const.c / (wv_sampling * u.um) ** 2).to(
+        u.W * u.m ** -2 / u.um).value
+    speckle_std_Flambda = (speckle_std * u.MJy * const.c / (wv_sampling * u.um) ** 2).to(
+        u.W * u.m ** -2 / u.um).value
+    speckles_Flambda = (speckles * u.MJy * const.c / (wv_sampling[:, None] * u.um) ** 2).to(
+        u.W * u.m ** -2 / u.um).value
+
+    hdulist = fits.HDUList()
+    hdulist.append(fits.ImageHDU(data=wv_sampling, name='WAVE'))
+    hdulist.append(fits.ImageHDU(data=spectrum, name='FLUX_MJy'))
+    hdulist.append(fits.ImageHDU(data=err, name='ERR_MJy'))
+    hdulist.append(fits.ImageHDU(data=speckle_std, name='STD_MJy'))
+    hdulist.append(fits.ImageHDU(data=speckles, name='SPECKLES'))
+    hdulist.append(fits.ImageHDU(data=spectrum_Flambda, name='FLUX_FLAM'))
+    hdulist.append(fits.ImageHDU(data=err_Flambda, name='ERR_FLAM'))
+    hdulist.append(fits.ImageHDU(data=speckle_std_Flambda, name='STD_FLAM'))
+    hdulist.append(fits.ImageHDU(data=speckles_Flambda, name='SPECKLES_FLAM'))
+    # hdulist.append(fits.ImageHDU(data=cov_matrix, name='COV'))
+    # hdulist.append(fits.ImageHDU(data=corr_matrix, name='CORR'))
+    try:
+        hdulist.writeto(out_filename, overwrite=True)
+    except TypeError:
+        hdulist.writeto(out_filename, clobber=True)
+    hdulist.close()
+
+    plt.figure(figsize=(12,3))
+    plt.fill_between(wv_sampling, spectrum_Flambda - speckle_std_Flambda, spectrum_Flambda + speckle_std_Flambda,label="RDI", zorder=0, alpha=0.2)
+    plt.plot(wv_sampling, spectrum_Flambda, label="spec", zorder=2)
+    N_speckles=speckles_Flambda.shape[1]
+    plt.plot(wv_sampling, speckles_Flambda[:,::N_speckles//5], label="speckles", zorder=1,alpha=0.5,color="grey")
+    plt.ylim([-1e-17, 3e-17])
+
+    plt.savefig(out_filename.replace(".fits","_1dspec.png"), dpi=200)
+
+
+    plt.figure()
+    fontsize = 12
+    x_vec, y_vec = x_grid[0, :], y_grid[:, 0]
+    dx, dy = x_vec[1] - x_vec[0], y_vec[1] - y_vec[0]
+    plt.imshow(np.nansum(flux_cube[100:(flux_cube.shape[0] - 100), :, :], axis=0), origin="lower", cmap="viridis",
+               extent=[x_vec[0] - dx / 2., x_vec[-1] + dx / 2., y_vec[0] - dy / 2., y_vec[-1] + dy / 2.])
+    plt.clim([-0.5e-7, 0.5e-7])
+    plt.colorbar()
+    plt.xlim([-2, 2])
+    plt.xticks([-2, -1, 0, 1, 2])
+    plt.ylim([-2, 2])
+    plt.yticks([-2, -1, 0, 1, 2])
+    plt.gca().invert_xaxis()
+    plt.gca().set_aspect('equal')
+    plt.xlabel("$\Delta$RA (as)", fontsize=fontsize)
+    plt.ylabel("$\Delta$Dec (as)", fontsize=fontsize)
+    plt.gca().tick_params(axis='x', labelsize=fontsize)
+    plt.gca().tick_params(axis='y', labelsize=fontsize)
+
+    # txt = plt.text(0.03, 0.01, simbad_name + " " + detector, fontsize=1.4 * fontsize, ha='left', va='bottom',
+    #                transform=plt.gca().transAxes, color="black", zorder=10)
+    # txt.set_path_effects([PathEffects.withStroke(linewidth=1, foreground='w')])
+    plt.plot(0, 0, "*", color="grey", markersize=10)
+    txt = plt.text(0.2, -0.1, 'A', fontsize=fontsize, ha='center', va='top', color="grey")  # \n 1.1-2.6 Jy
+    txt.set_path_effects([PathEffects.withStroke(linewidth=1, foreground='w')])
+    # plt.plot(ra_offset, dec_offset,".",color="white",markersize=10)
+
+    # plt.text(ra_planets[pl] / 1000. - 0.4, dec_planets[pl] / 1000., pl, fontsize=fontsize, ha='center', va='top',
+    #          color="white")  # \n 36-166 $\mu$Jy
+    circle = plt.Circle(xy_coords, 0.2, facecolor='#FFFFFF00',edgecolor='white')  # ,zorder=0
+    plt.gca().add_patch(circle)
+    plt.savefig(out_filename.replace(".fits","_im.png"), dpi=200)
+
+    return wv_sampling, spectrum_Flambda, speckle_std_Flambda
 
 ###########################################################################
 # Host Star PSF Subtraction 

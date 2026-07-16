@@ -188,7 +188,7 @@ def fitpsf(dataobj, ref_dataobj = None,
     _x,_y = dataobj.get_ifu_coords()
     _d = dataobj.data
     _e = dataobj.noise
-    _bp = dataobj.noise
+    _bp = dataobj.bad_pixels
     if ref_dataobj is not None:
         _psfX, _psfY = ref_dataobj.get_ifu_coords()
         _psfs = ref_dataobj.data
@@ -200,7 +200,7 @@ def fitpsf(dataobj, ref_dataobj = None,
     residuals = np.full(dataobj.data.shape, np.nan)
 
     bestfit_paras_defined = False
-    if  mppool is None:
+    if mppool is None:
         print(f"\tPerforming serial PSF fit at {debug_end - debug_init} wavelengths.")
 
         for wv_id, wv in tqdm(enumerate(dataobj.wv_sampling), total=len(dataobj.wv_sampling), ncols=100):
