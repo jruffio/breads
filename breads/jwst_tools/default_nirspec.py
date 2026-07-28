@@ -42,3 +42,8 @@ wv_sampling_dict["G395H"]["nrs1"] = np.arange(2.85, 4.119999999999999, 0.00056) 
 wv_sampling_dict["G395H"]["nrs2"] = np.arange(4.07, 5.2999999999999945, 0.00056)  # this is lambda/R = 3.0 um/(2700*2)
 
 wv_ref_dict = {"G140H":1.5,"G235H":2.5,"G395H":4.0}
+
+photfilter_name_dict = {}
+photfilter_name_dict = {"G140H":{},"G235H":{},"G395H":{}}
+photfilter_name_dict["G395H"]["nrs1"] = "F356W"
+photfilter_name_dict["G395H"]["nrs2"] = "F444W"

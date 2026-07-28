@@ -233,7 +233,7 @@ def build_cube(dataobj,
     fluxerr_cube = np.full((np.size(dataobj.wv_sampling), ifux_grid.shape[0], ifux_grid.shape[1]), np.nan)
 
     if N_pix_min is None:
-        N_pix_min = (np.pi * aper_radius ** 2 / 0.01 * N_dithers) / 4
+        N_pix_min = int((np.pi * aper_radius ** 2 / (0.1**2) * N_dithers) / 2.)
 
     #step 1 prepare list of inputs
     inputs = []

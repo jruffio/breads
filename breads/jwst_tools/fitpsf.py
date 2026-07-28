@@ -16,6 +16,7 @@ from scipy.interpolate import interp1d
 from scipy.optimize import minimize
 from tqdm import tqdm
 from scipy.stats import median_abs_deviation
+from scipy.interpolate import RegularGridInterpolator
 
 
 from breads.utils import rotate_coordinates
@@ -816,3 +817,136 @@ def plot_fitpsf_2d_results(dataobj, bestfit_model, residuals, wv0=None,
         plt.savefig(plot_filename, dpi=200, bbox_inches='tight')
 
     return fig
+
+
+def project_psf_model(dataobj, save_utils=False,centroid = None,OWA=None,spectrum_func=None,out_folder = "insert_psf",
+                     mode=None,mppool=None,use_breadspsf=None,interpgrid=None):
+    """Inserts a PSF model
+    TODO: add documentation
+    Parameters
+    ----------
+    """
+
+
+    if mode is None:
+        mode = "quick_webbpsf"
+
+    if centroid is None:
+        centroid = [0,0]
+
+    if OWA is None:
+        where_finite = np.where(np.isfinite(dataobj.x))
+    else:
+        separation_arr = np.sqrt((dataobj.x-centroid[0])**2+(dataobj.y-centroid[1])**2)
+        where_finite = np.where(np.isfinite(dataobj.x)*(separation_arr<OWA))
+
+
+    if mode == "quick_webbpsf":
+        if not hasattr(dataobj,"webbpsf_interp"):
+            raise Exception("WebbPSF not found. Please run compute_quick_webbpsf_model or compute_webbpsf_model first.")
+        _dra_as_array, _ddec_as_array = dataobj.get_sky_coords()
+        x = _dra_as_array[where_finite]
+        y = _ddec_as_array[where_finite]
+        w = dataobj.wavelengths[where_finite]
+        model_vec = dataobj.webbpsf_interp((x-centroid[0]) * dataobj.breads_header['WBPSFWV0'] / w,
+                                    (y-centroid[1]) * dataobj.breads_header['WBPSFWV0'] / w)
+    elif mode == "webbpsf" or mode == "breadspsf":
+        _ifuX, _ifuY = dataobj.get_ifu_coords()
+        x = _ifuX[where_finite]
+        y = _ifuY[where_finite]
+        w = dataobj.wavelengths[where_finite]
+        centroid_ifu = dataobj.get_ifu_coords(ras=centroid[0],decs=centroid[1])
+    else:
+        raise Exception("Unknown mode {0} to inject PSF".format(mode))
+
+    if mode == "webbpsf" and interpgrid is None:
+        webbpsf_reload = dataobj.reload_webbpsf_model()
+        if webbpsf_reload is None:
+            print("Did not find a STPSF, computing it now, but it will take a while.")
+            webbpsf_reload = dataobj.compute_webbpsf_model(save_utils=True, mppool= mppool)
+        _, _, epsfs, _wv_sampling, webbpsf_x, webbpsf_y, _, _ = webbpsf_reload
+        epsfs = epsfs[:,::-1]
+        psf_X_vec = -webbpsf_x[0,:]
+        psf_Y_vec = webbpsf_y[:,0]
+
+    elif mode == "breadspsf" and interpgrid is None:
+        BREADS_DATA_ENV = os.getenv('BREADS_DATA')
+        if use_breadspsf is None or (isinstance(use_breadspsf, bool) and use_breadspsf):
+            grating = dataobj.priheader['GRATING'].strip()
+            detector = dataobj.priheader['DETECTOR'].strip().lower()
+            if os.path.exists(
+                    os.path.join(BREADS_DATA_ENV, "BreadsPSF", f"HD163466_J1757132_{grating}_{detector}.fits")):
+                use_breadspsf_str = f"HD163466_J1757132_{grating}_{detector}.fits"
+            else:
+                use_breadspsf_str = f"J1757132_{grating}_{detector}.fits"
+        elif isinstance(use_breadspsf, str):
+            use_breadspsf_str = use_breadspsf
+        breadsPSF_path = os.path.join(BREADS_DATA_ENV, "BreadsPSF", use_breadspsf_str)
+        hdulist = pyfits.open(breadsPSF_path)
+        epsfs = hdulist['EPSFS'].data
+        psf_X = hdulist['X'].data
+        psf_Y = hdulist['Y'].data
+        psf_X_vec = psf_X[0, :]
+        psf_Y_vec = psf_Y[:, 0]
+        _wv_sampling = hdulist['WAVE'].data
+        hdulist.close()
+
+    if mode == "webbpsf" or mode == "breadspsf":
+        if interpgrid is None:
+            if not hasattr(dataobj, "wv_sampling"):
+                if not np.allclose(dataobj.wv_sampling, _wv_sampling):
+                    raise Exception("BreadsPSF wavelength sampling is different from the one in the data object.")
+            # print(_wv_sampling)
+            # print(psf_Y_vec)
+            # print(psf_X_vec)
+            myinterpgrid = RegularGridInterpolator((_wv_sampling, psf_Y_vec, psf_X_vec), epsfs, method="linear",
+                                                   bounds_error=False, fill_value=np.nan)
+        else:
+            myinterpgrid = interpgrid
+        # w, y, x are 1D arrays of query points (e.g. from where_finite), same length
+        query_pts = np.stack([w, (y-centroid_ifu[1]), (x-centroid_ifu[0])], axis=-1)  # shape (N_points, 3), order = (wave, y, x)
+        model_vec = myinterpgrid(query_pts)
+
+        # wv0_slice = np.nanmedian(w)
+        # x_grid, y_grid = np.meshgrid(psf_X_vec - centroid[0], psf_Y_vec - centroid[1])
+        # psf_slice = myinterpgrid((np.full(x_grid.shape, wv0_slice), y_grid, x_grid))
+        # plt.figure()
+        # plt.imshow(psf_slice, origin="lower",
+        #            extent=[x_grid[0, 0], x_grid[0, -1], y_grid[0, 0], y_grid[-1, 0]])
+        # plt.show()
+
+    if mode == "webbpsf":
+        rescale_flux = np.nansum(dataobj.area2d[where_finite]*model_vec)/np.nansum(model_vec)
+        model_vec /= rescale_flux # to convert fitted fluxes from MJy/sr to MJy
+
+    if spectrum_func is not None:
+        model_vec *= spectrum_func(w)
+
+    model_im = np.full(dataobj.data.shape,0.0)
+    model_im[where_finite] = model_vec
+    # plt.scatter(x,y,c=model_vec)
+    # plt.show()
+
+    if save_utils:
+        if isinstance(save_utils,str):
+            out_filename = save_utils
+        else:
+            if not os.path.exists(os.path.join(dataobj.utils_dir, out_folder)):
+                os.makedirs(os.path.join(dataobj.utils_dir, out_folder))
+            out_filename = os.path.join(dataobj.utils_dir, out_folder,os.path.basename(dataobj.filename))
+
+        hdulist_sc = pyfits.open(dataobj.filename)
+        du = dataobj.breads_header["DATAUNIT"]
+        bu = dataobj.extheader["BUNIT"].strip()
+        if du == 'MJy' and bu == 'MJy':
+            hdulist_sc["SCI"].data = model_im
+        if du == 'MJy/sr' and bu == 'MJy/sr':
+            hdulist_sc["SCI"].data = model_im
+        if du == 'MJy/sr' and bu == 'MJy':
+            hdulist_sc["SCI"].data = model_im * dataobj.area2d
+        if du == 'MJy' and bu == 'MJy/sr':
+            hdulist_sc["SCI"].data = model_im / dataobj.area2d
+        hdulist_sc.writeto(out_filename, overwrite=True)
+        hdulist_sc.close()
+
+    return model_im

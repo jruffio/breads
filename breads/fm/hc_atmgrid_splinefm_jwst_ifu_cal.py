@@ -10,9 +10,11 @@ from breads.utils import get_spline_model
 
 
 # pos: (x,y) or fiber, position of the companion
-def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, star_func=None,radius_as=0.2, nodes=20,
+def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
+             atm_grid=None, atm_grid_wvs=None, star_func=None,radius_as=0.2, nodes=20,
              badpixfraction=0.75, fix_parameters=None, Nrows_max=200, detec_KLs=None, wvs_KLs_f=None,
-             regularization=None, reg_mean_map=None, reg_std_map=None):
+             regularization=None, reg_mean_map=None, reg_std_map=None,stellar_features0=None,use_stpsf=True,
+                                     fix_fitting_region_around_xy = None):
 
     """
     For high-contrast companions (planet + speckles).
@@ -86,33 +88,32 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
     ny, nx = data.shape
     noise = cubeobj.noise
     bad_pixels = cubeobj.bad_pixels
-    ra_array = cubeobj.dra_as_array
-    dec_array = cubeobj.ddec_as_array
+    ra_array = cubeobj.x
+    dec_array = cubeobj.y
     wvs = cubeobj.wavelengths
     pixarea_steradians = cubeobj.area2d
 
     if ifu_name == 'miri':
-        if cubeobj.channel_reduction == '1' or cubeobj.channel_reduction == '4':
-            ra_array[:, 500:] = np.nan
-            dec_array[:, 500:] = np.nan
-            wvs[:, 500:] = np.nan
-        else:
-            ra_array[:, :500] = np.nan
-            dec_array[:, :500] = np.nan
-            wvs[:, :500] = np.nan
+        raise Exception('Miri model not yet implemented.')
+        # if cubeobj.channel_reduction == '1' or cubeobj.channel_reduction == '4':
+        #     ra_array[:, 500:] = np.nan
+        #     dec_array[:, 500:] = np.nan
+        #     wvs[:, 500:] = np.nan
+        # else:
+        #     ra_array[:, :500] = np.nan
+        #     dec_array[:, :500] = np.nan
+        #     wvs[:, :500] = np.nan
+        #
+        # #Transpose the arrays for miri
+        # data = data.transpose()
+        # ny, nx = data.shape
+        # bad_pixels = bad_pixels.transpose()
+        # noise = noise.transpose()
+        # wvs = wvs.transpose()
+        # dec_array = dec_array.transpose()
+        # ra_array = ra_array.transpose()
+        # pixarea_steradians = pixarea_steradians.transpose()
 
-        #Transpose the arrays for miri
-        data = data.transpose()
-        ny, nx = data.shape
-        bad_pixels = bad_pixels.transpose()
-        noise = noise.transpose()
-        wvs = wvs.transpose()
-        dec_array = dec_array.transpose()
-        ra_array = ra_array.transpose()
-        pixarea_steradians = pixarea_steradians.transpose()
-
-    steradians_to_arcsec2 = 1 / (2. * np.pi / (360. * 3600.)) ** 2
-    pixarea_arcsec2 = pixarea_steradians * steradians_to_arcsec2
 
     vsini, rv = other_nonlin_paras[0:2]
 
@@ -122,9 +123,40 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
     # Defining the position of companion
     comp_dra_as, comp_ddec_as = other_nonlin_paras[2], other_nonlin_paras[3]
 
-    comp_spec = _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs, pixarea_arcsec2)
+    comp_spec = _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs)
 
-    where_trace_finite, Nd, new_mask, larger_mask_comp, Nrows, rows_ids = _extract_companion_traces(ra_array, dec_array, comp_dra_as, comp_ddec_as, radius_as, nx, data, bad_pixels, noise, comp_spec, star_func, Nrows_max, wvs)
+    if fix_fitting_region_around_xy is None:
+        dist2comp_as = np.sqrt((ra_array - comp_dra_as) ** 2 + (dec_array - comp_ddec_as) ** 2)
+    else:
+        fix_x,fix_y = fix_fitting_region_around_xy
+        dist2comp_as = np.sqrt((ra_array - fix_x) ** 2 + (dec_array - fix_y) ** 2)
+
+    mask_comp = dist2comp_as < radius_as
+    larger_mask_comp = dist2comp_as < 3 * radius_as
+    mask_vec = np.nansum(mask_comp, axis=1) != 0
+    rows_ids = np.where(mask_vec)[0]
+
+    new_mask = np.tile(mask_vec[:, None], (1, nx))
+
+    finite_mask = (
+        np.isfinite(data)
+        & np.isfinite(bad_pixels)
+        & np.isfinite(comp_spec)
+        & np.isfinite(star_func(wvs))
+    )
+
+    valid_mask = (
+        finite_mask
+        & new_mask
+        & larger_mask_comp
+        & (noise != 0)
+    )
+
+    where_trace_finite = np.where(valid_mask)
+    Nrows = np.size(rows_ids)
+    Nd = np.size(where_trace_finite[0])
+    if Nrows > Nrows_max:
+        raise Exception("Too many rows")
 
     d = data[where_trace_finite]
     s = noise[where_trace_finite]
@@ -174,7 +206,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
 
         selec_M_spline[:, where_del_col[0]] = 0
         M_speckles[where_finite_and_in_row[0], _k, :] = selec_M_spline
-        if regularization == "user":
+        if regularization == "user" and reg_mean_map is not None and reg_std_map is not None:
             d_reg_speckles[_k, :] = reg_mean_map[rows_ids[_k], :]
             d_reg_speckles[_k, where_del_col[0]] = np.nan
             s_reg_speckles[_k, :] = reg_std_map[rows_ids[_k], :]
@@ -192,8 +224,13 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
             selec_KL_vec = detec_KLs[where_trace_finite[1][where_finite_and_in_row], :]
             M_KLs_detec[where_finite_and_in_row[0], _k, :] = selec_KL_vec
 
+    if stellar_features0 is None:
+        stellar_features = star_func(w)[:, None]
+    else:
+        stellar_features = stellar_features0[where_trace_finite] * star_func(w)[:, None]
+
     M_speckles = np.reshape(M_speckles, (Nd, Nrows * N_nodes))
-    M_speckles = M_speckles * star_func(w)[:, None]
+    M_speckles = M_speckles * stellar_features
 
     if wvs_KLs_f is not None:
         M_KLs = np.reshape(M_KLs, (Nd, Nrows * len(wvs_KLs_f)))
@@ -205,11 +242,24 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
     else:
         M_KLs_detec = None
 
-    comp_model = cubeobj.webbpsf_interp((x - comp_dra_as) * cubeobj.webbpsf_wv0 / w,
-                                        (y - comp_ddec_as) * cubeobj.webbpsf_wv0 / w) * comp_spec #multiply off axis PSF by the companion spectrum
+    comp_model = cubeobj.webbpsf_interp((x - comp_dra_as) * cubeobj.breads_header['WBPSFWV0'] / w,
+                                        (y - comp_ddec_as) * cubeobj.breads_header['WBPSFWV0'] / w)
+    if use_stpsf:
+        # Get the median pixel area for the point source
+        rescale_flux = np.nansum(pixarea_steradians[where_trace_finite]*comp_model)/np.nansum(comp_model)
+        comp_model /= rescale_flux # to convert fitted fluxes from MJy/sr to MJy
+
+    # multiply off axis PSF by the companion spectrum, and return companion flux in uJy instead of MJy
+    comp_model = comp_model * comp_spec / 1e12
 
     # combine planet model with speckle model
-    M = _concatenate_matrices(M_speckles, comp_model, wvs_KLs_f, detec_KLs, M_KLs, M_KLs_detec)
+    M = np.concatenate([comp_model[:, None], M_speckles], axis=1)
+    # M = M_speckles
+
+    if wvs_KLs_f is not None:
+        M = np.concatenate([M, M_KLs], axis=1)
+    if detec_KLs is not None:
+        M = np.concatenate([M, M_KLs_detec], axis=1)
 
     if regularization == "user":
         #Vectorize the 2d arrays for regularization
@@ -247,11 +297,11 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
 
     return d, M, s, extra_outputs
 
-def _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs, pixarea):
+def _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs):
     """Helper function to interpolate companion spectrum"""
     planet_model = atm_grid(atm_paras)[0]
-    if cubeobj.data_unit != 'MJy':
-        raise TypeError("cubeobj.data_unit must be 'MJy', try running the convert_MJy_per_sr_to_MJy preprocessing step before")
+    if cubeobj.breads_header["DATAUNIT"] != 'MJy/sr':
+        raise TypeError("cubeobj.breads_header['DATAUNIT'] must be 'MJy/sr'")
 
     if np.all(planet_model == 0):
         raise ValueError("Something wrong in planet spectrum, all values are 0")
@@ -267,44 +317,10 @@ def _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, 
         planet_f = interp1d(atm_grid_wvs, spinbroad_model, bounds_error=False, fill_value=np.nan)
 
         comp_spec = planet_f(wvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
-        comp_spec = comp_spec * pixarea / cubeobj.webbpsf_spaxel_area  # normalized to peak flux
         comp_spec = comp_spec * (wvs * u.um) ** 2 / const.c  # from  Flambda to Fnu
         comp_spec = comp_spec.to(u.MJy).value
 
     return comp_spec
-
-def _extract_companion_traces(ra_array, dec_array, comp_dra_as, comp_ddec_as, radius_as, nx, data, bad_pixels, noise, comp_spec, star_func, Nrows_max, wvs):
-    # extract planet trace in the detector 2D space
-    dist2comp_as = np.sqrt((ra_array - comp_dra_as) ** 2 + (dec_array - comp_ddec_as) ** 2)
-
-    mask_comp = dist2comp_as < radius_as
-    larger_mask_comp = dist2comp_as < 3 * radius_as
-    mask_vec = np.nansum(mask_comp, axis=1) != 0
-    rows_ids = np.where(mask_vec)[0]
-
-    new_mask = np.tile(mask_vec[:, None], (1, nx))
-
-    finite_mask = (
-        np.isfinite(data)
-        & np.isfinite(bad_pixels)
-        & np.isfinite(comp_spec)
-        & np.isfinite(star_func(wvs))
-    )
-
-    valid_mask = (
-        finite_mask
-        & new_mask
-        & larger_mask_comp
-        & (noise != 0)
-    )
-
-    where_trace_finite = np.where(valid_mask)
-    Nrows = np.size(rows_ids)
-    Nd = np.size(where_trace_finite[0])
-    if Nrows > Nrows_max:
-        raise Exception("Too many rows")
-
-    return where_trace_finite, Nd, new_mask, larger_mask_comp, Nrows, rows_ids
 
 def _create_nodes(cubeobj, nodes):
     """Manage all the different cases to define the position of the spline nodes"""
@@ -322,13 +338,3 @@ def _create_nodes(cubeobj, nodes):
         raise ValueError("Unknown format for nodes.")
 
     return x_nodes, N_nodes
-
-def _concatenate_matrices(M_speckles, comp_model, wvs_KLs_f, detec_KLs, M_KLs, M_KLs_detec):
-    M = np.concatenate([comp_model[:, None], M_speckles], axis=1)
-
-    if wvs_KLs_f is not None:
-        M = np.concatenate([M, M_KLs], axis=1)
-    if detec_KLs is not None:
-        M = np.concatenate([M, M_KLs_detec], axis=1)
-
-    return M

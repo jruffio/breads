@@ -3,27 +3,15 @@ Tutorials
 ================
 
 
-
-General
--------
- - Using atmosphere models via species. `Tutorial notebook here <https://github.com/jruffio/breads/blob/main/demos/atm_utils_tutorial.ipynb>`_ . 
-
-
-JWST
--------
 .. toctree::
    :maxdepth: 1
    :caption: JWST
 
    tutorials/jwst/1_obtaining_uncalibrated_data_tutorial.ipynb
-   tutorials/jwst/2_running_BREADS_pipeline_tutorial.ipynb
+   tutorials/jwst/tutorial_HIP65426b.ipynb
    tutorials/jwst/3_analyzing_data_products_CCF_covariance.ipynb
    tutorials/jwst/4_spectral_modelling_likelihood_joint_analysis.ipynb
    tutorials/jwst/utils
-
-
-KPIC
--------
 
 .. toctree::
    :maxdepth: 1
@@ -31,4 +19,8 @@ KPIC
 
    tutorials/kpic/KPIC_Tutorial_1_Placeholder.ipynb
 
+
+General
+-------
+ - Using atmosphere models via species. `Tutorial notebook here <https://github.com/jruffio/breads/blob/main/demos/atm_utils_tutorial.ipynb>`_ .
 

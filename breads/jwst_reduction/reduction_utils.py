@@ -10,12 +10,14 @@ from astropy.io import fits
 from tqdm import tqdm
 from multiprocess import Pool
 import itertools
+import h5py
 
 import multiprocessing as mp
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as PathEffects
-import matplotlib.gridspec as gridspec
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import matplotlib.gridspec as gridspec
 import datetime
 from scipy.ndimage import generic_filter, gaussian_filter
 from scipy.ndimage import convolve1d
@@ -23,6 +25,7 @@ from scipy.ndimage import convolve
 from scipy.ndimage import correlate
 from scipy.signal import fftconvolve
 from scipy.interpolate import interp1d
+from scipy.interpolate import RegularGridInterpolator
 import matplotlib.tri as tri
 import warnings
 import matplotlib.gridspec as gridspec
@@ -50,11 +53,14 @@ from breads.fit import fitfm
 from breads.utils import get_spline_model,get_breads_commit
 import breads.jwst_tools.plotting
 from breads.jwst_tools.plotting import filter_big_triangles
-from breads.jwst_tools.fitpsf import fitpsf
+from breads.jwst_tools.fitpsf import fitpsf,project_psf_model
 from breads.jwst_tools.spectra import combine_spectrum,combine_spectrum_1dspline
 import breads.jwst_tools.default_nirspec as default
 from breads.jwst_tools.build_cube import build_cube
 from breads.jwst_tools.splines import evaluate_3dspline_pointcloud
+from breads.fm.hc_atmgrid_splinefm_jwst_ifu_cal import hc_atmgrid_splinefm_jwst_ifu_cal
+from breads.instruments.jwstnirspec_cal import PCA_wvs_axis
+from breads.grid_search import grid_search
 
 from collections import defaultdict
 
@@ -549,57 +555,6 @@ def _task_charge_transfer_nirspec_col(_args):
 
     return scale * charge_transfer_model_col,[cutoff, power]
 
-
-# def _chi2_charge_transfer_col_cutoff_only(paras, data_col, bad_pixels_col, new_model_col, tau,power, kernel_radius=1024):
-#     cutoff = paras
-#     if tau is not None and tau <= 0:
-#         return np.inf
-#     if cutoff < 0:
-#         return np.inf
-#     if power <= 0: #or power > 2.0
-#         return np.inf
-#     _charge_transfer_model = _charge_transfer_model_col_fun(new_model_col, tau=tau, cutoff=cutoff, power=power,
-#                                                             kernel_radius=kernel_radius)
-#     scale = np.nansum(data_col* bad_pixels_col * _charge_transfer_model) / np.nansum((_charge_transfer_model * bad_pixels_col) ** 2)
-#     res = data_col - scale * _charge_transfer_model
-#     chi2 = np.nansum(res ** 2)
-#     return chi2
-#
-#
-# def _task_charge_transfer_nirspec_col_cutoff_only(_args):
-#     data_col, bkg_bad_pixels_col, new_model_col,noise_ratio = _args
-#     if noise_ratio <1.0:
-#         return np.zeros(np.shape(data_col))
-#     if np.nansum(new_model_col) == 0 or np.nansum(bkg_bad_pixels_col) == 0:
-#         return np.zeros(np.shape(data_col))
-#     tau = None  # No exponential decay term
-#     cutoff0 = np.min([2000,np.nanmax(new_model_col)/2.,10*np.nanmax(np.abs(data_col*bkg_bad_pixels_col))])
-#     # print(cutoff0,[2000,np.nanmax(new_model_col)/2.,10*np.nanmax(np.abs(data_col*bkg_bad_pixels_col))])
-#     # cutoff0=3
-#     power0 = 1.8
-#     kernel_radius=1024
-#
-#     paras0 = [cutoff0]  # your initial guesses
-#     cutoff = paras0
-#     paras0 = np.array(paras0)
-#     simplex_init_steps = [cutoff0 / 2.]
-#     initial_simplex = np.concatenate([paras0[None, :], paras0[None, :] + np.diag(simplex_init_steps)], axis=0)
-#
-#     result = minimize(_chi2_charge_transfer_col_cutoff_only, paras0, args=(data_col, bkg_bad_pixels_col, new_model_col,
-#                                                                tau,power0, kernel_radius), method='Nelder-Mead',
-#                       options={"maxiter": 1e2, "initial_simplex": initial_simplex, "disp": False})
-#     cutoff = result.x[0]
-#     print(result.nit, [cutoff],paras0)
-#     # if power < 1.0 or power > 3.0:
-#     #     return np.zeros(np.shape(data_col))
-#     charge_transfer_model_col = _charge_transfer_model_col_fun(new_model_col, tau=tau, cutoff=cutoff, power=power0,kernel_radius=kernel_radius)
-#     denum = np.nansum((charge_transfer_model_col * bkg_bad_pixels_col) ** 2)
-#     if denum > 0:
-#         scale = np.nansum(data_col * charge_transfer_model_col) / denum
-#     else:
-#         scale = 0.0
-#
-#     return scale * charge_transfer_model_col,[cutoff, power0]
 
 def fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,rn_noise,poisson_noise,targetname=None,mppool=None,use_stpsf=False,use_breadspsf=True,init_centroid=None):
     im = copy(rate_dataobj.data)
@@ -1435,295 +1390,6 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
     plt.close('all')
 
 
-def cube_extraction(cal_files, utils_dir,out_dir,combined_contnorm_spec_filename,coords_filename_filter,
-                    mode = "raw",suffix=None,contnorm_suffix=None,
-                    x_vec=None, y_vec=None, wv_sampling=None,
-                    mask_charge_transfer_radius=None,ra_dec_point_sources=None,
-                    aper_radius=0.15,
-                    RDI_IWA=None, RDI_OWA=None, RDI_ann_width=0.5,RDI_use_stpsf = False,RDI_use_breadspsf = True,
-                    ASDI_contnorm_3dspline_filename=None,ASDI_starsub_3dspline_filename=None,
-                    mppool=None,
-                    overwrite=False,
-                    targetname=None,
-                    use_stpsf = False,use_breadspsf = True,
-                    load_pickle = True,
-                    save_pickle = True,
-                    ifucoords = False):
-    # - modes:
-    # 	- raw
-    # 	- 1dspline
-    # 	- RDI
-    # 	- ASDI
-
-    if suffix is None:
-        suffix = mode
-
-    if not os.path.exists(utils_dir):
-        os.makedirs(utils_dir)
-
-    if use_breadspsf is not None:
-        use_stpsf = False
-
-    grating = fits.getheader(cal_files[0])['GRATING'].strip()
-    detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
-
-    if x_vec is None:
-        x_vec = np.arange(-2, 2, 0.05)
-    if y_vec is None:
-        y_vec = np.arange(-2, 2, 0.05)
-
-    if wv_sampling is None:
-        wv_sampling = default.wv_sampling_dict[grating][detector]
-
-    splitbasename = os.path.basename(cal_files[0]).split("_")
-
-
-    build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+"_"+suffix+"_cube.fits")
-    if not overwrite and os.path.exists(build_cube_filename):
-        with fits.open(build_cube_filename) as hdulist:
-            flux_cube = hdulist['FLUX'].data
-            fluxerr_cube = hdulist['FLUXERR'].data
-            x_grid = hdulist['X'].data
-            y_grid = hdulist['Y'].data
-            wv_sampling = hdulist['WAVE'].data
-        return flux_cube, fluxerr_cube, x_grid, y_grid,wv_sampling
-
-    if ifucoords:
-        pickle_suffix = "_"+suffix + "_ifu_regwvs"
-    else:
-        pickle_suffix = "_"+suffix + "_sky_regwvs"
-    pickle_filename = os.path.join(utils_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+ pickle_suffix+".pkl")
-
-    if load_pickle and len(glob(pickle_filename)) >= 1:
-        combdataobj = JWSTNirspec_multiple_cals.load(pickle_filename)
-    else:
-        dataobj_list = []
-        for filename in cal_files:
-            dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir)
-
-            if contnorm_suffix is not None:
-                dataobj.default_filenames["compute_starspectrum_contnorm"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits","_"+contnorm_suffix+".fits")
-                dataobj.default_filenames["compute_advanced_badpix"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits","_"+contnorm_suffix+".fits")
-                dataobj.default_filenames["compute_starsubtraction"] = dataobj.default_filenames["compute_starsubtraction"].replace(".fits","_"+contnorm_suffix+".fits")
-
-            # Define a series of processing tasks to be performed on each input file.
-            # coords_filename = glob(fitpsf_filename.replace(".fits","_poly_centroid*.txt"))[0]
-            preproc_task_list = [["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}],
-                                 ["compute_coordinates_arrays", {'targname': targetname}]]
-
-            if mode == "1dspline":
-                _task = ["compute_starsubtraction", {"threshold_badpix": 10, "mppool": mppool,
-                                                     "combined_contnorm_filename": combined_contnorm_spec_filename,
-                                                     "load_starspectrum_contnorm": None}]
-            elif mode =="1dspline_with_prior":
-                _task = ["compute_starsubtraction", {"threshold_badpix": 10, "mppool": mppool,
-                                                     "combined_contnorm_filename": combined_contnorm_spec_filename,
-                                                     "load_starspectrum_contnorm": dataobj.default_filenames["compute_starspectrum_contnorm"]}]
-            else:
-                _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool,
-                                                     "combined_contnorm_filename": combined_contnorm_spec_filename}]
-            preproc_task_list.append(_task)
-            dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
-
-            coords_filename = glob(os.path.join(utils_dir,os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
-            dataobj.apply_coords_offset(coords_filename = coords_filename)
-
-            if "RDI" in mode:
-                dataobj.compute_interpdata_regwvs(wv_sampling=wv_sampling,save_utils=False)
-
-            # Do some masking
-            if mask_charge_transfer_radius is not None:
-                dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
-            # mask point sources
-            if ra_dec_point_sources is not None:
-                _badpix_map_cp = copy(dataobj.bad_pixels)
-                for ra_pl, dec_pl in ra_dec_point_sources:
-                    if "sky" in dataobj.breads_header['COORDS']:
-                        x_pl,y_pl = ra_pl, dec_pl
-                    elif "ifu" in dataobj.breads_header['COORDS']:
-                        _out = dataobj.get_ifu_coords(ras=ra_pl, decs=dec_pl)
-                        x_pl,y_pl = float(_out[0]),float(_out[1])
-                    where_pl = dataobj.where_point_source([x_pl / 1000., y_pl / 1000.], 0.16)
-                    dataobj.bad_pixels[where_pl] = np.nan
-
-            if ifucoords:
-                dataobj.set_coords2ifu()
-
-            if "RDI" in mode:
-                rdi_filename_perframe = os.path.join(utils_dir,os.path.basename(filename).replace(".fits", "_fitpsf_"+ suffix + ".fits"))
-                if RDI_use_breadspsf:
-                    RDI_use_stpsf = False
-                if overwrite or len(glob(rdi_filename_perframe)) == 0:
-                    bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=RDI_use_stpsf,use_breadspsf=RDI_use_breadspsf,
-                                                                           IWA=RDI_IWA, OWA=RDI_OWA, ann_width = RDI_ann_width,padding=0.05,
-                                                                           out_filename=rdi_filename_perframe,
-                                                                           overwrite=overwrite, mppool=mppool, debug_wv_range=None,#[4.5,4.51]
-                                                                           poly_deg_coords=0,linear_interp=False)
-                else:
-                    with fits.open(rdi_filename_perframe) as hdulist:
-                        bestfit_model = hdulist['BESTMODL'].data
-                dataobj.data -= bestfit_model
-                if ra_dec_point_sources is not None:
-                    dataobj.bad_pixels = _badpix_map_cp
-
-            dataobj_list.append(dataobj)
-
-        combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
-
-        if mode != "RDI":
-            combdataobj.compute_interpdata_regwvs(wv_sampling = wv_sampling)
-
-        if save_pickle:
-            combdataobj.save(suffix=pickle_suffix)
-
-    if mode == "ASDI":
-        hdulist = fits.open(ASDI_contnorm_3dspline_filename)
-        new_wavelengths = hdulist["WAVE"].data
-        combined_fluxes = hdulist["COM_FLUXES"].data
-        hdulist.close()
-        star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-        # plt.figure()
-        # plt.plot(wv_sampling, star_func(wv_sampling))
-        # plt.show()
-
-        # ASDI_contnorm_3dspline_filename,ASDI_starsub_3dspline_filename
-        stellar_features = star_func(combdataobj.wavelengths)
-        max_cores = mppool._processes
-        _out = evaluate_3dspline_pointcloud(combdataobj, ASDI_starsub_3dspline_filename, max_cores=max_cores,stellar_features=stellar_features)
-        ASDI_model, _ = _out
-        # plt.plot(combdataobj.data[750,:])
-        # plt.plot(ASDI_model[750,:])
-        # plt.show()
-        combdataobj.data -= ASDI_model
-
-    # _mppool=None
-    # _debug_wv_range = [4.5, 4.51]
-    _mppool = mppool
-    _debug_wv_range=None
-    out = build_cube(combdataobj,x_vec, y_vec,
-               use_breadspsf = use_breadspsf,use_stpsf = use_stpsf,
-               out_filename=build_cube_filename,overwrite=overwrite,
-               mppool=_mppool, aper_radius=aper_radius,
-               debug_wv_range=_debug_wv_range, N_pix_min=None,
-                     linear_interp=False)
-    flux_cube, fluxerr_cube, x_grid, y_grid, wv_sampling = out
-
-    # for dataobj,residuals in zip(dataobj_list,residuals_list):
-    #     dataobj.data = residuals
-    # # combined data object
-    # RDI_combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
-
-
-
-    # build_cube_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+"_"+grating+"_cube"+rdi_suffix+".fits")
-    # # _mppool=None
-    # _debug_wv_range = [4.5, 4.51]
-    # _mppool = mppool
-    # # _debug_wv_range=None
-    # _overwrite = True
-    # out = build_cube(RDI_combdataobj,ra_vec, dec_vec,
-    #            use_breadspsf = True,use_stpsf = False,
-    #            out_filename=build_cube_filename,overwrite=_overwrite,
-    #            mppool=_mppool, aper_radius=0.15,
-    #            debug_wv_range=_debug_wv_range, N_pix_min=None)
-    # # flux_cube, fluxerr_cube, ra_grid, dec_grid = out
-
-    return flux_cube, fluxerr_cube, x_grid, y_grid,wv_sampling
-
-
-def extract_spectrum(cube_filename, out_filename, xy_coords):
-    x, y = xy_coords
-    with fits.open(cube_filename) as hdulist:
-        flux_cube = hdulist['FLUX'].data
-        fluxerr_cube = hdulist['FLUXERR'].data
-        x_grid = hdulist['X'].data
-        y_grid = hdulist['Y'].data
-        wv_sampling = hdulist['WAVE'].data
-    kmax, lmax = np.unravel_index(np.nanargmin(((x_grid - x) ** 2 + (y_grid - y) ** 2)), x_grid.shape)
-
-    r2comp_grid = np.sqrt((x_grid - x) ** 2 + (y_grid - y) ** 2)
-    r2star_grid = np.sqrt((x_grid) ** 2 + (y_grid) ** 2)
-    sep_comp = np.sqrt(x ** 2 + y ** 2)
-    speckles_mask = (r2star_grid > (sep_comp - 0.05)) * (r2star_grid < (sep_comp + 0.05))
-    whereannulus = np.where(speckles_mask)
-
-    speckles = flux_cube[:, whereannulus[0], whereannulus[1]]
-    speckle_std = np.nanstd(speckles, axis=1)
-    speckle_std[np.where(speckle_std == 0)] = np.nan
-    spectrum = flux_cube[:, kmax, lmax]
-    err = fluxerr_cube[:, kmax, lmax]
-    spectrum_Flambda = (spectrum * u.MJy * const.c / (wv_sampling * u.um) ** 2).to(
-        u.W * u.m ** -2 / u.um).value
-    err_Flambda = (err * u.MJy * const.c / (wv_sampling * u.um) ** 2).to(
-        u.W * u.m ** -2 / u.um).value
-    speckle_std_Flambda = (speckle_std * u.MJy * const.c / (wv_sampling * u.um) ** 2).to(
-        u.W * u.m ** -2 / u.um).value
-    speckles_Flambda = (speckles * u.MJy * const.c / (wv_sampling[:, None] * u.um) ** 2).to(
-        u.W * u.m ** -2 / u.um).value
-
-    hdulist = fits.HDUList()
-    hdulist.append(fits.ImageHDU(data=wv_sampling, name='WAVE'))
-    hdulist.append(fits.ImageHDU(data=spectrum, name='FLUX_MJy'))
-    hdulist.append(fits.ImageHDU(data=err, name='ERR_MJy'))
-    hdulist.append(fits.ImageHDU(data=speckle_std, name='STD_MJy'))
-    hdulist.append(fits.ImageHDU(data=speckles, name='SPECKLES'))
-    hdulist.append(fits.ImageHDU(data=spectrum_Flambda, name='FLUX_FLAM'))
-    hdulist.append(fits.ImageHDU(data=err_Flambda, name='ERR_FLAM'))
-    hdulist.append(fits.ImageHDU(data=speckle_std_Flambda, name='STD_FLAM'))
-    hdulist.append(fits.ImageHDU(data=speckles_Flambda, name='SPECKLES_FLAM'))
-    # hdulist.append(fits.ImageHDU(data=cov_matrix, name='COV'))
-    # hdulist.append(fits.ImageHDU(data=corr_matrix, name='CORR'))
-    try:
-        hdulist.writeto(out_filename, overwrite=True)
-    except TypeError:
-        hdulist.writeto(out_filename, clobber=True)
-    hdulist.close()
-
-    plt.figure(figsize=(12,3))
-    plt.fill_between(wv_sampling, spectrum_Flambda - speckle_std_Flambda, spectrum_Flambda + speckle_std_Flambda,label="RDI", zorder=0, alpha=0.2)
-    plt.plot(wv_sampling, spectrum_Flambda, label="spec", zorder=2)
-    N_speckles=speckles_Flambda.shape[1]
-    plt.plot(wv_sampling, speckles_Flambda[:,::N_speckles//5], label="speckles", zorder=1,alpha=0.5,color="grey")
-    plt.ylim([-1e-17, 3e-17])
-
-    plt.savefig(out_filename.replace(".fits","_1dspec.png"), dpi=200)
-
-
-    plt.figure()
-    fontsize = 12
-    x_vec, y_vec = x_grid[0, :], y_grid[:, 0]
-    dx, dy = x_vec[1] - x_vec[0], y_vec[1] - y_vec[0]
-    plt.imshow(np.nansum(flux_cube[100:(flux_cube.shape[0] - 100), :, :], axis=0), origin="lower", cmap="viridis",
-               extent=[x_vec[0] - dx / 2., x_vec[-1] + dx / 2., y_vec[0] - dy / 2., y_vec[-1] + dy / 2.])
-    plt.clim([-0.5e-7, 0.5e-7])
-    plt.colorbar()
-    plt.xlim([-2, 2])
-    plt.xticks([-2, -1, 0, 1, 2])
-    plt.ylim([-2, 2])
-    plt.yticks([-2, -1, 0, 1, 2])
-    plt.gca().invert_xaxis()
-    plt.gca().set_aspect('equal')
-    plt.xlabel("$\Delta$RA (as)", fontsize=fontsize)
-    plt.ylabel("$\Delta$Dec (as)", fontsize=fontsize)
-    plt.gca().tick_params(axis='x', labelsize=fontsize)
-    plt.gca().tick_params(axis='y', labelsize=fontsize)
-
-    # txt = plt.text(0.03, 0.01, simbad_name + " " + detector, fontsize=1.4 * fontsize, ha='left', va='bottom',
-    #                transform=plt.gca().transAxes, color="black", zorder=10)
-    # txt.set_path_effects([PathEffects.withStroke(linewidth=1, foreground='w')])
-    plt.plot(0, 0, "*", color="grey", markersize=10)
-    txt = plt.text(0.2, -0.1, 'A', fontsize=fontsize, ha='center', va='top', color="grey")  # \n 1.1-2.6 Jy
-    txt.set_path_effects([PathEffects.withStroke(linewidth=1, foreground='w')])
-    # plt.plot(ra_offset, dec_offset,".",color="white",markersize=10)
-
-    # plt.text(ra_planets[pl] / 1000. - 0.4, dec_planets[pl] / 1000., pl, fontsize=fontsize, ha='center', va='top',
-    #          color="white")  # \n 36-166 $\mu$Jy
-    circle = plt.Circle(xy_coords, 0.2, facecolor='#FFFFFF00',edgecolor='white')  # ,zorder=0
-    plt.gca().add_patch(circle)
-    plt.savefig(out_filename.replace(".fits","_im.png"), dpi=200)
-
-    return wv_sampling, spectrum_Flambda, speckle_std_Flambda
-
 ###########################################################################
 # Host Star PSF Subtraction 
 
@@ -1971,69 +1637,14 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
         return combined_star_func
 
 
-def compute_starlight_subtraction(cal_files, utils_dir, wv_nodes=None, combined_star_func=None,
-                                  coords_offset=(0, 0), mppool=None,targetname=None):
-    """
-
-    Parameters
-    ----------
-    cal_files
-    utils_dir
-    wv_nodes
-    combined_star_func
-    coords_offset
-    mppool
-
-    Returns
-    -------
-
-    """
-    pass
-    # hdulist_sc = fits.open(cal_files[0])
-    # detector = hdulist_sc[0].header["DETECTOR"].strip().lower()
-    # if wv_nodes is None:
-    #     wv_nodes = np.linspace(np.nanmin(hdulist_sc["WAVELENGTH"].data),
-    #                            np.nanmax(hdulist_sc["WAVELENGTH"].data),
-    #                            40, endpoint=True)
-    # hdulist_sc.close()
-    #
-    # dataobj_list = []
-    # for filename in cal_files[0::]:
-    #     print(filename)
-    #
-    #     preproc_task_list = []
-    #     preproc_task_list.append(["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True])
-    #     preproc_task_list.append(["compute_coordinates_arrays",{'targname':targetname}, True, True])
-    #     preproc_task_list.append(["convert_MJy_per_sr_to_MJy"])
-    #     preproc_task_list.append(["apply_coords_offset", {"coords_offset": coords_offset}])
-    #     if combined_star_func is None:
-    #         preproc_task_list.append(["compute_starspectrum_contnorm", {"x_nodes": wv_nodes,
-    #                                                                     "threshold_badpix": 100,
-    #                                                                     "mppool": mppool}, True, True])
-    #
-    #     dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir,
-    #                               save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
-    #     if combined_star_func is not None:
-    #         dataobj.reload_starspectrum_contnorm()
-    #         dataobj.star_func = combined_star_func
-    #
-    #     outputs = dataobj.reload_starsubtraction()
-    #
-    #     if outputs is None:
-    #         outputs = dataobj.compute_starsubtraction(save_utils=True, starsub_dir="starsub1d",
-    #                                                   threshold_badpix=10, mppool=mppool)
-    #     subtracted_im, star_model, spline_paras0, _wv_nodes = outputs
-    #
-    #     dataobj_list.append(dataobj)
-    #
-    # return dataobj_list
 
 
 def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_filename,
                       wv_nodes=None,x_nodes=None,y_nodes=None,save_pickle=False, load_pickle=False,
                       coords_filename_filter = None,numthreads=1,spline3d_suffix = "",
                       centroid_per_frame=True, overwrite=False,mask_charge_transfer_radius=None,ra_dec_point_sources=None,aper_rad =None,
-                      stamp_size = (0.2,0.2)):
+                      stamp_size = (0.2,0.2),
+                      subtract_comp = None):
 
     grating = fits.getheader(cal_files[0])['GRATING'].strip()
     detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
@@ -2087,6 +1698,15 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
         combdataobj.default_filenames["compute_starsubtraction_3dspline"] = (
             combdataobj.default_filenames["compute_starsubtraction_3dspline"].replace(".fits",spline3d_suffix + ".fits"))
 
+        if subtract_comp is not None:
+            # dataobj, save_utils=False,centroid = None,OWA=None,spectrum_func=None,out_folder = "insert_psf",
+            # mode=None,mppool=None,use_breadspsf=None,interpgrid=None
+            projected_model = project_psf_model(combdataobj, save_utils=False, mode="breadspsf",
+                                                centroid=subtract_comp["centroid"], OWA=subtract_comp["OWA"],
+                                                spectrum_func=subtract_comp["spectrum_func"])
+
+            combdataobj.data -= projected_model
+
         if save_pickle:
             combdataobj.save(filename=pickle_filename)
 
@@ -2114,6 +1734,931 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
     # plt.show()
 
     return combdataobj
+
+
+def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filename, coords_filename_filter,
+                    mode="raw", suffix=None, contnorm_suffix=None,
+                    x_vec=None, y_vec=None, wv_sampling=None,
+                    mask_charge_transfer_radius=None, ra_dec_point_sources=None,
+                    aper_radius=0.15,
+                    RDI_IWA=None, RDI_OWA=None, RDI_ann_width=0.5, RDI_use_stpsf=False, RDI_use_breadspsf=True,
+                    ASDI_contnorm_3dspline_filename=None, ASDI_starsub_3dspline_filename=None,
+                    mppool=None,
+                    overwrite=False,
+                    targetname=None,
+                    use_stpsf=False, use_breadspsf=True,
+                    load_pickle=True,
+                    save_pickle=True,
+                    ifucoords=False):
+    # - modes:
+    # 	- raw
+    # 	- 1dspline
+    # 	- RDI
+    # 	- ASDI
+
+    if suffix is None:
+        suffix = mode
+
+    if not os.path.exists(utils_dir):
+        os.makedirs(utils_dir)
+
+    if use_breadspsf is not None:
+        use_stpsf = False
+
+    grating = fits.getheader(cal_files[0])['GRATING'].strip()
+    detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
+
+    if x_vec is None:
+        x_vec = np.arange(-2, 2, 0.05)
+    if y_vec is None:
+        y_vec = np.arange(-2, 2, 0.05)
+
+    if wv_sampling is None:
+        wv_sampling = default.wv_sampling_dict[grating][detector]
+
+    splitbasename = os.path.basename(cal_files[0]).split("_")
+
+    build_cube_filename = os.path.join(out_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[
+        3] + "_" + grating + "_" + suffix + "_cube.fits")
+    if not overwrite and os.path.exists(build_cube_filename):
+        with fits.open(build_cube_filename) as hdulist:
+            flux_cube = hdulist['FLUX'].data
+            fluxerr_cube = hdulist['FLUXERR'].data
+            x_grid = hdulist['X'].data
+            y_grid = hdulist['Y'].data
+            wv_sampling = hdulist['WAVE'].data
+        return flux_cube, fluxerr_cube, x_grid, y_grid, wv_sampling
+
+    if ifucoords:
+        pickle_suffix = "_" + suffix + "_ifu_regwvs"
+    else:
+        pickle_suffix = "_" + suffix + "_sky_regwvs"
+    pickle_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[
+        3] + pickle_suffix + ".pkl")
+
+    if load_pickle and len(glob(pickle_filename)) >= 1:
+        combdataobj = JWSTNirspec_multiple_cals.load(pickle_filename)
+    else:
+        dataobj_list = []
+        for filename in cal_files:
+            dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir)
+
+            if contnorm_suffix is not None:
+                dataobj.default_filenames["compute_starspectrum_contnorm"] = dataobj.default_filenames[
+                    "compute_starspectrum_contnorm"].replace(".fits", "_" + contnorm_suffix + ".fits")
+                dataobj.default_filenames["compute_advanced_badpix"] = dataobj.default_filenames[
+                    "compute_starspectrum_contnorm"].replace(".fits", "_" + contnorm_suffix + ".fits")
+                dataobj.default_filenames["compute_starsubtraction"] = dataobj.default_filenames[
+                    "compute_starsubtraction"].replace(".fits", "_" + contnorm_suffix + ".fits")
+
+            # Define a series of processing tasks to be performed on each input file.
+            # coords_filename = glob(fitpsf_filename.replace(".fits","_poly_centroid*.txt"))[0]
+            preproc_task_list = [["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}],
+                                 ["compute_coordinates_arrays", {'targname': targetname}]]
+
+            if mode == "1dspline":
+                _task = ["compute_starsubtraction", {"threshold_badpix": 10, "mppool": mppool,
+                                                     "combined_contnorm_filename": combined_contnorm_spec_filename,
+                                                     "load_starspectrum_contnorm": None}]
+            elif mode == "1dspline_with_prior":
+                _task = ["compute_starsubtraction", {"threshold_badpix": 10, "mppool": mppool,
+                                                     "combined_contnorm_filename": combined_contnorm_spec_filename,
+                                                     "load_starspectrum_contnorm": dataobj.default_filenames[
+                                                         "compute_starspectrum_contnorm"]}]
+            else:
+                _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool,
+                                                     "combined_contnorm_filename": combined_contnorm_spec_filename}]
+            preproc_task_list.append(_task)
+            dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
+
+            coords_filename = \
+            glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+            dataobj.apply_coords_offset(coords_filename=coords_filename)
+
+            if "RDI" in mode:
+                dataobj.compute_interpdata_regwvs(wv_sampling=wv_sampling, save_utils=False)
+
+            # Do some masking
+            if mask_charge_transfer_radius is not None:
+                dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
+            # mask point sources
+            if ra_dec_point_sources is not None:
+                _badpix_map_cp = copy(dataobj.bad_pixels)
+                for ra_pl, dec_pl in ra_dec_point_sources:
+                    if "sky" in dataobj.breads_header['COORDS']:
+                        x_pl, y_pl = ra_pl, dec_pl
+                    elif "ifu" in dataobj.breads_header['COORDS']:
+                        _out = dataobj.get_ifu_coords(ras=ra_pl, decs=dec_pl)
+                        x_pl, y_pl = float(_out[0]), float(_out[1])
+                    where_pl = dataobj.where_point_source([x_pl / 1000., y_pl / 1000.], 0.16)
+                    dataobj.bad_pixels[where_pl] = np.nan
+
+            if ifucoords:
+                dataobj.set_coords2ifu()
+
+            if "RDI" in mode:
+                rdi_filename_perframe = os.path.join(utils_dir, os.path.basename(filename).replace(".fits",
+                                                                                                   "_fitpsf_" + suffix + ".fits"))
+                if RDI_use_breadspsf:
+                    RDI_use_stpsf = False
+                if overwrite or len(glob(rdi_filename_perframe)) == 0:
+                    bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=RDI_use_stpsf,
+                                                                           use_breadspsf=RDI_use_breadspsf,
+                                                                           IWA=RDI_IWA, OWA=RDI_OWA,
+                                                                           ann_width=RDI_ann_width, padding=0.05,
+                                                                           out_filename=rdi_filename_perframe,
+                                                                           overwrite=overwrite, mppool=mppool,
+                                                                           debug_wv_range=None,  # [4.5,4.51]
+                                                                           poly_deg_coords=0, linear_interp=False)
+                else:
+                    with fits.open(rdi_filename_perframe) as hdulist:
+                        bestfit_model = hdulist['BESTMODL'].data
+                dataobj.data -= bestfit_model
+                if ra_dec_point_sources is not None:
+                    dataobj.bad_pixels = _badpix_map_cp
+
+            dataobj_list.append(dataobj)
+
+        combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
+
+        if mode != "RDI":
+            combdataobj.compute_interpdata_regwvs(wv_sampling=wv_sampling)
+
+        if save_pickle:
+            combdataobj.save(suffix=pickle_suffix)
+
+    if mode == "ASDI":
+        hdulist = fits.open(ASDI_contnorm_3dspline_filename)
+        new_wavelengths = hdulist["WAVE"].data
+        combined_fluxes = hdulist["COM_FLUXES"].data
+        hdulist.close()
+        star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+        # plt.figure()
+        # plt.plot(wv_sampling, star_func(wv_sampling))
+        # plt.show()
+
+        # ASDI_contnorm_3dspline_filename,ASDI_starsub_3dspline_filename
+        stellar_features = star_func(combdataobj.wavelengths)
+        max_cores = mppool._processes
+        _out = evaluate_3dspline_pointcloud(combdataobj, ASDI_starsub_3dspline_filename, max_cores=max_cores,
+                                            stellar_features=stellar_features)
+        ASDI_model, _ = _out
+        # plt.plot(combdataobj.data[750,:])
+        # plt.plot(ASDI_model[750,:])
+        # plt.show()
+        combdataobj.data -= ASDI_model
+
+    out = build_cube(combdataobj, x_vec, y_vec,
+                     use_breadspsf=use_breadspsf, use_stpsf=use_stpsf,
+                     out_filename=build_cube_filename, overwrite=overwrite,
+                     mppool=mppool, aper_radius=aper_radius,
+                     debug_wv_range=None, N_pix_min=None,
+                     linear_interp=False)
+
+    flux_cube, fluxerr_cube, x_grid, y_grid, wv_sampling = out
+
+    return flux_cube, fluxerr_cube, x_grid, y_grid, wv_sampling
+
+
+def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
+    """
+    Extract the spectrum of one or more point sources (planets) from an IFU cube.
+    A separate FITS file is written for each planet. An interactive Plotly HTML
+    file is written for the combined 1D spectra, and a matplotlib PNG is written
+    for the combined 2D image.
+
+    Parameters
+    ----------
+    cube_filename : str
+        Path to the input FITS cube (must have FLUX, FLUXERR, X, Y, WAVE extensions).
+    out_filename : str
+        Base path for the output FITS file (and diagnostic plots). When multiple
+        planets are given, each planet's label is inserted before the ".fits"
+        extension, e.g. "out.fits" -> "out_b.fits", "out_c.fits", ...
+    xy_coords : tuple(float, float) or list of tuple(float, float)
+        Either a single (x, y) coordinate, or a list of (x, y) coordinates,
+        one per planet/companion to extract.
+    labels : list of str, optional
+        Labels to use for each companion (e.g. "b", "c", ...) in filenames and
+        plots. Defaults to "0", "1", "2", ... if not provided. Ignored (no
+        filename suffix added) when only a single planet is given and labels
+        is not provided.
+
+    Returns
+    -------
+    results : list of dict
+        One entry per planet, each with keys:
+        'label', 'out_filename', 'wv_sampling', 'spectrum_Flambda', 'speckle_std_Flambda'
+    """
+    # --- Normalize input: allow either a single (x, y) tuple or a list of them ---
+    if len(xy_coords) == 2 and np.isscalar(xy_coords[0]) and np.isscalar(xy_coords[1]):
+        xy_coords_list = [tuple(xy_coords)]
+    else:
+        xy_coords_list = [tuple(xy) for xy in xy_coords]
+
+    n_planets = len(xy_coords_list)
+    single_planet_no_label = (n_planets == 1 and labels is None)
+
+    if labels is None:
+        labels = [str(i) for i in range(n_planets)]
+    if len(labels) != n_planets:
+        raise ValueError("labels must have the same length as xy_coords")
+
+    with fits.open(cube_filename) as hdulist:
+        flux_cube = hdulist['FLUX'].data
+        fluxerr_cube = hdulist['FLUXERR'].data
+        x_grid = hdulist['X'].data
+        y_grid = hdulist['Y'].data
+        wv_sampling = hdulist['WAVE'].data
+
+    r2star_grid = np.sqrt(x_grid ** 2 + y_grid ** 2)
+
+    def to_Flambda(arr, wv=wv_sampling):
+        return (arr * u.MJy * const.c / (wv * u.um) ** 2).to(u.W * u.m ** -2 / u.um).value
+
+    # Qualitative color palette, one color per planet (cycles if > 10 planets)
+    palette = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
+               '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+
+    def hex_to_rgba(hex_color, alpha):
+        hex_color = hex_color.lstrip('#')
+        r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+        return 'rgba({0},{1},{2},{3})'.format(r, g, b, alpha)
+
+    results = []
+    # interactive 1D spectra figure, built up across planets: Flambda on top, Jansky below
+    fig_spec = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.06)
+
+    # --- 2D image plot: built once (sum and std side by side), shared across all planets ---
+    im_cube = flux_cube[100:(flux_cube.shape[0] - 100), :, :]
+    all_nan_mask = np.all(np.isnan(im_cube), axis=0)
+    im_sum = np.nansum(im_cube, axis=0)
+    im_sum[all_nan_mask] = np.nan  # np.nansum returns 0, not nan, for all-nan slices
+    im_std = np.nanstd(im_cube, axis=0)  # np.nanstd already returns nan for all-nan slices
+
+    fig2, (ax_sum, ax_std) = plt.subplots(1, 2, num=2, figsize=(16, 6))
+    fontsize = 12
+    x_vec, y_vec = x_grid[0, :], y_grid[:, 0]
+    dx, dy = x_vec[1] - x_vec[0], y_vec[1] - y_vec[0]
+    extent = [x_vec[0] - dx / 2., x_vec[-1] + dx / 2., y_vec[0] - dy / 2., y_vec[-1] + dy / 2.]
+    for ax, im, title in ((ax_sum, im_sum, "Sum"), (ax_std, im_std, "Std")):
+        finite_im = im[np.isfinite(im)]
+        med_im = np.nanmedian(im)
+        mad_im = median_abs_deviation(finite_im) if finite_im.size > 0 else np.nan
+        im_handle = ax.imshow(im, origin="lower", cmap="viridis", extent=extent,
+                              vmin=med_im - 5 * mad_im, vmax=med_im + 5 * mad_im)
+        cbar = fig2.colorbar(im_handle, ax=ax)
+        cbar.set_label("{0} flux (MJy)".format(title), fontsize=fontsize)
+        ax.set_xlim([-2, 2])
+        ax.set_xticks([-2, -1, 0, 1, 2])
+        ax.set_ylim([-2, 2])
+        ax.set_yticks([-2, -1, 0, 1, 2])
+        ax.invert_xaxis()
+        ax.set_aspect('equal')
+        ax.set_xlabel(r"$\Delta$RA (as)", fontsize=fontsize)
+        ax.set_ylabel(r"$\Delta$Dec (as)", fontsize=fontsize)
+        ax.tick_params(axis='x', labelsize=fontsize)
+        ax.tick_params(axis='y', labelsize=fontsize)
+        ax.set_title(title, fontsize=fontsize)
+
+    for i_planet, ((x, y), label) in enumerate(zip(xy_coords_list, labels)):
+        color = palette[i_planet % len(palette)]
+        # Build a per-planet output filename
+        if single_planet_no_label:
+            planet_out_filename = out_filename
+        else:
+            planet_out_filename = out_filename.replace(".fits", "_{0}.fits".format(label))
+
+        r2comp_grid = np.sqrt((x_grid - x) ** 2 + (y_grid - y) ** 2)
+        kmax, lmax = np.unravel_index(np.nanargmin(r2comp_grid), r2comp_grid.shape)
+
+        sep_comp = np.sqrt(x ** 2 + y ** 2)
+        speckles_mask = (r2star_grid > (sep_comp - 0.05)) * (r2star_grid < (sep_comp + 0.05) * (r2comp_grid > 0.3))
+        whereannulus = np.where(speckles_mask)
+
+        speckles = flux_cube[:, whereannulus[0], whereannulus[1]]
+        speckle_std = np.nanstd(speckles, axis=1)
+        speckle_std[np.where(speckle_std == 0)] = np.nan
+
+        spectrum = flux_cube[:, kmax, lmax]
+        err = fluxerr_cube[:, kmax, lmax]
+
+        spectrum_Flambda = to_Flambda(spectrum)
+        err_Flambda = to_Flambda(err)
+        speckle_std_Flambda = to_Flambda(speckle_std)
+        speckles_Flambda = (speckles * u.MJy * const.c / (wv_sampling[:, None] * u.um) ** 2).to(u.W * u.m ** -2 / u.um).value
+
+        spectrum_Jy = (spectrum * u.MJy).to(u.Jy).value
+        speckle_std_Jy = (speckle_std * u.MJy).to(u.Jy).value
+        speckles_Jy = (speckles * u.MJy).to(u.Jy).value
+
+        # --- Write FITS output for this planet ---
+        hdulist_out = fits.HDUList()
+        hdulist_out.append(fits.ImageHDU(data=wv_sampling, name='WAVE'))
+        hdulist_out.append(fits.ImageHDU(data=spectrum, name='FLUX_MJy'))
+        hdulist_out.append(fits.ImageHDU(data=err, name='ERR_MJy'))
+        hdulist_out.append(fits.ImageHDU(data=speckle_std, name='STD_MJy'))
+        hdulist_out.append(fits.ImageHDU(data=speckles, name='SPECKLES'))
+        hdulist_out.append(fits.ImageHDU(data=spectrum_Flambda, name='FLUX_FLAM'))
+        hdulist_out.append(fits.ImageHDU(data=err_Flambda, name='ERR_FLAM'))
+        hdulist_out.append(fits.ImageHDU(data=speckle_std_Flambda, name='STD_FLAM'))
+        hdulist_out.append(fits.ImageHDU(data=speckles_Flambda, name='SPECKLES_FLAM'))
+        hdulist_out[0].header['LABEL'] = label
+        hdulist_out[0].header['XCOORD'] = x
+        hdulist_out[0].header['YCOORD'] = y
+        try:
+            hdulist_out.writeto(planet_out_filename, overwrite=True)
+        except TypeError:
+            hdulist_out.writeto(planet_out_filename, clobber=True)
+        hdulist_out.close()
+
+        # --- 1D spectrum: add traces for this planet to the shared Plotly figure ---
+        upper = spectrum_Flambda + speckle_std_Flambda
+        lower = spectrum_Flambda - speckle_std_Flambda
+        # Shaded noise band via the 'tonexty' pattern: an invisible upper-bound
+        # trace, followed by a lower-bound trace that fills up to the previous one.
+        # This is more robust to NaN gaps than the 'toself' polygon-concatenation
+        # trick, which can self-intersect and balloon out where speckle_std is NaN.
+        fig_spec.add_trace(go.Scatter(
+            x=wv_sampling, y=upper, mode='lines', line=dict(width=0),
+            connectgaps=True,
+            showlegend=False, hoverinfo='skip', legendgroup=label,
+        ), row=1, col=1)
+        fig_spec.add_trace(go.Scatter(
+            x=wv_sampling, y=lower, mode='lines', line=dict(width=0),
+            fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
+            connectgaps=True,
+            showlegend=False, hoverinfo='skip', legendgroup=label,
+        ), row=1, col=1)
+        fig_spec.add_trace(go.Scatter(
+            x=wv_sampling, y=spectrum_Flambda, mode='lines', name=label,
+            legendgroup=label, line=dict(color=color, width=2),
+        ), row=1, col=1)
+        N_speckles = speckles_Flambda.shape[1]
+        speckle_subset = speckles_Flambda[:, ::N_speckles // 5]
+        for i in range(speckle_subset.shape[1]):
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=speckle_subset[:, i], mode='lines',
+                name="speckles " + label, legendgroup=label,
+                opacity=0.5, showlegend=(i == 0),
+                line=dict(color=color, width=1),
+            ), row=1, col=1)
+
+        # --- Same panel, in Jansky, added below the Flambda panel ---
+        upper_Jy = spectrum_Jy + speckle_std_Jy
+        lower_Jy = spectrum_Jy - speckle_std_Jy
+        fig_spec.add_trace(go.Scatter(
+            x=wv_sampling, y=upper_Jy, mode='lines', line=dict(width=0),
+            connectgaps=True,
+            showlegend=False, hoverinfo='skip', legendgroup=label,
+        ), row=2, col=1)
+        fig_spec.add_trace(go.Scatter(
+            x=wv_sampling, y=lower_Jy, mode='lines', line=dict(width=0),
+            fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
+            connectgaps=True,
+            showlegend=False, hoverinfo='skip', legendgroup=label,
+        ), row=2, col=1)
+        fig_spec.add_trace(go.Scatter(
+            x=wv_sampling, y=spectrum_Jy, mode='lines', name=label,
+            legendgroup=label, showlegend=False, line=dict(color=color, width=2),
+        ), row=2, col=1)
+        speckle_subset_Jy = speckles_Jy[:, ::N_speckles // 5]
+        for i in range(speckle_subset_Jy.shape[1]):
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=speckle_subset_Jy[:, i], mode='lines',
+                name="speckles " + label, legendgroup=label,
+                opacity=0.5, showlegend=False,
+                line=dict(color=color, width=1),
+            ), row=2, col=1)
+
+        # --- 2D image plot: per-planet annotations only (image itself plotted once, above) ---
+        for ax in (ax_sum, ax_std):
+            ax.plot(0, 0, "*", color="grey", markersize=10)
+            txt = ax.text(0.2, -0.1, 'A', fontsize=fontsize, ha='center', va='top', color="grey")
+            txt.set_path_effects([PathEffects.withStroke(linewidth=1, foreground='w')])
+
+            circle = plt.Circle((x, y), 0.2, facecolor='#FFFFFF00', edgecolor='white')
+            txt = ax.text(x - 0.2, y, label, fontsize=fontsize, ha='left', va='center', color="black")
+            txt.set_path_effects([PathEffects.withStroke(linewidth=1, foreground='w')])
+            ax.add_patch(circle)
+
+        results.append({
+            'label': label,
+            'out_filename': planet_out_filename,
+            'wv_sampling': wv_sampling,
+            'spectrum_Flambda': spectrum_Flambda,
+            'speckle_std_Flambda': speckle_std_Flambda,
+        })
+
+    # --- Save the combined interactive 1D spectra as HTML ---
+    fig_spec.update_layout(
+        template="plotly_white",
+        width=1000, height=650,
+        margin=dict(l=60, r=20, t=20, b=50),
+    )
+    fig_spec.update_xaxes(title_text="Wavelength (um)", row=2, col=1)
+    # Force standard scientific notation (1.2e-14) instead of Plotly's default
+    # SI-prefix ticks (12f, 12a, ...), which are unfamiliar for these units.
+    fig_spec.update_yaxes(title_text="Flux (W/m2/um)", exponentformat='e', tickformat='.2e', row=1, col=1)
+    fig_spec.update_yaxes(title_text="Flux (Jy)", exponentformat='e', tickformat='.2e', row=2, col=1)
+    fig_spec.write_html(out_filename.replace(".fits", "_1dspec.html"))
+
+    # --- Save the combined 2D image as PNG ---
+    fig2.savefig(out_filename.replace(".fits", "_im.png"), dpi=200)
+    plt.close(fig2)
+
+    return results
+
+
+def compute_snr_grid(cal_files, utils_dir, out_dir,
+                    combined_contnorm_spec_filename, coords_filename_filter,
+                    model_grid_h5py,grid_paras,photfilter_filename,N_KL=3,
+                    suffix=None,contnorm_suffix=None,
+                    x_vec=None,y_vec=None,rv_vec=None,
+                    mask_charge_transfer_radius=None,ra_dec_point_sources=None,fix_fitting_region_around_xy=None,
+                    aper_radius=0.15,
+                    mppool=None,
+                    overwrite=False,
+                    targetname=None,
+                    use_stpsf=False, use_breadspsf=True,
+                    ifucoords=False):
+
+    if not os.path.exists(utils_dir):
+        os.makedirs(utils_dir)
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
+
+    if use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
+        use_stpsf = False
+
+    if suffix is None:
+        suffix = "snr"
+
+    grating = fits.getheader(cal_files[0])['GRATING'].strip()
+    detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
+
+    if x_vec is None:
+        x_vec = np.arange(-2, 2, 0.05)
+    if y_vec is None:
+        y_vec = np.arange(-2, 2, 0.05)
+    if rv_vec is None:
+        rv_vec = np.array([0])
+
+    flux_arr_list=[]
+    fluxerr_arr_list=[]
+    log_prob_list=[]
+    for filename in cal_files:
+        print(filename)
+
+        grid_search_output_filename = os.path.join(out_dir, os.path.basename(filename).replace(".fits", "_"+ suffix + ".fits"))
+        if not overwrite and os.path.exists(grid_search_output_filename):
+            with fits.open(grid_search_output_filename) as hdulist:
+                _priheader = hdulist[0].header
+                _extheader = hdulist[1].header
+                flux_arr = hdulist['flux_arr'].data
+                fluxerr_arr = hdulist['fluxerr_arr'].data
+                log_prob = hdulist['log_prob'].data
+                x_vec = hdulist['x_vec'].data
+                y_vec = hdulist['y_vec'].data
+                rv_vec = hdulist['rv_vec'].data
+                wv_nodes = hdulist['wv_nodes'].data
+                _breads_header = hdulist['BREADS'].data
+            flux_arr_list.append(flux_arr)
+            fluxerr_arr_list.append(fluxerr_arr)
+            log_prob_list.append(log_prob)
+
+            continue
+
+        dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir)
+
+        if contnorm_suffix is not None:
+            dataobj.default_filenames["compute_starspectrum_contnorm"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits", "_" + contnorm_suffix + ".fits")
+            dataobj.default_filenames["compute_advanced_badpix"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits", "_" + contnorm_suffix + ".fits")
+            dataobj.default_filenames["compute_starsubtraction"] = dataobj.default_filenames["compute_starsubtraction"].replace(".fits", "_" + contnorm_suffix + ".fits")
+
+        hdulist = fits.open(dataobj.default_filenames["compute_starspectrum_contnorm"])
+        spline_paras0 = hdulist['SPLINE_PARAS0'].data
+        if 'STELLAR_FEATURES' in hdulist:
+            stellar_features0 = hdulist['STELLAR_FEATURES'].data
+            with_3dspline_prior = True
+        else:
+            stellar_features0 = None
+            with_3dspline_prior = False
+        wv_nodes = hdulist['wv_nodes'].data
+        hdulist.close()
+
+
+
+        # Define a series of processing tasks to be performed on each input file.
+        # coords_filename = glob(fitpsf_filename.replace(".fits","_poly_centroid*.txt"))[0]
+        preproc_task_list = [
+                                 ["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}],
+                                 ["compute_coordinates_arrays", {'targname': targetname}]
+                            ]
+
+        if with_3dspline_prior:
+            _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool,
+                                                 "combined_contnorm_filename": combined_contnorm_spec_filename,
+                                                 "load_starspectrum_contnorm": None}]
+        else:
+            _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool,
+                                                 "combined_contnorm_filename": combined_contnorm_spec_filename,
+                                                 "load_starspectrum_contnorm": dataobj.default_filenames["compute_starspectrum_contnorm"]}]
+        preproc_task_list.append(_task)
+
+        dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
+
+        hdulist = fits.open(combined_contnorm_spec_filename)
+        new_wavelengths = hdulist["WAVE"].data
+        combined_fluxes = hdulist["COM_FLUXES"].data
+        hdulist.close()
+        dataobj.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
+        # plt.plot(new_wavelengths, combined_fluxes)
+        # plt.show()
+
+        coords_filename = glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+        dataobj.apply_coords_offset(coords_filename=coords_filename)
+
+        # Do some masking
+        if mask_charge_transfer_radius is not None:
+            dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
+
+        if ifucoords:
+            dataobj.set_coords2ifu()
+
+        if use_stpsf:
+            webbpsf_reload = dataobj.reload_quick_webbpsf_model()
+            if webbpsf_reload is None:
+                print("Did not find a quick STPSF, computing it now.")
+                webbpsf_reload = dataobj.compute_quick_webbpsf_model(save_utils=True)
+        elif use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
+            BREADS_DATA_ENV = os.getenv('BREADS_DATA')
+            if isinstance(use_breadspsf, bool) and use_breadspsf:
+                grating = dataobj.priheader['GRATING'].strip()
+                detector = dataobj.priheader['DETECTOR'].strip().lower()
+                if os.path.exists(
+                        os.path.join(BREADS_DATA_ENV, "BreadsPSF", f"HD163466_J1757132_{grating}_{detector}.fits")):
+                    use_breadspsf_str = f"HD163466_J1757132_{grating}_{detector}.fits"
+                else:
+                    use_breadspsf_str = f"J1757132_{grating}_{detector}.fits"
+            elif isinstance(use_breadspsf, str):
+                use_breadspsf_str = use_breadspsf
+            breadsPSF_path = os.path.join(BREADS_DATA_ENV, "BreadsPSF", use_breadspsf_str)
+            dataobj.reload_breadspsf_model(breadsPSF_path)
+
+
+        if stellar_features0 is None:
+            hdulist = fits.open(dataobj.default_filenames["compute_starsubtraction"])
+            spline_paras0 = hdulist['SPLINE_PARAS0'].data
+            hdulist.close()
+            wherenan = np.where(np.isnan(spline_paras0))
+            reg_mean_map = copy(spline_paras0)
+            reg_mean_map[wherenan] = np.tile(np.nanmedian(spline_paras0, axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
+            reg_std_map = np.abs(spline_paras0)
+            reg_std_map[wherenan] = np.tile(np.nanmax(np.abs(spline_paras0), axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
+            reg_std_map = reg_std_map
+            reg_std_map = np.clip(reg_std_map, 1e-11, np.inf)
+        else:
+            reg_mean_map = None
+            reg_std_map = None
+        # reg_mean_map = None
+        # reg_std_map = None
+
+        if N_KL is not None and N_KL != 0:
+            tmp_badpixels = copy(dataobj.bad_pixels)
+            # mask point sources
+            if ra_dec_point_sources is not None:
+                _badpix_map_cp = copy(dataobj.bad_pixels)
+                for ra_pl, dec_pl in ra_dec_point_sources:
+                    if "sky" in dataobj.breads_header['COORDS']:
+                        x_pl, y_pl = ra_pl, dec_pl
+                    elif "ifu" in dataobj.breads_header['COORDS']:
+                        _out = dataobj.get_ifu_coords(ras=ra_pl, decs=dec_pl)
+                        x_pl, y_pl = float(_out[0]), float(_out[1])
+                    where_pl = dataobj.where_point_source([x_pl / 1000., y_pl / 1000.], 0.16)
+                    # dataobj.bad_pixels[where_pl] = np.nan
+                tmp_badpixels[where_pl] = np.nan
+
+            hdulist = fits.open(dataobj.default_filenames["compute_starsubtraction"])
+            subtracted_im = hdulist["IM_SUB"].data
+            hdulist.close()
+
+
+            first_half = np.where(dataobj.wavelengths < np.nanmedian(dataobj.wavelengths))
+            second_half = np.where(dataobj.wavelengths > np.nanmedian(dataobj.wavelengths))
+            wv4pca, im4pcs, n4pca, bp4pca = copy(dataobj.wavelengths), copy(subtracted_im), copy(dataobj.noise), copy(tmp_badpixels)
+            bp4pca[second_half] = np.nan
+            KLs_wvs_left, KLs_left = PCA_wvs_axis(wv4pca, im4pcs, n4pca, bp4pca,
+                                                  np.nanmedian(dataobj.wavelengths) / (4 * dataobj.R),
+                                                  N_KL=N_KL)
+            wv4pca, im4pcs, n4pca, bp4pca = copy(dataobj.wavelengths), copy(subtracted_im), copy(dataobj.noise), copy(tmp_badpixels)
+            bp4pca[first_half] = np.nan
+            KLs_wvs_right, KLs_right = PCA_wvs_axis(wv4pca, im4pcs, n4pca, bp4pca,
+                                                    np.nanmedian(dataobj.wavelengths) / (4 * dataobj.R),
+                                                    N_KL=N_KL)
+            # wv4pca, im4pcs, n4pca, bp4pca = copy(dataobj.wavelengths), copy(subtracted_im), copy(dataobj.noise), copy(tmp_badpixels)
+            # KLs_wvs_all, KLs_all = PCA_wvs_axis(wv4pca, im4pcs, n4pca, bp4pca,
+            #                                     np.nanmedian(dataobj.wavelengths) / (4 * dataobj.R), N_KL=N_KL)
+            wvs_KLs_f_list = []
+            for k in range(KLs_left.shape[1]):
+                KL_f = interp1d(KLs_wvs_left, KLs_left[:, k], bounds_error=False, fill_value=0.0, kind="cubic")
+                wvs_KLs_f_list.append(KL_f)
+                # plt.plot(KLs_wvs_left, KLs_left[:, k])
+            for k in range(KLs_right.shape[1]):
+                KL_f = interp1d(KLs_wvs_right, KLs_right[:, k], bounds_error=False, fill_value=0.0,
+                                kind="cubic")
+                wvs_KLs_f_list.append(KL_f)
+                # plt.plot(KLs_wvs_right, KLs_right[:, k])
+        else:
+            wvs_KLs_f_list = None
+
+        # Read and normalize BT settl grid
+        filter_arr = np.loadtxt(photfilter_filename)
+        trans_wvs = filter_arr[:, 0] / 1e4
+        trans = filter_arr[:, 1]
+        photfilter_f = interp1d(trans_wvs, trans, bounds_error=False, fill_value=0)
+        photfilter_wv0 = np.nansum(trans_wvs * photfilter_f(trans_wvs)) / np.nansum(photfilter_f(trans_wvs))
+        bandpass = np.where(photfilter_f(trans_wvs) / np.nanmax(photfilter_f(trans_wvs)) > 0.01)
+        photfilter_wvmin, photfilter_wvmax = trans_wvs[bandpass[0][0]], trans_wvs[bandpass[0][-1]]
+        print(photfilter_wvmin, photfilter_wvmax)
+
+        # Define planet model grid from BTsettl
+        minwv, maxwv = np.min(dataobj.wavelengths), np.max(dataobj.wavelengths)
+        with h5py.File(model_grid_h5py,'r') as hf:
+            grid_specs = np.array(hf.get("spec"))
+            grid_temps = np.array(hf.get("temps"))
+            grid_loggs = np.array(hf.get("loggs"))
+            grid_wvs = np.array(hf.get("wvs"))
+        grid_dwvs = grid_wvs[1::] - grid_wvs[0:np.size(grid_wvs) - 1]
+        grid_dwvs = np.insert(grid_dwvs, 0, grid_dwvs[0])
+        filter_norm = np.nansum((grid_dwvs * u.um) * photfilter_f(grid_wvs))
+        Flambda = np.nansum((grid_dwvs * u.um)[None, None, :] * photfilter_f(grid_wvs)[None, None, :] * (
+                    grid_specs * u.W * u.m ** -2 / u.um), axis=2) / filter_norm
+        Fnu = Flambda * (photfilter_wv0 * u.um) ** 2 / const.c  # from Flambda back to Fnu
+        grid_specs = grid_specs / Fnu[:, :, None].to(u.MJy).value
+
+        myinterpgrid = RegularGridInterpolator((grid_temps, grid_loggs), grid_specs, method="linear",
+                                               bounds_error=False, fill_value=np.nan)
+        # teff, logg, vsini, rv, dra_comp, ddec_comp = 1500, 5.0, 0.0, None, None, None
+        teff, logg, vsini = grid_paras
+        rv, dra_comp, ddec_comp = None, None, None
+        fix_parameters = [teff, logg, vsini, rv, dra_comp, ddec_comp]
+
+        fm_paras = {"atm_grid": myinterpgrid, "atm_grid_wvs": grid_wvs, "star_func": dataobj.star_func,
+                    "radius_as": aper_radius, "badpixfraction": 0.5, "nodes": wv_nodes,
+                    "fix_parameters": fix_parameters,
+                    "wvs_KLs_f": wvs_KLs_f_list,
+                    "regularization": "user","reg_mean_map":reg_mean_map, "reg_std_map":reg_std_map,"stellar_features0":stellar_features0,
+                    "use_stpsf":use_stpsf,
+                    "fix_fitting_region_around_xy":fix_fitting_region_around_xy}
+        fm_func = hc_atmgrid_splinefm_jwst_ifu_cal
+
+        if 0:
+            print(ra_dec_point_sources)
+            nonlin_paras = [0.0, ra_dec_point_sources[0][0], ra_dec_point_sources[0][1]]  # x (pix),y (pix), rv (km/s)
+            # nonlin_paras = [0.0, ra_dec_point_sources[1][0], ra_dec_point_sources[1][1]]  # x (pix),y (pix), rv (km/s)
+            # d is the data vector a the specified location
+            # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
+            # s is the vector of uncertainties corresponding to d
+            d, M, s, extra_outputs = fm_func(nonlin_paras, dataobj, **fm_paras)
+            where_finite = extra_outputs["where_trace_finite"]
+            w = extra_outputs["wvs"]
+            x = extra_outputs["ras"]
+            y = extra_outputs["decs"]
+            rows = extra_outputs["rows"]
+            d_reg, s_reg = extra_outputs["regularization"]
+            reg_wvs = extra_outputs["regularization_wvs"]
+            reg_rows = extra_outputs["regularization_rows"]
+
+            hdulist = fits.open(dataobj.default_filenames["compute_starsubtraction"])
+            subtracted_im = hdulist["IM_SUB"].data
+            hdulist.close()
+            # plt.subplot(1,2,1)
+            # plt.imshow(subtracted_im,origin="lower")
+            # plt.clim([-500,500])
+            # plt.ylim([1300,1500])
+            # plt.xlim([800,1000])
+            # plt.subplot(1,2,2)
+            # canvas = np.zeros(subtracted_im.shape)
+            # canvas[where_finite] = M[:,0]
+            # plt.imshow(canvas,origin="lower")
+            # # plt.clim([-500,500])
+            # plt.ylim([1300,1500])
+            # plt.xlim([800,1000])
+            # plt.show()
+
+
+            # M[:,0] = 0
+
+            validpara = np.where(np.max(np.abs(M), axis=0) != 0)
+            M = M[:, validpara[0]]
+            print(M.shape)
+
+            d = d / s
+            M = M / s[:, None]
+
+            from breads.fit import fitfm
+            log_prob, rchi2, linparas, linparas_err = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,scale_noise=False, bounds=None)
+
+            paras = linparas[validpara]
+            print("best fit", linparas[0:5])
+            print("best fit err", linparas_err[0:5])
+            print("best fit snr", linparas[0:5] / linparas_err[0:5])
+            print("rchi2", rchi2)
+            # plt.figure(10)
+            # plt.plot(linparas, label="linparas")
+            # plt.plot(linparas_err, label="linparas_err")
+            # plt.legend()
+
+            # logdet_Sigma = np.sum(2 * np.log(s))
+            m = np.dot(M, paras)
+            # r = d - m
+            # chi2 = np.nansum(r ** 2)
+            # N_data = np.size(d)
+            # rchi2 = chi2 / N_data
+            # res = r * s
+            # plt.plot(d,label="d")
+            # plt.plot(m,label="m")
+            # plt.legend()
+            # plt.show()
+
+            steradians_to_arcsec2 = 1 / (2. * np.pi / (360. * 3600.)) ** 2
+            scaling = ((0.1)**2/steradians_to_arcsec2)/0.3
+            plt.figure()
+            plt.subplot(3,1,1)
+            plt.plot(subtracted_im[1368,:]*scaling,label="subtracted_im")
+            plt.plot(dataobj.data[1368,:]*scaling,label="data")
+            plt.plot(dataobj.noise[1368,:]*scaling,label="noise")
+            canvas = np.zeros(subtracted_im.shape)
+            canvas[where_finite] = m*s
+            plt.plot(canvas[1368,:]*scaling,label="model")
+            plt.plot((dataobj.data[1368,:]-canvas[1368,:])*scaling,label="res")
+            plt.legend()
+            plt.subplot(3,1,2)
+            canvas = np.zeros(subtracted_im.shape)
+            canvas[where_finite] = M[:,0]*s
+            plt.plot(canvas[1368,:])
+            plt.subplot(3,1,3)
+            # plt.plot(dataobj.bad_pixels[1368,:],label="bad_pixels")
+            for k in np.arange(1,M.shape[1]):
+                # print(reg_rows[validpara[0]][k])
+                canvas = np.zeros(subtracted_im.shape)
+                canvas[where_finite] = M[:,k]*s
+                plt.plot(canvas[1368,:])
+
+            plt.show()
+
+            plt.figure()
+            plt.plot( d * s, label="data")
+            plt.plot( m * s, label="Combined model")
+            plt.plot( paras[0] * M[:, 0] * s, label="planet model")
+            plt.plot( -paras[0] * M[:, 0] * s, label="planet model minus")
+            plt.plot( (m - paras[0] * M[:, 0]) * s, label="starlight model")
+            # where_even_rows = np.where((reg_rows % 2) == 0)
+            # plt.errorbar(reg_wvs[where_even_rows], d_reg[where_even_rows], yerr=s_reg[where_even_rows],
+            #              label="even rows prior")
+            # where_odd_rows = np.where((reg_rows % 2) == 1)
+            # plt.errorbar(reg_wvs[where_odd_rows], d_reg[where_odd_rows], yerr=s_reg[where_odd_rows],
+            #              label="odd rows prior")
+            plt.ylabel("Flux (MJy)")
+            plt.xlabel("Column pixels")
+            plt.legend()
+            plt.show()
+
+        if mppool is not None:
+            numthreads = mppool._processes
+        else:
+            numthreads = None
+        log_prob, rchi2, linparas, linparas_err = grid_search([rv_vec, x_vec, y_vec], dataobj, fm_func, fm_paras,
+                                                                           numthreads=numthreads, scale_noise=False)
+        N_linpara = linparas.shape[-1]
+
+        _priheader = dataobj.priheader
+        _extheader = dataobj.extheader
+        _breads_header = dataobj.breads_header
+
+        flux_arr = linparas[:, :, :, 0]
+        fluxerr_arr = linparas_err[:, :, :, 0]
+        snr_arr = flux_arr/fluxerr_arr
+        hdulist = fits.HDUList()
+        hdulist.append(fits.PrimaryHDU(header=_priheader))
+        hdulist.append(fits.ImageHDU(data=flux_arr,header=_extheader,name="flux_arr"))
+        hdulist.append(fits.ImageHDU(data=fluxerr_arr, name='fluxerr_arr'))
+        hdulist.append(fits.ImageHDU(data=log_prob, name='log_prob'))
+        hdulist.append(fits.ImageHDU(data=rchi2, name='rchi2'))
+        hdulist.append(fits.ImageHDU(data=rv_vec, name='rv_vec'))
+        hdulist.append(fits.ImageHDU(data=x_vec, name='x_vec'))
+        hdulist.append(fits.ImageHDU(data=y_vec, name='y_vec'))
+        hdulist.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+        hdulist.append(fits.ImageHDU(header=_breads_header, name='BREADS'))
+        hdulist.writeto(grid_search_output_filename, overwrite=True)
+        hdulist.close()
+
+
+        flux_arr_list.append(flux_arr)
+        fluxerr_arr_list.append(fluxerr_arr)
+        log_prob_list.append(log_prob)
+
+
+        fig0 = plt.figure(figsize=(12,12))
+        dx, dy = x_vec[1] - x_vec[0], y_vec[1] - y_vec[0]
+        extent = [x_vec[0] - dx / 2., x_vec[-1] + dx / 2., y_vec[0] - dy / 2., y_vec[-1] + dy / 2.]
+        rv0_id = len(rv_vec)//2
+        im_list = [flux_arr[rv0_id,:,:],fluxerr_arr[rv0_id,:,:],snr_arr[rv0_id,:,:],log_prob[rv0_id,:,:]]
+        im_names = ["flux_arr", "fluxerr_arr", "snr_arr", "log_prob"]
+        fontsize=12
+        for k,(im,title) in enumerate(zip(im_list,im_names)):
+            plt.subplot(2,2,k+1)
+            ax = plt.gca()
+            finite_im = im[np.isfinite(im)]
+            med_im = np.nanmedian(im)
+            mad_im = median_abs_deviation(finite_im) if finite_im.size > 0 else np.nan
+            if k == 3:
+                vmin,max = None,None
+            else:
+                vmin = med_im - 10 * mad_im
+                vmax = med_im + 10 * mad_im
+            im_handle = ax.imshow(im, origin="lower", cmap="viridis", extent=extent,
+                                  vmin=vmin, vmax=vmax)
+            cbar = plt.colorbar(im_handle, ax=ax)
+            cbar.set_label("{0}".format(title), fontsize=fontsize)
+            ax.invert_xaxis()
+            ax.set_aspect('equal')
+            ax.set_xlabel(r"$\Delta$x (as)", fontsize=fontsize)
+            ax.set_ylabel(r"$\Delta$y (as)", fontsize=fontsize)
+            ax.tick_params(axis='x', labelsize=fontsize)
+            ax.tick_params(axis='y', labelsize=fontsize)
+            ax.set_title(title, fontsize=fontsize)
+        # --- Save the combined 2D image as PNG ---
+        fig0.tight_layout(pad=3.0, w_pad=3.0, h_pad=3.0)
+        fig0.savefig(grid_search_output_filename.replace(".fits", ".png"), dpi=200)
+        # plt.show()
+        plt.close(fig0)
+
+
+    fluxmap_arr = np.array(flux_arr_list)
+    fluxerrmap_arr = np.array(fluxerr_arr_list)
+    fluxmap_combined = np.nansum(fluxmap_arr / fluxerrmap_arr ** 2, axis=0) / np.nansum(1 / fluxerrmap_arr ** 2, axis=0)
+    fluxerrmap_combined = 1 / np.sqrt(np.nansum(1 / fluxerrmap_arr ** 2, axis=0))
+    snrmap_combined=fluxmap_combined/fluxerrmap_combined
+
+    log_prob_arr = np.array(log_prob_list)
+    log_prob_combined = np.sum(log_prob_arr, axis=0)
+
+
+    splitbasename = os.path.basename(cal_files[0]).split("_")
+    grid_search_combined_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1]+ "_" + detector+ "_" + grating+"_"+suffix + "_combined.fits")
+
+    hdulist = fits.HDUList()
+    hdulist.append(fits.PrimaryHDU(header=_priheader))
+    hdulist.append(fits.ImageHDU(data=fluxmap_combined, header=_extheader, name="flux_arr"))
+    hdulist.append(fits.ImageHDU(data=fluxerrmap_combined, name='fluxerr_arr'))
+    hdulist.append(fits.ImageHDU(data=log_prob_combined, name='log_prob'))
+    hdulist.append(fits.ImageHDU(data=rv_vec, name='rv_vec'))
+    hdulist.append(fits.ImageHDU(data=x_vec, name='x_vec'))
+    hdulist.append(fits.ImageHDU(data=y_vec, name='y_vec'))
+    hdulist.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+    hdulist.append(fits.ImageHDU(header=_breads_header, name='BREADS'))
+    hdulist.writeto(grid_search_combined_filename, overwrite=True)
+    hdulist.close()
+
+    fig0 = plt.figure(figsize=(12,12))
+    dx, dy = x_vec[1] - x_vec[0], y_vec[1] - y_vec[0]
+    extent = [x_vec[0] - dx / 2., x_vec[-1] + dx / 2., y_vec[0] - dy / 2., y_vec[-1] + dy / 2.]
+    rv0_id = len(rv_vec) // 2
+    im_list = [fluxmap_combined[rv0_id, :, :], fluxerrmap_combined[rv0_id, :, :], snrmap_combined[rv0_id, :, :], log_prob_combined[rv0_id, :, :]]
+    im_names = ["flux_arr", "fluxerr_arr", "snr_arr", "log_prob"]
+    fontsize = 12
+    for k, (im, title) in enumerate(zip(im_list, im_names)):
+        plt.subplot(2, 2, k + 1)
+        ax = plt.gca()
+        finite_im = im[np.isfinite(im)]
+        med_im = np.nanmedian(im)
+        mad_im = median_abs_deviation(finite_im) if finite_im.size > 0 else np.nan
+        if k == 3:
+            vmin,max = None,None
+        else:
+            vmin = med_im - 10 * mad_im
+            vmax = med_im + 10 * mad_im
+        im_handle = ax.imshow(im, origin="lower", cmap="viridis", extent=extent,
+                              vmin=vmin, vmax=vmax)
+        cbar = plt.colorbar(im_handle, ax=ax)
+        cbar.set_label("{0}".format(title), fontsize=fontsize)
+        ax.invert_xaxis()
+        ax.set_aspect('equal')
+        ax.set_xlabel(r"$\Delta$x (as)", fontsize=fontsize)
+        ax.set_ylabel(r"$\Delta$y (as)", fontsize=fontsize)
+        ax.tick_params(axis='x', labelsize=fontsize)
+        ax.tick_params(axis='y', labelsize=fontsize)
+        ax.set_title(title, fontsize=fontsize)
+    # --- Save the combined 2D image as PNG ---
+    fig0.tight_layout(pad=3.0, w_pad=3.0, h_pad=3.0)
+    fig0.savefig(grid_search_combined_filename.replace(".fits", ".png"), dpi=200)
+    # plt.show()
+    plt.close(fig0)
+
+    coords = (rv_vec,x_vec,y_vec)
+    return fluxmap_combined, fluxerrmap_combined,log_prob_combined,coords
 
 
 ############################################################################

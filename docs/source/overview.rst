@@ -42,7 +42,8 @@ The user selects three building blocks:
 Supported instruments
 ---------------------
 
-BREADS includes tools for the following instruments:
+BREADS includes tools for the following instruments. However, BREADS is constantly evolving and may not be stable.
+At this time, we recommend that you reach out to the authors for more specific advice about your needs.
 
 .. list-table::
    :header-rows: 1
