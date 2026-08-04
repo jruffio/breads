@@ -1511,7 +1511,7 @@ class JWST_IFUs(ABC):
             reg_std_map = np.abs(spline_paras0)
             reg_std_map[wherenan] = np.tile(np.nanmax(np.abs(spline_paras0), axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
             reg_std_map = reg_std_map
-            reg_std_map = np.clip(reg_std_map, 1e-11, np.inf)
+            reg_std_map = np.clip(reg_std_map, 1e-11/2.3504430539097893e-13, np.inf)
         else:
             reg_mean_map = None
             reg_std_map = None

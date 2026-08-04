@@ -2317,12 +2317,10 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             reg_std_map = np.abs(spline_paras0)
             reg_std_map[wherenan] = np.tile(np.nanmax(np.abs(spline_paras0), axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
             reg_std_map = reg_std_map
-            reg_std_map = np.clip(reg_std_map, 1e-11, np.inf)
+            reg_std_map = np.clip(reg_std_map, 1e-11/2.3504430539097893e-13, np.inf)
         else:
             reg_mean_map = None
             reg_std_map = None
-        # reg_mean_map = None
-        # reg_std_map = None
 
         if N_KL is not None and N_KL != 0:
             tmp_badpixels = copy(dataobj.bad_pixels)
@@ -2343,7 +2341,16 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             subtracted_im = hdulist["IM_SUB"].data
             hdulist.close()
 
+            # plt.figure()
+            # plt.subplot(1,2,1)
+            # plt.imshow(subtracted_im,origin="lower")
+            # plt.clim([-500,500])
+            # plt.subplot(1,2,2)
+            # plt.imshow(dataobj.data,origin="lower")
+            # plt.clim([-100000,100000])
+            # # plt.show()
 
+            # N_KL = 5
             first_half = np.where(dataobj.wavelengths < np.nanmedian(dataobj.wavelengths))
             second_half = np.where(dataobj.wavelengths > np.nanmedian(dataobj.wavelengths))
             wv4pca, im4pcs, n4pca, bp4pca = copy(dataobj.wavelengths), copy(subtracted_im), copy(dataobj.noise), copy(tmp_badpixels)
@@ -2359,16 +2366,24 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             # wv4pca, im4pcs, n4pca, bp4pca = copy(dataobj.wavelengths), copy(subtracted_im), copy(dataobj.noise), copy(tmp_badpixels)
             # KLs_wvs_all, KLs_all = PCA_wvs_axis(wv4pca, im4pcs, n4pca, bp4pca,
             #                                     np.nanmedian(dataobj.wavelengths) / (4 * dataobj.R), N_KL=N_KL)
+
+            # plt.figure()
             wvs_KLs_f_list = []
             for k in range(KLs_left.shape[1]):
+                # print(k,np.where(np.isnan(KLs_left[:, k]))[0])
+                # plt.plot(KLs_wvs_left, KLs_left[:, k],label=f"{k}")
                 KL_f = interp1d(KLs_wvs_left, KLs_left[:, k], bounds_error=False, fill_value=0.0, kind="cubic")
                 wvs_KLs_f_list.append(KL_f)
                 # plt.plot(KLs_wvs_left, KLs_left[:, k])
             for k in range(KLs_right.shape[1]):
+                # print("l",k,np.where(np.isnan(KLs_right[:, k]))[0])
+                # plt.plot(KLs_wvs_right, KLs_right[:, k],label=f"{k}")
                 KL_f = interp1d(KLs_wvs_right, KLs_right[:, k], bounds_error=False, fill_value=0.0,
                                 kind="cubic")
                 wvs_KLs_f_list.append(KL_f)
                 # plt.plot(KLs_wvs_right, KLs_right[:, k])
+            # plt.legend()
+            # plt.show()
         else:
             wvs_KLs_f_list = None
 
@@ -2380,7 +2395,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         photfilter_wv0 = np.nansum(trans_wvs * photfilter_f(trans_wvs)) / np.nansum(photfilter_f(trans_wvs))
         bandpass = np.where(photfilter_f(trans_wvs) / np.nanmax(photfilter_f(trans_wvs)) > 0.01)
         photfilter_wvmin, photfilter_wvmax = trans_wvs[bandpass[0][0]], trans_wvs[bandpass[0][-1]]
-        print(photfilter_wvmin, photfilter_wvmax)
+        # print(photfilter_wvmin, photfilter_wvmax)
 
         # Define planet model grid from BTsettl
         minwv, maxwv = np.min(dataobj.wavelengths), np.max(dataobj.wavelengths)
@@ -2408,15 +2423,18 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
                     "radius_as": aper_radius, "badpixfraction": 0.5, "nodes": wv_nodes,
                     "fix_parameters": fix_parameters,
                     "wvs_KLs_f": wvs_KLs_f_list,
-                    "regularization": "user","reg_mean_map":reg_mean_map, "reg_std_map":reg_std_map,"stellar_features0":stellar_features0,
+                    "regularization": "user","reg_mean_map":reg_mean_map, "reg_std_map":reg_std_map,"stellar_features0":stellar_features0,#
                     "use_stpsf":use_stpsf,
                     "fix_fitting_region_around_xy":fix_fitting_region_around_xy}
         fm_func = hc_atmgrid_splinefm_jwst_ifu_cal
 
         if 0:
-            print(ra_dec_point_sources)
-            nonlin_paras = [0.0, ra_dec_point_sources[0][0], ra_dec_point_sources[0][1]]  # x (pix),y (pix), rv (km/s)
-            # nonlin_paras = [0.0, ra_dec_point_sources[1][0], ra_dec_point_sources[1][1]]  # x (pix),y (pix), rv (km/s)
+            print("ra_dec_point_sources",ra_dec_point_sources)
+            # nonlin_paras = [0.0, ra_dec_point_sources[0][1]/1000., ra_dec_point_sources[0][0]/1000.]  # rv (km/s),y (pix), x (pix),
+            nonlin_paras = [16.84, 0.1, 0.6]  # rv (km/s),y (pix), x (pix),
+            print("nonlin_paras",nonlin_paras)
+            # exit()
+            # nonlin_paras = [0.0, ra_dec_point_sources[1][1]/1000., ra_dec_point_sources[1][0]/1000.]
             # d is the data vector a the specified location
             # M is the linear component of the model. M is a function of the non linear parameters x,y,rv
             # s is the vector of uncertainties corresponding to d
@@ -2448,9 +2466,10 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             # plt.show()
 
 
-            # M[:,0] = 0
+            # M[:,0] = 0s
 
-            validpara = np.where(np.max(np.abs(M), axis=0) != 0)
+            # validpara = np.where(np.max(np.abs(M), axis=0) != 0)
+            validpara = np.where(~np.isclose(np.nansum(np.abs(M/ s[:, None]), axis=0), 0, atol=1e-10))
             M = M[:, validpara[0]]
             print(M.shape)
 
@@ -2458,17 +2477,21 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             M = M / s[:, None]
 
             from breads.fit import fitfm
-            log_prob, rchi2, linparas, linparas_err = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,scale_noise=False, bounds=None)
+            log_prob, rchi2, linparas, linparas_err = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,scale_noise=True, bounds=None)
 
             paras = linparas[validpara]
             print("best fit", linparas[0:5])
             print("best fit err", linparas_err[0:5])
             print("best fit snr", linparas[0:5] / linparas_err[0:5])
             print("rchi2", rchi2)
-            # plt.figure(10)
-            # plt.plot(linparas, label="linparas")
-            # plt.plot(linparas_err, label="linparas_err")
-            # plt.legend()
+            print("log_prob", log_prob)
+            plt.figure()
+            plt.plot(np.nanmax(np.abs(M),axis=0))
+            plt.figure()
+            plt.plot(linparas[validpara], label="linparas")
+            plt.plot(linparas_err[validpara], label="linparas_err")
+            plt.legend()
+            # plt.show()
 
             # logdet_Sigma = np.sum(2 * np.log(s))
             m = np.dot(M, paras)
@@ -2482,38 +2505,56 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             # plt.legend()
             # plt.show()
 
-            steradians_to_arcsec2 = 1 / (2. * np.pi / (360. * 3600.)) ** 2
-            scaling = ((0.1)**2/steradians_to_arcsec2)/0.3
-            plt.figure()
-            plt.subplot(3,1,1)
-            plt.plot(subtracted_im[1368,:]*scaling,label="subtracted_im")
-            plt.plot(dataobj.data[1368,:]*scaling,label="data")
-            plt.plot(dataobj.noise[1368,:]*scaling,label="noise")
+
             canvas = np.zeros(subtracted_im.shape)
             canvas[where_finite] = m*s
-            plt.plot(canvas[1368,:]*scaling,label="model")
-            plt.plot((dataobj.data[1368,:]-canvas[1368,:])*scaling,label="res")
+            # row_id = 1368
+            row_id = np.argmax(np.nansum(canvas,axis=1))
+            print(row_id)
+            # canvas[where_finite] = M[:,0]
+            # plt.imshow(canvas,origin="lower")
+            # plt.clim([0,2e-6])
+            # plt.show()
+            steradians_to_arcsec2 = 1 / (2. * np.pi / (360. * 3600.)) ** 2
+            print(((0.1)**2/steradians_to_arcsec2))
+            # scaling = ((0.1)**2/steradians_to_arcsec2)/0.3
+            scaling = 1.
+            plt.figure()
+            plt.subplot(3,1,1)
+            plt.plot(dataobj.wavelengths[row_id,:], subtracted_im[row_id,:]*scaling,label="subtracted_im")
+            plt.plot(dataobj.wavelengths[row_id,:], dataobj.data[row_id,:]*scaling,label="data")
+            plt.plot(dataobj.wavelengths[row_id,:], dataobj.noise[row_id,:]*scaling,label="noise")
+            plt.plot(dataobj.wavelengths[row_id,:], canvas[row_id,:]*scaling,label="model")
+            plt.plot(dataobj.wavelengths[row_id,:], (dataobj.data[row_id,:]-canvas[row_id,:])*scaling,label="res",linestyle="--")
+            where_reg_row = np.where(reg_rows==row_id)
+            d_reg, s_reg = extra_outputs["regularization"]
+            reg_wvs = extra_outputs["regularization_wvs"]
+            reg_rows = extra_outputs["regularization_rows"]
+            plt.plot(reg_wvs[where_reg_row],d_reg[where_reg_row]*scaling,label="reg")
+            plt.errorbar(reg_wvs[where_reg_row],d_reg[where_reg_row]*scaling,yerr=s_reg[where_reg_row]*scaling,label="regerr")
             plt.legend()
+
             plt.subplot(3,1,2)
             canvas = np.zeros(subtracted_im.shape)
             canvas[where_finite] = M[:,0]*s
-            plt.plot(canvas[1368,:])
+            plt.plot(dataobj.wavelengths[row_id,:], canvas[row_id,:])
+
             plt.subplot(3,1,3)
-            # plt.plot(dataobj.bad_pixels[1368,:],label="bad_pixels")
+            # plt.plot(dataobj.bad_pixels[row_id,:],label="bad_pixels")
             for k in np.arange(1,M.shape[1]):
                 # print(reg_rows[validpara[0]][k])
                 canvas = np.zeros(subtracted_im.shape)
                 canvas[where_finite] = M[:,k]*s
-                plt.plot(canvas[1368,:])
+                plt.plot(canvas[row_id,:])
 
-            plt.show()
 
             plt.figure()
             plt.plot( d * s, label="data")
             plt.plot( m * s, label="Combined model")
             plt.plot( paras[0] * M[:, 0] * s, label="planet model")
-            plt.plot( -paras[0] * M[:, 0] * s, label="planet model minus")
             plt.plot( (m - paras[0] * M[:, 0]) * s, label="starlight model")
+            plt.plot( d * s-m * s, label="residuals")
+            plt.plot(s, label="noise")
             # where_even_rows = np.where((reg_rows % 2) == 0)
             # plt.errorbar(reg_wvs[where_even_rows], d_reg[where_even_rows], yerr=s_reg[where_even_rows],
             #              label="even rows prior")
@@ -2529,8 +2570,8 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             numthreads = mppool._processes
         else:
             numthreads = None
-        log_prob, rchi2, linparas, linparas_err = grid_search([rv_vec, x_vec, y_vec], dataobj, fm_func, fm_paras,
-                                                                           numthreads=numthreads, scale_noise=False)
+        log_prob, rchi2, linparas, linparas_err = grid_search([rv_vec, y_vec, x_vec], dataobj, fm_func, fm_paras,
+                                                                           numthreads=numthreads, scale_noise=True)
         N_linpara = linparas.shape[-1]
 
         _priheader = dataobj.priheader
@@ -2573,11 +2614,8 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             finite_im = im[np.isfinite(im)]
             med_im = np.nanmedian(im)
             mad_im = median_abs_deviation(finite_im) if finite_im.size > 0 else np.nan
-            if k == 3:
-                vmin,max = None,None
-            else:
-                vmin = med_im - 10 * mad_im
-                vmax = med_im + 10 * mad_im
+            vmin = med_im - 5 * mad_im
+            vmax = med_im + 5 * mad_im
             im_handle = ax.imshow(im, origin="lower", cmap="viridis", extent=extent,
                                   vmin=vmin, vmax=vmax)
             cbar = plt.colorbar(im_handle, ax=ax)
@@ -2635,11 +2673,8 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         finite_im = im[np.isfinite(im)]
         med_im = np.nanmedian(im)
         mad_im = median_abs_deviation(finite_im) if finite_im.size > 0 else np.nan
-        if k == 3:
-            vmin,max = None,None
-        else:
-            vmin = med_im - 10 * mad_im
-            vmax = med_im + 10 * mad_im
+        vmin = med_im - 5 * mad_im
+        vmax = med_im + 5 * mad_im
         im_handle = ax.imshow(im, origin="lower", cmap="viridis", extent=extent,
                               vmin=vmin, vmax=vmax)
         cbar = plt.colorbar(im_handle, ax=ax)
@@ -2657,7 +2692,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
     # plt.show()
     plt.close(fig0)
 
-    coords = (rv_vec,x_vec,y_vec)
+    coords = (rv_vec,y_vec,x_vec)
     return fluxmap_combined, fluxerrmap_combined,log_prob_combined,coords
 
 

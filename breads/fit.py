@@ -62,6 +62,10 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     else:
         raise ValueError(f"Unrecognized number of matrices for forward model, the number of outputs for {fm_func.__name__} is expected to be 3 or 4 but {len(fm_out)} were given.")
 
+    # _para_renormalization = np.nanmax(np.abs(M_no_reg),axis=0)
+    _para_renormalization = np.ones(M_no_reg.shape[1])
+    M_no_reg = M_no_reg / _para_renormalization[None,:]
+
     N_linpara = M_no_reg.shape[1]
     N_data = np.size(d_no_reg)
 
@@ -73,13 +77,20 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     if bounds is None:
         _bounds = ([-np.inf]*N_linpara, [np.inf]*N_linpara)
     else:
-        _bounds = (copy(bounds[0]), copy(bounds[1]))
+        _bounds = (copy(bounds[0])/_para_renormalization, copy(bounds[1])/_para_renormalization)
         if any(np.any(np.isfinite(arr)) for arr in _bounds): #check if there is finite boundaries
             warning_text = "The calculation of log prob is only theoretically accurate if no finite bounds are used..."
             warn(warning_text)
 
     # Will reject the column(s) full of 0 of the model matrix M (without regularization)
-    validpara = np.where(np.any(M_no_reg != 0, axis=0))
+    # validpara = np.where(np.any(M_no_reg != 0, axis=0))
+    # validpara = np.where(np.any(~np.isclose(M_no_reg, 0, atol=1e-10), axis=0))
+    validpara = np.where(~np.isclose(np.nansum(np.abs(M_no_reg/ s_no_reg [:, None]), axis=0), 0, atol=1e-10))
+    # validpara = np.where(
+    #     np.isfinite(np.sum(M_no_reg, axis=0)) & # No infinite value
+    #     np.any(M_no_reg != 0, axis=0) & # No zero values
+    #     (np.nanmax(M_no_reg/ s_no_reg [:, None], axis=0) > 1e-12) # No vanishingly small values
+    #                      )
 
     # if len(fm_out) == 4 and "N_planet_linparas" in extra_outputs.keys():
     #     N_planet_paras = extra_outputs["N_planet_linparas"]
@@ -96,7 +107,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     _bounds = (np.array(_bounds[0])[validpara[0]], np.array(_bounds[1])[validpara[0]]) #Selecting the bounds for the valid parameters
 
     d_no_reg = d_no_reg / s_no_reg #Normalizing the data by the data standard deviation
-    M_no_reg = M_no_reg / s_no_reg [:, None] #Normalizing the M_ij by the data standard deviation s_i
+    M_no_reg = M_no_reg / s_no_reg[:, None] #Normalizing the M_ij by the data standard deviation s_i
 
     # check if regularization is used in the forward model by checking the extra outputs of the forward model
     if len(fm_out) == 4 and "regularization" in extra_outputs.keys():
@@ -126,7 +137,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
         MTM = np.dot(M.T, M)
         # error catching is because the matrix inversion can fail and we don't want this to crash the entire process when computing an SNR map for example.
         try:
-            iMTM = np.linalg.inv(MTM)
+            covphi0 = np.linalg.inv(MTM)
             slogdet_icovphi0 = np.linalg.slogdet(MTM)
             logdet_icovphi0 = slogdet_icovphi0[1]
         except Exception as e:
@@ -135,9 +146,33 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             print("Exiting covariance section in fitfm() with error:")
             print(e)
             return _invalid_outputs(N_linpara)
+
+        covphi = noise_scaling ** 2 * covphi0
+
     else: # Regularization used in this case
         # Prepares the vectors and matrics with the regularization part concatenated to the data vector, model matrix, and noise vector for the regularized fit.
-        M, d, s, M_reg, d_reg, s_reg = _concatenate_model_regularization(d_no_reg, M_no_reg, s_no_reg, extra_outputs, validpara)
+        #Retrieve the regularization priors
+        d_reg, s_reg = extra_outputs["regularization"]
+
+        #Filtering the bad columns
+        s_reg = s_reg[validpara] / _para_renormalization[validpara]
+        d_reg = d_reg[validpara] / _para_renormalization[validpara]
+
+        #Filtering the finite values to match with the M_no_reg matrix
+        where_finite_reg = np.where(np.isfinite(s_reg))
+        s_reg = s_reg[where_finite_reg]
+        d_reg = d_reg[where_finite_reg]
+
+        #Creating the matrix for regularization
+        M_reg = np.zeros((np.size(where_finite_reg[0]), M_no_reg.shape[1]))
+
+        #Setting the diagonal of the matrix
+        M_reg[np.arange(np.size(where_finite_reg[0])), where_finite_reg[0]] = 1 / s_reg
+
+        #Concatenate each matrix/vector
+        M = np.concatenate([M_no_reg, M_reg], axis=0)
+        d = np.concatenate([d_no_reg, d_reg / s_reg])
+        s = np.concatenate([s_no_reg, s_reg])
         # M, d, and s now include their regularization parts.
 
         # when the data is regularized, the noise scaling is a bit tricky because it will impact the relative weighting of the data and the regularization in the fit.
@@ -164,7 +199,9 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             covphi = np.dot(iMTM, np.dot(MTM_no_reg, iMTM.T))
             # The formula below assumes that we are using the determinant of the inverse covariance
             # That's why we are adding the minus sign
-            logdet_icovphi0 = -np.sum(np.log(np.diag(covphi)))
+            # logdet_icovphi0 = -np.sum(np.log(np.diag(covphi)))
+            slogdet_icovphi0 = np.linalg.slogdet(covphi)
+            logdet_icovphi0 = -slogdet_icovphi0[1]
         except Exception as e:
             # only printing the error message, but will not stop because of it
             # Will simply return the outputs corresponding to invalid data.
@@ -172,7 +209,6 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             print(e)
             return _invalid_outputs(N_linpara)
 
-    covphi = noise_scaling ** 2 * iMTM
     diagcovphi = copy(np.diag(covphi))
     diagcovphi[np.where(diagcovphi < 0.0)] = np.nan  # uncertainties cannot be negative so replacing by nan here
     paras_err = np.sqrt(diagcovphi)  # get the uncertainties via the diagonal of the matrix
@@ -195,8 +231,8 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     linparas_err = np.full(N_linpara, np.nan)
 
     # Bookeeping the valid best fit linear parameters
-    linparas[validpara] = paras
-    linparas_err[validpara] = paras_err
+    linparas[validpara] = paras * _para_renormalization[validpara]
+    linparas_err[validpara] = paras_err * _para_renormalization[validpara]
 
     return log_prob, rchi2, linparas, linparas_err
 
@@ -269,32 +305,6 @@ def _invalid_outputs(N_linear_parameters):
 
     return log_prob, s2, linparas, linparas_err
 
-def _concatenate_model_regularization(d_no_reg, M_no_reg, s_no_reg, extra_outputs, validpara):
-    """Helper function to concatenate regularization parameters with model matrix and data vectors"""
-    #Retrieve the regularization priors
-    d_reg, s_reg = extra_outputs["regularization"]
-
-    #Filtering the bad columns
-    s_reg = s_reg[validpara]
-    d_reg = d_reg[validpara]
-
-    #Filtering the finite values to match with the M_no_reg matrix
-    where_finite_reg = np.where(np.isfinite(s_reg))
-    s_reg = s_reg[where_finite_reg]
-    d_reg = d_reg[where_finite_reg]
-
-    #Creating the matrix for regularization
-    M_reg = np.zeros((np.size(where_finite_reg[0]), M_no_reg.shape[1]))
-
-    #Setting the diagonal of the matrix
-    M_reg[np.arange(np.size(where_finite_reg[0])), where_finite_reg[0]] = 1 / s_reg
-
-    #Concatenate each matrix/vector
-    M = np.concatenate([M_no_reg, M_reg], axis=0)
-    d = np.concatenate([d_no_reg, d_reg / s_reg])
-    s = np.concatenate([s_no_reg, s_reg])
-
-    return M, d, s, M_reg, d_reg, s_reg
 
 def _get_lsq_fit(M_normalized, d_normalized, _bounds, N_data=None):
     """Helper to get the least squares fit of the model on the data. Model matrix and input data have to be normalized by the noise."""

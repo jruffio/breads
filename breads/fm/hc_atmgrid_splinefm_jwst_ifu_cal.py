@@ -14,7 +14,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
              atm_grid=None, atm_grid_wvs=None, star_func=None,radius_as=0.2, nodes=20,
              badpixfraction=0.75, fix_parameters=None, Nrows_max=200, detec_KLs=None, wvs_KLs_f=None,
              regularization=None, reg_mean_map=None, reg_std_map=None,stellar_features0=None,use_stpsf=True,
-                                     fix_fitting_region_around_xy = None):
+             fix_fitting_region_around_xy = None):
 
     """
     For high-contrast companions (planet + speckles).
@@ -121,9 +121,30 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
         raise ValueError("vsini must be >= 0")
 
     # Defining the position of companion
-    comp_dra_as, comp_ddec_as = other_nonlin_paras[2], other_nonlin_paras[3]
+    comp_ddec_as,comp_dra_as  = other_nonlin_paras[2], other_nonlin_paras[3]
+    # print(other_nonlin_paras)
+    # exit()
 
-    comp_spec = _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs)
+    planet_model = atm_grid(atm_paras)[0]
+    if cubeobj.breads_header["DATAUNIT"] != 'MJy/sr':
+        raise TypeError("cubeobj.breads_header['DATAUNIT'] must be 'MJy/sr'")
+
+    if np.all(planet_model == 0):
+        raise ValueError("Something wrong in planet spectrum, all values are 0")
+    elif np.size(atm_grid_wvs) != np.size(planet_model):
+        raise ValueError(
+            f"Something wrong in planet spectrum, the wavelength grid size is {np.size(atm_grid_wvs)} while the planet model size is {np.size(planet_model)} ")
+    else:
+        if vsini != 0:
+            spinbroad_model = pyasl.fastRotBroad(atm_grid_wvs, planet_model, 0.1, vsini)
+        else:
+            spinbroad_model = planet_model
+
+        planet_f = interp1d(atm_grid_wvs, spinbroad_model, bounds_error=False, fill_value=np.nan)
+
+        comp_spec = planet_f(wvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
+        comp_spec = comp_spec * (wvs * u.um) ** 2 / const.c  # from  Flambda to Fnu
+        comp_spec = comp_spec.to(u.MJy).value
 
     if fix_fitting_region_around_xy is None:
         dist2comp_as = np.sqrt((ra_array - comp_dra_as) ** 2 + (dec_array - comp_ddec_as) ** 2)
@@ -187,10 +208,13 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
         s_reg_speckles = np.full((Nrows, N_nodes), np.nan)
         wvs_reg_speckles = np.full((Nrows, N_nodes), np.nan)
         rows_reg_speckles = np.tile(rows_ids[:, None],(1, N_nodes)) #Transform row vector into column vector and then duplicates N_nodes times the column to have a 2d matrix
+    N_KL_tot = 0
     if wvs_KLs_f is not None:
         M_KLs = np.zeros((Nd, Nrows, len(wvs_KLs_f)))
+        N_KL_tot += len(wvs_KLs_f)
     if detec_KLs is not None:
         M_KLs_detec = np.zeros((Nd, Nrows, detec_KLs.shape[1]))
+        N_KL_tot += detec_KLs.shape[1]
 
     for _k in range(Nrows):
         where_finite_and_in_row = np.where(where_trace_finite[0] == rows_ids[_k])
@@ -214,15 +238,31 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
             wvs_reg_speckles[_k, :] = x_nodes
             wvs_reg_speckles[_k, where_del_col[0]] = np.nan
 
-        if wvs_KLs_f is not None:
-            for KLid, KL_f in enumerate(wvs_KLs_f):
+    if wvs_KLs_f is not None:
+        for KLid, KL_f in enumerate(wvs_KLs_f):
+            max_val_KL = np.nanmax(np.abs(KL_f(np.linspace(np.nanmin(w),np.nanmax(w),2000))))
+            for _k in range(Nrows):
+                where_finite_and_in_row = np.where(where_trace_finite[0] == rows_ids[_k])
+                if np.size(where_finite_and_in_row[0]) <= N_KL_tot:
+                    continue
                 KL_vec = KL_f(wvs[rows_ids[_k], :])
                 selec_KL_vec = KL_vec[where_trace_finite[1][where_finite_and_in_row]]
-                M_KLs[where_finite_and_in_row[0], _k, KLid] = selec_KL_vec
+                if (np.nanmax(np.abs(selec_KL_vec)) < 1e-3*max_val_KL) or (np.sum(selec_KL_vec > (1e-3*max_val_KL)) <= N_KL_tot):
+                    M_KLs[where_finite_and_in_row[0], _k, KLid] = 0
+                else:
+                    M_KLs[where_finite_and_in_row[0], _k, KLid] = selec_KL_vec
 
-        if detec_KLs is not None:
+    if detec_KLs is not None:
+        max_val_KL = np.nanmax(np.abs(detec_KLs[where_trace_finite[1][where_finite_and_in_row], :]))
+        for _k in range(Nrows):
+            where_finite_and_in_row = np.where(where_trace_finite[0] == rows_ids[_k])
+            if np.size(where_finite_and_in_row[0]) <= N_KL_tot:
+                continue
             selec_KL_vec = detec_KLs[where_trace_finite[1][where_finite_and_in_row], :]
-            M_KLs_detec[where_finite_and_in_row[0], _k, :] = selec_KL_vec
+            if (np.nanmax(np.abs(selec_KL_vec)) < 1e-3*max_val_KL) or (np.sum(selec_KL_vec > (1e-3*max_val_KL)) <= N_KL_tot):
+                M_KLs_detec[where_finite_and_in_row[0], _k, :] = 0
+            else:
+                M_KLs_detec[where_finite_and_in_row[0], _k, :] = selec_KL_vec
 
     if stellar_features0 is None:
         stellar_features = star_func(w)[:, None]
@@ -297,30 +337,6 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
 
     return d, M, s, extra_outputs
 
-def _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs):
-    """Helper function to interpolate companion spectrum"""
-    planet_model = atm_grid(atm_paras)[0]
-    if cubeobj.breads_header["DATAUNIT"] != 'MJy/sr':
-        raise TypeError("cubeobj.breads_header['DATAUNIT'] must be 'MJy/sr'")
-
-    if np.all(planet_model == 0):
-        raise ValueError("Something wrong in planet spectrum, all values are 0")
-    elif np.size(atm_grid_wvs) != np.size(planet_model):
-        raise ValueError(
-            f"Something wrong in planet spectrum, the wavelength grid size is {np.size(atm_grid_wvs)} while the planet model size is {np.size(planet_model)} ")
-    else:
-        if vsini != 0:
-            spinbroad_model = pyasl.fastRotBroad(atm_grid_wvs, planet_model, 0.1, vsini)
-        else:
-            spinbroad_model = planet_model
-
-        planet_f = interp1d(atm_grid_wvs, spinbroad_model, bounds_error=False, fill_value=np.nan)
-
-        comp_spec = planet_f(wvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
-        comp_spec = comp_spec * (wvs * u.um) ** 2 / const.c  # from  Flambda to Fnu
-        comp_spec = comp_spec.to(u.MJy).value
-
-    return comp_spec
 
 def _create_nodes(cubeobj, nodes):
     """Manage all the different cases to define the position of the spline nodes"""
