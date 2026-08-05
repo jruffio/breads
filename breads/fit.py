@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import lsq_linear
 from scipy.special import loggamma
+from scipy.linalg import cho_factor, cho_solve
 
 __all__ =  ('fitfm', 'log_prob', 'combined_log_prob', 'nlog_prob')
 
@@ -83,14 +84,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             warn(warning_text)
 
     # Will reject the column(s) full of 0 of the model matrix M (without regularization)
-    # validpara = np.where(np.any(M_no_reg != 0, axis=0))
-    # validpara = np.where(np.any(~np.isclose(M_no_reg, 0, atol=1e-10), axis=0))
     validpara = np.where(~np.isclose(np.nansum(np.abs(M_no_reg/ s_no_reg [:, None]), axis=0), 0, atol=1e-10))
-    # validpara = np.where(
-    #     np.isfinite(np.sum(M_no_reg, axis=0)) & # No infinite value
-    #     np.any(M_no_reg != 0, axis=0) & # No zero values
-    #     (np.nanmax(M_no_reg/ s_no_reg [:, None], axis=0) > 1e-12) # No vanishingly small values
-    #                      )
 
     # if len(fm_out) == 4 and "N_planet_linparas" in extra_outputs.keys():
     #     N_planet_paras = extra_outputs["N_planet_linparas"]
@@ -193,15 +187,31 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
 
         # Section to compute error bars of linear parameters
         MTM = np.dot(M.T, M)
+        MTM = 0.5 * (MTM + MTM.T)
         MTM_no_reg = np.dot(M_no_reg.T, M_no_reg)
+        MTM_no_reg = 0.5 * (MTM_no_reg + MTM_no_reg.T)
         try:
-            iMTM = np.linalg.inv(MTM)
-            covphi = np.dot(iMTM, np.dot(MTM_no_reg, iMTM.T))
+            # iMTM = np.linalg.inv(MTM)
+            # covphi = np.dot(iMTM, np.dot(MTM_no_reg, iMTM.T))
+            c_and_lower = cho_factor(MTM)  # Cholesky of MTM (fails loudly if not PD)
+            X = cho_solve(c_and_lower, MTM_no_reg)  # X = MTM^{-1} @ MTM_no_reg
+            covphi = cho_solve(c_and_lower, X.T).T  # covphi = MTM^{-1} @ MTM_no_reg @ MTM^{-1}
+
+            eigvals = np.linalg.eigvalsh(covphi)  # covphi should be symmetric PSD
+            cond = np.abs(eigvals.max() / eigvals.min())
+            # print("condition number:", cond, nonlin_paras)
+            # print("min/max eigenvalue:", eigvals.min(), eigvals.max())
+            if cond > 1e10:
+                warning_text = "conditioning number too high (>1e10): cond={0} for nonlin={1}".format(cond,nonlin_paras)
+                warn(warning_text)
+                # raise Exception(warning_text)
             # The formula below assumes that we are using the determinant of the inverse covariance
             # That's why we are adding the minus sign
-            # logdet_icovphi0 = -np.sum(np.log(np.diag(covphi)))
             slogdet_icovphi0 = np.linalg.slogdet(covphi)
             logdet_icovphi0 = -slogdet_icovphi0[1]
+            # print(logdet_icovphi0)
+            # logdet_icovphi0 = -np.sum(np.log(np.diag(covphi)))
+            # print(logdet_icovphi0,"3")
         except Exception as e:
             # only printing the error message, but will not stop because of it
             # Will simply return the outputs corresponding to invalid data.

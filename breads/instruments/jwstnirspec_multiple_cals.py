@@ -58,6 +58,8 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
         self.crds_dir = dataobj_list[0].crds_dir
         if hasattr(dataobj_list[0], "wv_sampling"):
             self.wv_sampling = dataobj_list[0].wv_sampling
+        if hasattr(dataobj_list[0], "wv_nodes"):
+            self.wv_nodes = dataobj_list[0].wv_nodes
 
         self.default_filenames = {}
         basename = os.path.basename(self.filename)

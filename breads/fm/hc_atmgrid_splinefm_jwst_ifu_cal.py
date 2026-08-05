@@ -74,10 +74,11 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
     else:
         _nonlin_paras = nonlin_paras
 
-    if regularization is None:
-        min_spline_ampl = 0.02
-    else:
-        min_spline_ampl = 0.005
+    # if regularization is None:
+    #     min_spline_ampl = 0.02
+    # else:
+    #     min_spline_ampl = 0.005
+    # min_spline_ampl = 0.1
 
     Natmparas = len(atm_grid.values.shape)-1
     atm_paras = [p for p in _nonlin_paras[0:Natmparas]]
@@ -154,7 +155,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
 
     mask_comp = dist2comp_as < radius_as
     larger_mask_comp = dist2comp_as < 3 * radius_as
-    mask_vec = np.nansum(mask_comp, axis=1) != 0
+    mask_vec = np.nansum(mask_comp, axis=1) >= 50
     rows_ids = np.where(mask_vec)[0]
 
     new_mask = np.tile(mask_vec[:, None], (1, nx))
@@ -222,35 +223,109 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
             continue
         M_spline = get_spline_model(x_nodes, wvs[rows_ids[_k], :], spline_degree=3)
         selec_M_spline = M_spline[where_trace_finite[1][where_finite_and_in_row], :]
-        where_del_col = np.where(np.nanmax(np.abs(selec_M_spline), axis=0) < min_spline_ampl)  # 0.01#0.00001
 
-        if np.size(where_del_col[0]) == selec_M_spline.shape[1]:
-            #Nothing usable in this row (rows_ids[_k])
-            continue
+        dotprod_M = np.dot(selec_M_spline.transpose(),selec_M_spline)
+        dotprod_M_diag = np.sqrt(np.diag(dotprod_M))
+        dotprod_M = np.abs(dotprod_M/(dotprod_M_diag[np.newaxis,:]*dotprod_M_diag[:,np.newaxis]))
+        d1 = np.diag(dotprod_M, k=1) # First off diagonal
+        is_one = d1 > (1-5e-3)#np.isclose(d1, 1)
+        not_one_idx = np.flatnonzero(~is_one)  # indices where v is NOT ~1
+        if not_one_idx.size == 0:
+            # vector is all ones
+            last_lead, first_trail = len(d1) - 1, 0
+        else:
+            last_lead = not_one_idx[0] - 1 if is_one[0] else -1  # -1 = no leading ones
+            first_trail = not_one_idx[-1] + 1 if is_one[-1] else selec_M_spline.shape[1]-1  # selec_M_spline.shape[1]-1 = no trailing ones
+        # print(last_lead, first_trail+1)
+        # # valid means val<1-1e-6
+        # # 0:15
+        selec_M_spline[:,0:last_lead+1] = 0
+        selec_M_spline[:,first_trail+1:selec_M_spline.shape[1]] = 0
 
-        selec_M_spline[:, where_del_col[0]] = 0
+        # dotprod_M2 = np.dot(selec_M_spline.transpose(),selec_M_spline)
+        # dotprod_M2_diag = np.sqrt(np.diag(dotprod_M2))
+        # dotprod_M2 = np.abs(dotprod_M2/(dotprod_M2_diag[np.newaxis,:]*dotprod_M2_diag[:,np.newaxis]))
+        #
+        # where_del_col = np.where(np.nanmax(np.abs(selec_M_spline), axis=0) < min_spline_ampl)  # 0.01#0.00001
+        # # if np.size(where_del_col[0]) == selec_M_spline.shape[1]:
+        # #     #Nothing usable in this row (rows_ids[_k])
+        # #     continue
+        # #
+        # # plt.figure(figsize=(12,5))
+        # # plt.title("{0} {1} {2}".format(rows_ids[_k],_k,selec_M_spline.shape[1]))
+        # # for l in range(selec_M_spline.shape[1]):
+        # #     if np.nanmax(selec_M_spline[:,l]) >0.5:
+        # #         continue
+        # #     if l in where_del_col[0]:
+        # #         linestyle = "--"
+        # #     else:
+        # #         linestyle= "-"
+        # #     # plt.subplot(2,1,1)
+        # #     argextr_id = np.nanargmax(np.abs(selec_M_spline[:, l]))
+        # #     plt.plot(selec_M_spline[:,l]/selec_M_spline[argextr_id, l],label=f"{l}",linestyle=linestyle)
+        # #     # plt.subplot(2,1,2)
+        # #     # plt.plot(selec_M_spline[:,l]/s[where_finite_and_in_row[0]],label=f"{l}",linestyle=linestyle)
+        # # plt.legend()
+        #
+        # plt.figure()
+        # plt.subplot(1,2,1)
+        # plt.imshow(dotprod_M)
+        # plt.subplot(1,2,2)
+        # plt.imshow(dotprod_M2)
+        #
+        # # plt.figure()
+        # # plt.plot(d1)
+        #
+        # plt.show()
+
+        # selec_M_spline[:, where_del_col[0]] = 0
         M_speckles[where_finite_and_in_row[0], _k, :] = selec_M_spline
         if regularization == "user" and reg_mean_map is not None and reg_std_map is not None:
             d_reg_speckles[_k, :] = reg_mean_map[rows_ids[_k], :]
-            d_reg_speckles[_k, where_del_col[0]] = np.nan
             s_reg_speckles[_k, :] = reg_std_map[rows_ids[_k], :]
-            s_reg_speckles[_k, where_del_col[0]] = np.nan
             wvs_reg_speckles[_k, :] = x_nodes
-            wvs_reg_speckles[_k, where_del_col[0]] = np.nan
+            # d_reg_speckles[_k, where_del_col[0]] = np.nan
+            # s_reg_speckles[_k, where_del_col[0]] = np.nan
+            # wvs_reg_speckles[_k, where_del_col[0]] = np.nan
+            d_reg_speckles[_k, 0:last_lead+1] = np.nan
+            s_reg_speckles[_k, 0:last_lead+1] = np.nan
+            wvs_reg_speckles[_k, 0:last_lead+1] = np.nan
+            d_reg_speckles[_k, first_trail+1::] = np.nan
+            s_reg_speckles[_k, first_trail+1::] = np.nan
+            wvs_reg_speckles[_k, first_trail+1::] = np.nan
 
     if wvs_KLs_f is not None:
-        for KLid, KL_f in enumerate(wvs_KLs_f):
-            max_val_KL = np.nanmax(np.abs(KL_f(np.linspace(np.nanmin(w),np.nanmax(w),2000))))
-            for _k in range(Nrows):
-                where_finite_and_in_row = np.where(where_trace_finite[0] == rows_ids[_k])
-                if np.size(where_finite_and_in_row[0]) <= N_KL_tot:
-                    continue
+        for _k in range(Nrows):
+            where_finite_and_in_row = np.where(where_trace_finite[0] == rows_ids[_k])
+            if np.size(where_finite_and_in_row[0]) <= N_KL_tot:
+                continue
+            for KLid, KL_f in enumerate(wvs_KLs_f):
+                max_val_KL = np.nanmax(np.abs(KL_f(np.linspace(np.nanmin(w),np.nanmax(w),2000))))
+
                 KL_vec = KL_f(wvs[rows_ids[_k], :])
+                # plt.plot(KL_vec)
                 selec_KL_vec = KL_vec[where_trace_finite[1][where_finite_and_in_row]]
-                if (np.nanmax(np.abs(selec_KL_vec)) < 1e-3*max_val_KL) or (np.sum(selec_KL_vec > (1e-3*max_val_KL)) <= N_KL_tot):
+                # plt.plot(selec_KL_vec)
+                # plt.show()
+
+
+                if (np.nanmax(np.abs(selec_KL_vec)) < 1e-2*max_val_KL) or (np.sum(selec_KL_vec > (1e-2*max_val_KL)) <= N_KL_tot):
                     M_KLs[where_finite_and_in_row[0], _k, KLid] = 0
                 else:
                     M_KLs[where_finite_and_in_row[0], _k, KLid] = selec_KL_vec
+                # M_KLs[where_finite_and_in_row[0], _k, KLid] = selec_KL_vec
+
+            # _tmp = M_KLs[where_finite_and_in_row[0], _k, :]
+            # dotprod_M = np.dot(_tmp.transpose(),_tmp)
+            # dotprod_M_diag = np.sqrt(np.diag(dotprod_M))
+            # dotprod_M = np.abs(dotprod_M/(dotprod_M_diag[np.newaxis,:]*dotprod_M_diag[:,np.newaxis]))
+            # plt.figure()
+            # plt.imshow(dotprod_M)
+            # # plt.plot(_tmp[:,0])
+            # # plt.plot(_tmp[:,1])
+            # # plt.plot(_tmp[:,2])
+            # # plt.plot(_tmp[:,3])
+            # plt.show()
 
     if detec_KLs is not None:
         max_val_KL = np.nanmax(np.abs(detec_KLs[where_trace_finite[1][where_finite_and_in_row], :]))
@@ -259,7 +334,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
             if np.size(where_finite_and_in_row[0]) <= N_KL_tot:
                 continue
             selec_KL_vec = detec_KLs[where_trace_finite[1][where_finite_and_in_row], :]
-            if (np.nanmax(np.abs(selec_KL_vec)) < 1e-3*max_val_KL) or (np.sum(selec_KL_vec > (1e-3*max_val_KL)) <= N_KL_tot):
+            if (np.nanmax(np.abs(selec_KL_vec)) < 1e-2*max_val_KL) or (np.sum(selec_KL_vec > (1e-2*max_val_KL)) <= N_KL_tot):
                 M_KLs_detec[where_finite_and_in_row[0], _k, :] = 0
             else:
                 M_KLs_detec[where_finite_and_in_row[0], _k, :] = selec_KL_vec

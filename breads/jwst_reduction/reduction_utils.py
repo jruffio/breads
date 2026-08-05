@@ -1970,6 +1970,10 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
         x_grid = hdulist['X'].data
         y_grid = hdulist['Y'].data
         wv_sampling = hdulist['WAVE'].data
+        if 'wv_nodes' in hdulist:
+            wv_nodes = hdulist['wv_nodes'].data
+        else:
+            wv_nodes = None
 
     r2star_grid = np.sqrt(x_grid ** 2 + y_grid ** 2)
 
@@ -2063,6 +2067,8 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
         hdulist_out.append(fits.ImageHDU(data=err_Flambda, name='ERR_FLAM'))
         hdulist_out.append(fits.ImageHDU(data=speckle_std_Flambda, name='STD_FLAM'))
         hdulist_out.append(fits.ImageHDU(data=speckles_Flambda, name='SPECKLES_FLAM'))
+        if wv_nodes is not None:
+            hdulist_out.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
         hdulist_out[0].header['LABEL'] = label
         hdulist_out[0].header['XCOORD'] = x
         hdulist_out[0].header['YCOORD'] = y
@@ -2079,6 +2085,22 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
         # trace, followed by a lower-bound trace that fills up to the previous one.
         # This is more robust to NaN gaps than the 'toself' polygon-concatenation
         # trick, which can self-intersect and balloon out where speckle_std is NaN.
+        N_speckles = speckles_Flambda.shape[1]
+        speckle_subset = speckles_Flambda[:, ::N_speckles // 5]
+        for i in range(speckle_subset.shape[1]):
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=speckle_subset[:, i], mode='lines',
+                name="speckles " + label, legendgroup=label,
+                opacity=0.5, showlegend=(i == 0),
+                line=dict(color="grey", width=1),
+            ), row=1, col=1)
+        if wv_nodes is not None:
+            marker = dict(symbol='line-ns', size=12, line=dict(color='black', width=2))
+            fig_spec.add_trace(go.Scatter(
+                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Flambda + 5*speckle_std_Flambda), mode='markers',
+                marker=marker,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=1, col=1)
         fig_spec.add_trace(go.Scatter(
             x=wv_sampling, y=upper, mode='lines', line=dict(width=0),
             connectgaps=True,
@@ -2094,19 +2116,25 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
             x=wv_sampling, y=spectrum_Flambda, mode='lines', name=label,
             legendgroup=label, line=dict(color=color, width=2),
         ), row=1, col=1)
-        N_speckles = speckles_Flambda.shape[1]
-        speckle_subset = speckles_Flambda[:, ::N_speckles // 5]
-        for i in range(speckle_subset.shape[1]):
-            fig_spec.add_trace(go.Scatter(
-                x=wv_sampling, y=speckle_subset[:, i], mode='lines',
-                name="speckles " + label, legendgroup=label,
-                opacity=0.5, showlegend=(i == 0),
-                line=dict(color=color, width=1),
-            ), row=1, col=1)
 
         # --- Same panel, in Jansky, added below the Flambda panel ---
         upper_Jy = spectrum_Jy + speckle_std_Jy
         lower_Jy = spectrum_Jy - speckle_std_Jy
+        speckle_subset_Jy = speckles_Jy[:, ::N_speckles // 5]
+        for i in range(speckle_subset_Jy.shape[1]):
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=speckle_subset_Jy[:, i], mode='lines',
+                name="speckles " + label, legendgroup=label,
+                opacity=0.5, showlegend=False,
+                line=dict(color="grey", width=1),
+            ), row=2, col=1)
+        if wv_nodes is not None:
+            marker = dict(symbol='line-ns', size=12, line=dict(color='black', width=2))
+            fig_spec.add_trace(go.Scatter(
+                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Jy + 5*speckle_std_Jy), mode='markers',
+                marker=marker,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=2, col=1)
         fig_spec.add_trace(go.Scatter(
             x=wv_sampling, y=upper_Jy, mode='lines', line=dict(width=0),
             connectgaps=True,
@@ -2122,14 +2150,6 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
             x=wv_sampling, y=spectrum_Jy, mode='lines', name=label,
             legendgroup=label, showlegend=False, line=dict(color=color, width=2),
         ), row=2, col=1)
-        speckle_subset_Jy = speckles_Jy[:, ::N_speckles // 5]
-        for i in range(speckle_subset_Jy.shape[1]):
-            fig_spec.add_trace(go.Scatter(
-                x=wv_sampling, y=speckle_subset_Jy[:, i], mode='lines',
-                name="speckles " + label, legendgroup=label,
-                opacity=0.5, showlegend=False,
-                line=dict(color=color, width=1),
-            ), row=2, col=1)
 
         # --- 2D image plot: per-planet annotations only (image itself plotted once, above) ---
         for ax in (ax_sum, ax_std):
@@ -2223,6 +2243,9 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
                 rv_vec = hdulist['rv_vec'].data
                 wv_nodes = hdulist['wv_nodes'].data
                 _breads_header = hdulist['BREADS'].data
+
+                # from scipy.ndimage import generic_filter
+                # log_prob[0,:,:] = generic_filter(log_prob[0,:,:], np.nanmedian, size=3)
             flux_arr_list.append(flux_arr)
             fluxerr_arr_list.append(fluxerr_arr)
             log_prob_list.append(log_prob)
@@ -2321,7 +2344,13 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         else:
             reg_mean_map = None
             reg_std_map = None
+        # reg_mean_map = None
+        # reg_std_map = None
 
+        # plt.imshow(reg_mean_map[1200:1300,:],origin="lower")
+        # plt.clim(-50000,50000)
+        # plt.show()
+        # N_KL=0
         if N_KL is not None and N_KL != 0:
             tmp_badpixels = copy(dataobj.bad_pixels)
             # mask point sources
@@ -2430,8 +2459,10 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
 
         if 0:
             print("ra_dec_point_sources",ra_dec_point_sources)
-            # nonlin_paras = [0.0, ra_dec_point_sources[0][1]/1000., ra_dec_point_sources[0][0]/1000.]  # rv (km/s),y (pix), x (pix),
-            nonlin_paras = [16.84, 0.1, 0.6]  # rv (km/s),y (pix), x (pix),
+            # nonlin_paras = [16.84, ra_dec_point_sources[0][1]/1000., ra_dec_point_sources[0][0]/1000.]  # rv (km/s),y (pix), x (pix),
+            # print("nonlin_paras",nonlin_paras)
+            # nonlin_paras = [16.84, 0.1, 0.6]  # rv (km/s),y (pix), x (pix),
+            nonlin_paras = (np.float64(16.84), np.float64(0.35000000000000003), np.float64(0.2500000000000011))
             print("nonlin_paras",nonlin_paras)
             # exit()
             # nonlin_paras = [0.0, ra_dec_point_sources[1][1]/1000., ra_dec_point_sources[1][0]/1000.]
@@ -2477,7 +2508,14 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             M = M / s[:, None]
 
             from breads.fit import fitfm
-            log_prob, rchi2, linparas, linparas_err = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,scale_noise=True, bounds=None)
+            log_prob, rchi2, linparas, linparas_err = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,scale_noise=False, bounds=None)
+            print("best fit", linparas[0:5])
+            print("best fit err", linparas_err[0:5])
+            print("best fit snr", linparas[0:5] / linparas_err[0:5])
+            print("rchi2", rchi2)
+            print("log_prob", log_prob)
+            nonlin_paras = [nonlin_paras[0],nonlin_paras[1]+1e-5,nonlin_paras[2]]
+            log_prob, rchi2, linparas, linparas_err = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,scale_noise=False, bounds=None)
 
             paras = linparas[validpara]
             print("best fit", linparas[0:5])
@@ -2523,7 +2561,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             plt.subplot(3,1,1)
             plt.plot(dataobj.wavelengths[row_id,:], subtracted_im[row_id,:]*scaling,label="subtracted_im")
             plt.plot(dataobj.wavelengths[row_id,:], dataobj.data[row_id,:]*scaling,label="data")
-            plt.plot(dataobj.wavelengths[row_id,:], dataobj.noise[row_id,:]*scaling,label="noise")
+            plt.plot(dataobj.wavelengths[row_id,:], dataobj.noise[row_id,:]*rchi2*scaling,label="noise")
             plt.plot(dataobj.wavelengths[row_id,:], canvas[row_id,:]*scaling,label="model")
             plt.plot(dataobj.wavelengths[row_id,:], (dataobj.data[row_id,:]-canvas[row_id,:])*scaling,label="res",linestyle="--")
             where_reg_row = np.where(reg_rows==row_id)
@@ -2554,7 +2592,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             plt.plot( paras[0] * M[:, 0] * s, label="planet model")
             plt.plot( (m - paras[0] * M[:, 0]) * s, label="starlight model")
             plt.plot( d * s-m * s, label="residuals")
-            plt.plot(s, label="noise")
+            plt.plot(s*rchi2, label="noise")
             # where_even_rows = np.where((reg_rows % 2) == 0)
             # plt.errorbar(reg_wvs[where_even_rows], d_reg[where_even_rows], yerr=s_reg[where_even_rows],
             #              label="even rows prior")
@@ -2564,6 +2602,12 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             plt.ylabel("Flux (MJy)")
             plt.xlabel("Column pixels")
             plt.legend()
+
+            plt.figure()
+            plt.subplot(2,1,1)
+            plt.plot((d-m)/rchi2)
+            plt.subplot(2,1,2)
+            plt.plot(np.cumsum(d-m))
             plt.show()
 
         if mppool is not None:

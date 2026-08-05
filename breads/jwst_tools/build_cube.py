@@ -291,6 +291,8 @@ def build_cube(dataobj,
         hdulist.append(pyfits.ImageHDU(data=_x_out, name='X'))
         hdulist.append(pyfits.ImageHDU(data=_y_out, name='Y'))
         hdulist.append(pyfits.ImageHDU(data=dataobj.wv_sampling, name='WAVE'))
+        if hasattr(dataobj, "wv_nodes"):
+            hdulist.append(pyfits.ImageHDU(data=dataobj.wv_nodes, name='wv_nodes'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
     return flux_cube, fluxerr_cube, _x_out, _y_out,dataobj.wv_sampling
