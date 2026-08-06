@@ -81,7 +81,7 @@ class JWSTNirspec_cal(JWST_IFUs):
         from gwcs import wcstools
 
         hdulist = pyfits.open(filename)
-        calfile = jwst.datamodels.open(hdulist)  # save time opening by passing the already opened file
+        calfile = datamodels.open(filename)
         photom_dataset = DataSet(calfile)
 
         # Compute 2D wavelength and pixel area arrays for the whole image

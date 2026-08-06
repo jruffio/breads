@@ -244,6 +244,9 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
 
         pathloss_skip = TA  # For target acq images, skip the pathloss step, otherwise don't skip it.
 
+        from packaging.version import Version
+        clean_flicker_step = 'clean_flicker_noise' if Version(jwst.__version__) > Version("1.20") else 'nsclean'
+
         step_parameters = {
             # spec2.assign_wcs.skip = False
             # spec2.bkg_subtract.skip = False
@@ -253,7 +256,7 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
             # spec2.flat_field.skip = False
             # spec2.pathloss.skip = False
             'pathloss':{'skip':pathloss_skip},
-            'nsclean':{'skip':nsclean_skip},
+            clean_flicker_step: {'skip': nsclean_skip},
             # spec2.photom.skip = False
             'cube_build': {'skip': skip_cubes},  # We do not want or need interpolated cubes
             'extract_1d': {'skip': True},
