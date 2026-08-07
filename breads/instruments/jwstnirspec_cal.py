@@ -135,7 +135,7 @@ class JWSTNirspec_cal(JWST_IFUs):
                 y = y.reshape(y.shape[0], 1) * np.ones((1, xmax - xmin))
 
                 # Transform all those pixels to RA, Dec, wavelength
-                skycoords, speccoord = wcses[i](x, y, with_units=True)
+                skycoords, speccoord = wcses[i].pixel_to_world(x, y)
 
                 ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
                 dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
