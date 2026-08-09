@@ -481,7 +481,7 @@ def visualize_nrs_psf(V3PA, sep_planets, pa_planets, grating, detector, wv=None,
 
     color_list = ["#006699","#ff9900", "#6600ff", "pink","black"]
 
-    fig0 = plt.figure(figsize=(4,4))
+    fig0 = plt.figure(figsize=(6,6))
     dx, dy = x_vec[1] - x_vec[0], y_vec[1] - y_vec[0]
     extent = [x_vec[0] - dx / 2., x_vec[-1] + dx / 2., y_vec[0] - dy / 2., y_vec[-1] + dy / 2.]
     fontsize = 12
@@ -505,7 +505,7 @@ def visualize_nrs_psf(V3PA, sep_planets, pa_planets, grating, detector, wv=None,
         plt.gca().add_patch(circle)
 
 
-    fig0 = plt.figure(figsize=(8, 4))
+    fig0 = plt.figure(figsize=(12, 6))
     for pl,col in zip(ifux_planets.keys(),color_list):
         angles_deg, intens = azimuthal_slice_interp_pa(
             psf_im,
