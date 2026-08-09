@@ -1,10 +1,16 @@
 import astropy.units as u
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as PathEffects
 import numpy as np
 import pysiaf
 import stpsf
 from poppy.utils import quantity_input
 
+import os
+import astropy.io.fits as fits
+from scipy.signal import fftconvolve
+from scipy.ndimage import map_coordinates
+from breads.utils import rotate_coordinates
 
 def visualize_nrs_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'star',
                       show_inner_diff_spikes=True, diff_spike_len = 2,
@@ -292,6 +298,246 @@ def _visualize_jwst_ifu_fov(comp_name, comp_sep, comp_pa, v3pa, center_on = 'sta
 
 
     ax.set_title(f'{comp_name} at V3PA={v3pa} for {instrument} {aper_display_name.upper()}')
+
+
+def azimuthal_slice_interp_pa(image, ra_vec, dec_vec,
+                              r_arcsec, n_samples=720,
+                              interp_order=1):
+    """
+    Interpolate image intensities along a circle of radius r_arcsec, ignoring NaNs.
+    Angles follow astronomical PA convention:
+        0° = North (+Dec), increasing toward East (+RA).
+
+    image : 2D array (rows=Dec, cols=RA)
+    ra_vec, dec_vec : 1D arrays of on-sky coords [arcsec] for unflipped cube
+    r_arcsec : fixed projected separation (arcsec)
+    interp_order : 1=bilinear, 3=bicubic
+    """
+    ny, nx = image.shape
+
+    # Column coordinate vector for current image
+    ra_cols =  ra_vec
+    dec_rows = dec_vec
+
+    # Define position angles (0 = North, CCW to East)
+    angles = np.linspace(0, 2 * np.pi, n_samples, endpoint=False)
+    DEC = r_arcsec * np.cos(angles)  # cos -> Dec (North at angle=0)
+    RA = r_arcsec * np.sin(angles)  # sin -> RA (East at angle=90°)
+
+    # Convert sky coords -> pixel indices
+    dra = ra_cols[1] - ra_cols[0]
+    ddec = dec_rows[1] - dec_rows[0]
+    cols = (RA - ra_cols[0]) / dra
+    rows = (DEC - dec_rows[0]) / ddec
+
+    in_bounds = (cols >= 0) & (cols <= nx - 1) & (rows >= 0) & (rows <= ny - 1)
+
+    intensities = np.full(n_samples, np.nan, dtype=float)
+    if np.any(in_bounds):
+        coords = np.vstack([rows[in_bounds], cols[in_bounds]])
+
+        # NaN-aware interpolation: values + weights
+        img_filled = np.nan_to_num(image, nan=0.0)
+        wmap = np.isfinite(image).astype(float)
+
+        vals = map_coordinates(img_filled, coords, order=interp_order,
+                               mode="constant", cval=0.0)
+        wts = map_coordinates(wmap, coords, order=interp_order,
+                              mode="constant", cval=0.0)
+
+        good = wts > 0
+        intensities[in_bounds] = np.where(good, vals, np.nan)
+
+    # Convert radians to degrees [0,360)
+    angles_deg = (np.degrees(angles)) % 360.0
+    return angles_deg, intensities
+
+def visualize_nrs_psf(V3PA, sep_planets, pa_planets, grating, detector, wv=None, convolve=False):
+    """
+    Visualize the JWST NIRSpec IFU PSF (or its autocorrelation) in the
+    instrument's IFU frame, overlaid with the projected positions of companions,
+    and plot the PSF/speckle intensity as a function of position angle at each
+    companion's separation.
+
+    This function can be used to determine the optimal V3PA to observe a planet to make it fall between speckles.
+
+    Loads a precomputed empirical PSF cube (BreadsPSF) for the given grating/detector,
+    selects a single wavelength slice, optionally auto-convolves the PSF with itself
+    (e.g. to account for the planet PSF), converts each companion's
+    sky-plane separation/PA into IFU x/y coordinates and IFU position angle given the
+    telescope V3PA, and produces two figures:
+      1. A 2D image of the (log-scaled, peak-normalized) PSF in IFU x/y, with each
+         companion's position marked.
+      2. A companion-by-companion azimuthal slice of the PSF intensity at each
+         companion's projected separation, plotted vs. IFU PA (top panel) and vs.
+         V3PA (bottom panel), with the companion's own PA/V3PA marked.
+
+    Parameters
+    ----------
+    V3PA : float
+        Telescope V3 position angle (degrees), used to convert between sky-frame
+        (RA/Dec, North/East) and IFU-frame coordinates.
+    sep_planets : dict
+        Mapping of companion label (e.g. "b", "c", ...) to angular separation from
+        the star, in milliarcseconds (mas).
+    pa_planets : dict
+        Mapping of companion label to position angle (degrees), measured North to
+        East, matching the keys of `sep_planets`.
+    grating : str
+        NIRSpec grating name (e.g. "G395H"), used to locate the corresponding
+        BreadsPSF FITS file.
+    detector : str
+        NIRSpec detector name (e.g. "nrs1"), used to locate the corresponding
+        BreadsPSF FITS file.
+    wv : float, optional
+        Wavelength (in the same units as the PSF cube's WAVE extension) at which to
+        select the PSF slice. If None (default), the middle wavelength slice of the
+        cube is used. Raises an exception if `wv` falls outside the sampled range.
+    convolve : bool, optional
+        If True, autoconvolve the selected PSF slice with itself (NaN-resistant,
+        using a validity-mask normalization) before plotting.
+        Default is False, which plots the raw PSF slice.
+
+    Returns
+    -------
+    None
+        This function does not return a value; it creates matplotlib figures
+        (call `plt.show()` separately to display them) and prints some diagnostic
+        angle values to stdout.
+
+    Notes
+    -----
+    - Requires the `BREADS_DATA` environment variable to point to the directory
+      containing the `BreadsPSF` calibration files.
+    - The PSF FITS file is expected to be either
+      `HD163466_J1757132_{grating}_{detector}.fits` or, if that is not found,
+      `J1757132_{grating}_{detector}.fits`.
+    - IFU coordinates are computed via a fixed V3-to-V2 offset angle
+      (`V3I_YANG = 138.97164917`) combined with `V3PA`.
+    """
+    BREADS_DATA_ENV = os.getenv('BREADS_DATA')
+    if os.path.exists(os.path.join(BREADS_DATA_ENV, "BreadsPSF", f"HD163466_J1757132_{grating}_{detector}.fits")):
+        use_breadspsf_str = f"HD163466_J1757132_{grating}_{detector}.fits"
+    else:
+        use_breadspsf_str = f"J1757132_{grating}_{detector}.fits"
+    breadsPSF_path = os.path.join(BREADS_DATA_ENV, "BreadsPSF", use_breadspsf_str)
+    hdulist = fits.open(breadsPSF_path)
+    psfs = hdulist['EPSFS'].data
+    psf_X = hdulist['X'].data
+    psf_Y = hdulist['Y'].data
+    wv_sampling = hdulist['WAVE'].data
+    if wv is None:
+        wv_id = np.size(wv_sampling)//2
+    else:
+        if wv < wv_sampling[0] or wv > wv_sampling[-1]:
+            raise Exception("Wavelength (wv={0}) out of range ({1},{2}) for {3} detector.".format(wv, wv_sampling[0], wv_sampling[-1], detector))
+        wv_id = np.argmin(np.abs(wv_sampling - wv))
+    hdulist.close()
+
+    x_vec = psf_X[0,:]
+    y_vec = psf_Y[:,0]
+
+    psf_im = psfs[wv_id, :, :]/np.nanmax(psfs[wv_id, :, :])
+
+    if convolve:
+        # nan-resistant convolution: zero out nans, then correct for
+        # the missing coverage by convolving a validity mask too
+        valid = np.isfinite(psf_im).astype(float)
+        psf_filled = np.nan_to_num(psf_im, nan=0.0)
+
+        num = fftconvolve(psf_filled, psf_filled, mode="same")
+        norm = fftconvolve(valid, valid, mode="same")
+
+        # avoid divide-by-zero where there's no overlap at all
+        psf_autoconv = np.full_like(num, np.nan)
+        mask = norm > 0
+        psf_autoconv[mask] = num[mask] * (valid.sum() ** 2) / (norm[mask] * valid.sum())
+
+        psf_im = psf_autoconv/np.nanmax(psf_autoconv)
+
+    psf_im_log = np.log10(psf_im)
+
+    # result in arcseconds
+    ra_planets = {p: sep_planets[p]/1000. * np.sin(np.deg2rad(pa_planets[p])) for p in sep_planets}
+    dec_planets = {p: sep_planets[p]/1000. * np.cos(np.deg2rad(pa_planets[p])) for p in sep_planets}
+
+    #convert ra/dec to ifux/ifuy
+    V3I_YANG = 138.97164917
+    east2V2_deg = -(V3PA + V3I_YANG)
+    # print(east2V2_deg % 360)
+    # exit()
+
+    ifux_planets = {}
+    ifuy_planets = {}
+    ifuPA_planets = {}
+    for p in ra_planets:
+        ifuX, ifuY = rotate_coordinates(ra_planets[p], dec_planets[p], east2V2_deg, flipx=False)
+        ifux_planets[p] = ifuX
+        ifuy_planets[p] = ifuY
+        ifuPA_planets[p] = (pa_planets[p]+east2V2_deg) %360 #np.rad2deg(np.arctan2(ifux_planets[p],ifuy_planets[p]))%360
+        # print()
+        # print(pa_planets[p],np.rad2deg(np.arctan2(ra_planets[p],dec_planets[p])))
+        # print((pa_planets[p]+east2V2_deg) %360, (pa_planets[p]-east2V2_deg) %360, np.rad2deg(np.arctan2(ifux_planets[p],ifuy_planets[p]))%360)
+
+    color_list = ["#006699","#ff9900", "#6600ff", "pink","black"]
+
+    fig0 = plt.figure(figsize=(4,4))
+    dx, dy = x_vec[1] - x_vec[0], y_vec[1] - y_vec[0]
+    extent = [x_vec[0] - dx / 2., x_vec[-1] + dx / 2., y_vec[0] - dy / 2., y_vec[-1] + dy / 2.]
+    fontsize = 12
+    ax = plt.gca()
+    im_handle = ax.imshow(psf_im_log, origin="lower", cmap="viridis",extent=extent, vmin=-8, vmax=0)
+    cbar = plt.colorbar(im_handle, ax=ax)
+    cbar.set_label("S/N", fontsize=fontsize)
+    ax.invert_xaxis()
+    ax.set_aspect('equal')
+    ax.set_xlabel(r"$\Delta$ IFU x (as)", fontsize=fontsize)
+    ax.set_ylabel(r"$\Delta$ IFU y (as)", fontsize=fontsize)
+    ax.tick_params(axis='x', labelsize=fontsize)
+    ax.tick_params(axis='y', labelsize=fontsize)
+    plt.plot(0, 0, "*", color="grey", markersize=10)
+    txt = plt.text(0.1, -0.1, 'A', fontsize=fontsize, ha='center', va='top', color="grey")
+    txt.set_path_effects([PathEffects.withStroke(linewidth=1, foreground='w')])
+    for pl,col in zip(ifux_planets.keys(),color_list):
+        txt = plt.text(ifux_planets[pl] - 0.1, ifuy_planets[pl], pl, fontsize=fontsize, ha='center', va='top',color=col)
+        txt.set_path_effects([PathEffects.withStroke(linewidth=1, foreground='w')])
+        circle = plt.Circle((ifux_planets[pl] , ifuy_planets[pl]), 0.05, facecolor='#FFFFFF00',edgecolor=col)
+        plt.gca().add_patch(circle)
+
+
+    fig0 = plt.figure(figsize=(8, 4))
+    for pl,col in zip(ifux_planets.keys(),color_list):
+        angles_deg, intens = azimuthal_slice_interp_pa(
+            psf_im,
+            x_vec, y_vec,
+            r_arcsec=np.sqrt(ifux_planets[pl]**2+ ifuy_planets[pl]**2),
+            n_samples=720,
+            interp_order=1
+        )
+
+        plt.subplot(2,1, 1)
+        plt.plot(angles_deg, intens, color=col, label=pl, alpha=1.0)
+        plt.axvline(ifuPA_planets[pl], color=col, linestyle="-", alpha=0.5)
+        plt.subplot(2,1,2)
+        plt.scatter((V3PA-(angles_deg-ifuPA_planets[pl])) % 360, intens, color=col, label=pl, alpha=1.0,s=1)
+
+    plt.subplot(2,1, 1)
+    plt.legend()
+    plt.xlabel("IFU PA (deg)")
+    plt.ylabel("Speckle-to-star flux ratio")
+    plt.yscale("log")
+    plt.xlim(0, 360)
+    plt.grid(True, alpha=0.3)
+
+    plt.subplot(2,1,2)
+    plt.legend()
+    plt.xlabel("V3PA (deg)")
+    plt.ylabel("Speckle-to-star flux ratio")
+    plt.yscale("log")
+    plt.xlim(0, 360)
+    plt.grid(True, alpha=0.3)
+    plt.axvline(V3PA% 360, color="black", linestyle="-", alpha=0.5)
+    txt = plt.text(V3PA% 360, np.nanmedian(intens), "{0}deg".format(V3PA% 360),fontsize=fontsize, ha='left', va='bottom',color="black")
 
 
 #############
