@@ -30,7 +30,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=True, bounds=None,
     Returns:
         log_prob: Probability of the model marginalized over linear parameters.
         log_prob_H0: Probability of the model without the planet marginalized over linear parameters.
-        s2: noise scaling factor
+        rchi2: Reduced chi squared of the best fit. Equal to 1 by definition if scale_noise is False.
         linparas: Best fit linear parameters
         linparas_err: Uncertainties of best fit linear parameters
     """
