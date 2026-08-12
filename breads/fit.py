@@ -137,7 +137,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, computeH0=True, bounds=None,
                 rchi2 = 1
                 noise_scaling = 1
 
-            covphi = noise_scaling * iMTM
+            covphi = noise_scaling ** 2 * iMTM
             slogdet_icovphi0 = np.linalg.slogdet(MTM)
             logdet_icovphi0 = slogdet_icovphi0[1]
             if debug:
@@ -311,7 +311,7 @@ def _get_lsq_fit(M_normalized, d_normalized, _bounds, N_data=None):
         rchi2 = chi2 / N_data
     else:
         N_data = np.size(residuals)
-        chi2 = np.nansum(residuals ** 2) / N_data
+        chi2 = np.nansum(residuals ** 2)
         rchi2 = chi2 / N_data
     noise_scaling = np.sqrt(rchi2)
 
