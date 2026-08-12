@@ -582,26 +582,21 @@ def test_get_lsq_fit_with_explicit_n_data_returns_correct_chi2():
     assert chi2 < np.sum(residuals ** 2)
 
 
-def test_get_lsq_fit_with_none_n_data_divides_chi2_twice():
-    """_get_lsq_fit(N_data=None) divides the residual sum of squares twice.
+def test_get_lsq_fit_with_none_n_data_returns_textbook_chi2():
+    """_get_lsq_fit(N_data=None) returns the full chi2 and its reduction by N.
 
-    KNOWN BUG (breads/fit.py, ``_get_lsq_fit``): in the ``N_data is None``
-    branch the code computes ``chi2 = nansum(residuals**2) / N_data`` and then
-    ``rchi2 = chi2 / N_data``.  The returned ``chi2`` is therefore already a
-    reduced chi squared, and the returned ``rchi2`` (and hence ``noise_scaling``)
-    is divided by N_data a second time.  Compare with the ``N_data`` supplied
-    branch above, which is correct.
+    In the ``N_data is None`` branch the number of data points is taken to be the
+    full length of the residual vector.  ``chi2`` is the plain sum of squared
+    residuals, ``rchi2 = chi2 / N`` and ``noise_scaling = sqrt(rchi2)``.
 
-    Consequences inside ``fitfm``: the call at line 106 uses ``N_data=None``, so
-    the ``chi2`` entering the log-probability expression is really chi2/N_data.
-    This is a constant offset for a fixed dataset, so it does not shift the
-    location of the log-probability maximum, but it does make the absolute
-    likelihood values, and the relative weighting of the ``-0.5*chi2`` term,
-    incorrect.  The ``rchi2`` *returned* by ``fitfm`` is unaffected because it is
-    recomputed independently from ``residuals[:N_data]``.
+    (Historical note: this branch previously divided the sum of squares by N an
+    extra time, so that the returned ``chi2`` was already a reduced chi squared;
+    that was corrected upstream so ``chi2`` is now the plain sum of squares.)
 
-    This test asserts the current (buggy) behaviour so that the discrepancy is
-    documented and any future fix is deliberate rather than silent.
+    Because there are no appended regularization rows here, every residual is a
+    data residual, so this branch must agree with the explicitly supplied
+    ``N_data`` branch exercised in
+    ``test_get_lsq_fit_with_explicit_n_data_returns_correct_chi2``.
     """
     # Arrange
     rng = np.random.default_rng(31)
@@ -617,15 +612,19 @@ def test_get_lsq_fit_with_none_n_data_divides_chi2_twice():
 
     # Assert
     sum_squared_residuals = np.sum(residuals ** 2)
-    # What a correct implementation would return:
-    correct_chi2 = sum_squared_residuals
-    correct_rchi2 = sum_squared_residuals / n_rows
-    # What breads actually returns (one extra division by n_rows in each):
-    assert chi2 == pytest.approx(correct_chi2 / n_rows, rel=1e-10)
-    assert rchi2 == pytest.approx(correct_rchi2 / n_rows, rel=1e-10)
-    assert noise_scaling == pytest.approx(np.sqrt(correct_rchi2 / n_rows), rel=1e-10)
-    # The parameters themselves are unaffected by the bookkeeping error
+    assert chi2 == pytest.approx(sum_squared_residuals, rel=1e-10)
+    assert rchi2 == pytest.approx(sum_squared_residuals / n_rows, rel=1e-10)
+    assert noise_scaling == pytest.approx(
+        np.sqrt(sum_squared_residuals / n_rows), rel=1e-10
+    )
+    # With no regularization rows this must match the explicit-N_data branch
+    paras_explicit, _, _, chi2_explicit, _, _ = _get_lsq_fit(
+        M, d, unbounded, N_data=n_rows
+    )
+    assert chi2 == pytest.approx(chi2_explicit, rel=1e-10)
+    # The parameters themselves are the ordinary least-squares solution
     np.testing.assert_allclose(paras, np.linalg.lstsq(M, d, rcond=None)[0], rtol=1e-8)
+    np.testing.assert_allclose(paras, paras_explicit, rtol=1e-10)
 
 
 # --------------------------------------------------------------------------
@@ -641,9 +640,10 @@ def test_log_prob_matches_analytic_expression():
                - (Nd - Np)/2 ln(noise_scaling^2) - chi2 / (2 noise_scaling^2)
 
     Note that the ``chi2`` breads feeds into this expression comes from
-    ``_get_lsq_fit(..., N_data=None)`` and is therefore already divided by
-    N_data (see ``test_get_lsq_fit_with_none_n_data_divides_chi2_twice``).  The
-    reference value below reproduces that convention deliberately.
+    ``_get_lsq_fit(..., N_data=None)`` and is the plain sum of squared
+    (noise-normalized) residuals, while ``noise_scaling`` is computed separately
+    from the reduced chi squared ``chi2 / N_data``.  The reference below
+    reproduces that split.
     """
     # Arrange
     rng = np.random.default_rng(41)
@@ -660,7 +660,7 @@ def test_log_prob_matches_analytic_expression():
     paras = np.linalg.lstsq(M_norm, d_norm, rcond=None)[0]
     residuals = d_norm - M_norm @ paras
 
-    chi2_as_coded = np.sum(residuals ** 2) / n_data
+    chi2 = np.sum(residuals ** 2)
     rchi2 = np.sum(residuals ** 2) / n_data
     noise_scaling = np.sqrt(rchi2)
     logdet_Sigma = np.sum(2 * np.log(noise))
@@ -671,7 +671,7 @@ def test_log_prob_matches_analytic_expression():
         - 0.5 * logdet_Sigma
         - 0.5 * logdet_icovphi0
         - ((n_data - n_linpara) / 2) * np.log(noise_scaling ** 2)
-        - 0.5 * chi2_as_coded / noise_scaling ** 2
+        - 0.5 * chi2 / noise_scaling ** 2
     )
 
     # Act
@@ -713,7 +713,7 @@ def test_log_prob_H0_matches_analytic_expression():
     paras_H0 = np.linalg.lstsq(M_H0, d_norm, rcond=None)[0]
     residuals_H0 = d_norm - M_H0 @ paras_H0
 
-    chi2_H0_as_coded = np.sum(residuals_H0 ** 2) / n_data
+    chi2_H0 = np.sum(residuals_H0 ** 2)
     logdet_Sigma = np.sum(2 * np.log(noise))
     logdet_icovphi0_H0 = np.linalg.slogdet(M_H0.T @ M_H0)[1]
 
@@ -722,7 +722,7 @@ def test_log_prob_H0_matches_analytic_expression():
         - 0.5 * logdet_Sigma
         - 0.5 * logdet_icovphi0_H0
         - ((n_data - n_linpara) / 2) * np.log(1.0)
-        - 0.5 * chi2_H0_as_coded / 1.0
+        - 0.5 * chi2_H0 / 1.0
     )
 
     # Act
@@ -834,11 +834,9 @@ def test_bayes_factor_large_with_signal_and_small_without():
 
     With both hypotheses on the same footing the difference reduces to an
     analytic form: a signal-independent "Occam" term from the extra model column
-    plus half the chi-square improvement.  Note that the chi-square improvement
-    enters divided by N_data because of the double division in ``_get_lsq_fit``
-    (see ``test_get_lsq_fit_with_none_n_data_divides_chi2_twice``), which
-    suppresses the reported evidence by a factor of N_data relative to a
-    textbook likelihood ratio.
+    plus half the chi-square improvement.  With ``chi2`` now the plain sum of
+    squared (noise-normalized) residuals, this is the textbook log likelihood
+    ratio, so a strong companion produces a very large evidence gain.
     """
     # Arrange
     rng = np.random.default_rng(53)
@@ -865,7 +863,6 @@ def test_bayes_factor_large_with_signal_and_small_without():
         M_norm, d_norm = normalized_design_matrix(
             instrument, gaussian_fm_func, [GAUSS_MU_TRUE], {"sigma": GAUSS_SIGMA}
         )
-        n_data = M_norm.shape[0]
         M_H0 = M_norm[:, 1:]
         chi2_H1 = np.sum(
             (d_norm - M_norm @ np.linalg.lstsq(M_norm, d_norm, rcond=None)[0]) ** 2
@@ -877,7 +874,7 @@ def test_bayes_factor_large_with_signal_and_small_without():
             np.linalg.slogdet(M_norm.T @ M_norm)[1]
             - np.linalg.slogdet(M_H0.T @ M_H0)[1]
         )
-        return occam + 0.5 * (chi2_H0 - chi2_H1) / n_data
+        return occam + 0.5 * (chi2_H0 - chi2_H1)
 
     # Act
     lp_sig, lp_H0_sig, _, paras_sig, err_sig = fitfm(dataobj=with_signal, **common)
@@ -893,9 +890,9 @@ def test_bayes_factor_large_with_signal_and_small_without():
         analytic_evidence_gain(without_signal), rel=1e-8
     )
     # A real companion is decisively favoured; pure background is not
-    assert evidence_gain_sig > 25
+    assert evidence_gain_sig > 1000
     assert evidence_gain_bg < 0
-    assert evidence_gain_sig - evidence_gain_bg > 25
+    assert evidence_gain_sig > 100 * abs(evidence_gain_bg)
     # Sanity check on the corresponding amplitudes
     assert paras_sig[0] / err_sig[0] > 20  # high signal to noise detection
     assert abs(paras_bg[0] / err_bg[0]) < 3  # consistent with zero
@@ -923,7 +920,7 @@ def test_marginalize_noise_scaling_matches_analytic_expression():
     n_data, n_linpara = M_norm.shape
     paras = np.linalg.lstsq(M_norm, d_norm, rcond=None)[0]
     residuals = d_norm - M_norm @ paras
-    chi2_as_coded = np.sum(residuals ** 2) / n_data
+    chi2 = np.sum(residuals ** 2)
     logdet_Sigma = np.sum(2 * np.log(noise))
     logdet_icovphi0 = np.linalg.slogdet(M_norm.T @ M_norm)[1]
     dof = n_data - n_linpara + 2 - 1
@@ -932,7 +929,7 @@ def test_marginalize_noise_scaling_matches_analytic_expression():
         (n_linpara - n_data) / 2 * np.log(2 * np.pi)
         - 0.5 * logdet_Sigma
         - 0.5 * logdet_icovphi0
-        - (dof / 2) * np.log(chi2_as_coded)
+        - (dof / 2) * np.log(chi2)
         + loggamma(dof / 2)
     )
 
