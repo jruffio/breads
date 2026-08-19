@@ -1316,6 +1316,7 @@ def run_complete_stage1_2_clean_reduction(input_dir, output_root_dir=None, overw
 
     # Run all reduction steps
     rate_files = run_stage1(uncal_files, output_dir=det1_dir, overwrite=overwrite)
+    cal_files = run_stage2(rate_files, output_dir=spec2_dir, overwrite=overwrite)
     cleaned_rate_files = run_noise_clean(rate_files, spec2_dir, clean_det1_dir, overwrite=overwrite)
     cleaned_cal_files = run_stage2(cleaned_rate_files, output_dir=clean_spec2_dir, overwrite=overwrite)
 
