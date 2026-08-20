@@ -1,7 +1,10 @@
 import os, glob
 import pytest
 
-import jwst
+# Skip this entire file if 'jwst' is not installed
+import pytest
+jwst = pytest.importorskip("jwst")
+
 
 import breads.jwst_tools
 
