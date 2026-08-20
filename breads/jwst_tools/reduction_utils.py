@@ -145,8 +145,7 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all", sa
     """
     from jwst.pipeline import Detector1Pipeline
 
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     time0 = time.perf_counter()
 
@@ -221,8 +220,7 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
     from jwst.pipeline import Spec2Pipeline
 
     # We need to check that the desired output directories exist, and if not create them
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
         # Start a timer to keep track of runtime
     time0 = time.perf_counter()
@@ -931,8 +929,7 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, N_nodes=40, model_charge
 
     """
     # We need to check that the desired output directories exist, and if not create them
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     # Start a timer to keep track of runtime
     time0 = time.perf_counter()
@@ -1324,15 +1321,6 @@ def run_complete_stage1_2_clean_reduction(input_dir, output_root_dir=None, overw
 
 ###########################################################################
 # Functions for invoking the MIRI/MRS pipeline
-
-def mkdir_miri_files(path):
-    """Short function to create directories for MIRI files"""
-    if type(path) != str:
-        raise TypeError("'path' must be a string")
-
-    if not os.path.exists(path):
-        os.makedirs(path)
-    return path
 
 def sort_by_target_name(input_dir, filetype='uncal.fits'):
     files = find_files_to_process(input_dir, filetype)
