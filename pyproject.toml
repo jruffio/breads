@@ -72,3 +72,9 @@ github_project = "https://github.com/jruffio/breads"
 [tool.setuptools.packages.find]
 namespaces = false
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')"
+]
+# Skip slow tests by default
+addopts = "-m 'not slow'"

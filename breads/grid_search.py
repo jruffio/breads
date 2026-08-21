@@ -102,7 +102,7 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,c
         fm_func: A forward model function. See breads.fm.template.template() for an example.
         fm_paras: Additional parameters for fm_func (other than non-linear parameters and dataobj)
         numthreads: Number of processes to be used in parallelization. Non parallization if defined as None (default).
-        bounds: (/!\ Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
+        bounds: (!!! Caution: the calculation of log prob is only theoretically accurate if no bounds are used.)
             Bounds on the linear parameters used in lsq_linear as a tuple of arrays (min_vals, maxvals).
             e.g. ([0,0,...], [np.inf,np.inf,...]). default no bounds.
             Each numpy array must have shape (N_linear_parameters,).
@@ -176,7 +176,7 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,c
 
         if outarr_not_created:
             raise RuntimeError("All process_chunk calls returned None. Check for errors in fitfm or the input data.")
-        
+
     N_linpara = int((out.shape[-1]-3)/2)
     out = np.moveaxis(out, -1, 0)
     log_prob = out[0]
