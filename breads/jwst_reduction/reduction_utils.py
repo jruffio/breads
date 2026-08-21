@@ -68,7 +68,7 @@ from collections import defaultdict
 ###########################################################################
 #                       JWST reduction tools
 #
-# This module contains utility functions for JWST reductions, particularly 
+# This module contains utility functions for JWST reductions, particularly
 # for invoking the JWST pipeline with some customizations and additions for
 # tuned for the kind of processing we want to do with breads.
 
@@ -226,7 +226,7 @@ def run_stage1_nirspec(uncal_files, output_dir, overwrite=False, maximum_cores="
 def run_stage2(uncal_files, output_dir, skip_cubes=True, overwrite=False, TA=False, nsclean_skip=False, save_plots=True):
     warnings.warn("run_stage2 is deprecated. Please use run_stage2_nirspec instead.")
     return run_stage2_nirspec(uncal_files, output_dir, skip_cubes=skip_cubes, overwrite=overwrite, TA=TA,
-                              nsclean_skip=nsclean_skip, save_plots=save_plots)
+                              cleanflicker_skip=nsclean_skip, save_plots=save_plots)
 
 def run_stage2_nirspec(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False, cleanflicker_skip=True, save_plots=True):
     """
@@ -1391,7 +1391,7 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
 
 
 ###########################################################################
-# Host Star PSF Subtraction 
+# Host Star PSF Subtraction
 
 
 def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_sampling=None,
