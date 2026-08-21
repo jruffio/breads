@@ -4,62 +4,82 @@ import os
 import astropy
 from glob import glob
 
+##########################################
+# Tests of JWST data reduction and analyses -- for NIRSpec
+#
+# This exercises end-to-end the reduction of JWST data in an automated way.
+# This is a pretty slow test, and therefore is marked to be skipped by default.
+# Run it by explicitly invoking tests marked slow:
+#    > pytest -m slow
+#
+# It's also a bit of a disk space hog, and will take up > 1 GB of output files to run it.
+# These are not cleaned up automatically (yet).
+#
+#############################################
 
 # Skip this entire file if 'jwst' is not installed
 import pytest
 jwst = pytest.importorskip("jwst")
 
-
-from breads.jwst_tools.reduction_utils import run_stage1,run_stage2
+import shared_test_infrastructure
+from breads.jwst_tools.reduction_utils import run_stage1, run_stage2
 
 @pytest.fixture(scope="module")
-def shared_output_dir(tmp_path_factory):
-    return tmp_path_factory.mktemp("nirspec_outputs")
+def test_output_dir():
+    return shared_test_infrastructure.get_test_output_dir(instrument="nirspec")
 
-BREADS_DATA_ENV = os.getenv('BREADS_DATA')
-if BREADS_DATA_ENV is None:
-    jwst_test_data_path = os.path.join(str(astropy.utils.data._get_download_cache_loc()),'jwst_test_data', 'nirspec')
-else:
-    jwst_test_data_path = os.path.join(os.environ['BREADS_DATA'], "jwst_test_data", "nirspec")
-os.makedirs(jwst_test_data_path, exist_ok=True)
-print("The JWST test data will be downloaded in: {}".format(jwst_test_data_path))
+# TEST_INPUTS_NIRSPEC = ['jw01414014001_02101_00001_nrs2_uncal.fits',]
+TEST_INPUTS_NIRSPEC = ['jw03399002001_03102_00001_nrs2_uncal.fits']
 
-test_file = 'jw03399002001_03102_00001_nrs2_uncal.fits'
 
-def test_download_from_mast():
-    print('downloading {} -> {}'.format(test_file,jwst_test_data_path))
-    mast_file_url = f"https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:JWST/product/{test_file}"
-    hdul = fits.open(mast_file_url)
-    hdul.writeto(os.path.join(jwst_test_data_path,test_file),overwrite=True)
+@pytest.mark.slow   # by default do not run this
+def test_check_prior_test_outputs_not_present(test_output_dir):
+    return  shared_test_infrastructure.check_prior_test_outputs_not_present(test_output_dir)
 
-    assert os.path.exists(os.path.join(jwst_test_data_path,test_file))
 
-def test_run_stage1(shared_output_dir):
-    filename = os.path.join(jwst_test_data_path,test_file)
-    uncal_files = [filename]
+@pytest.mark.slow   # by default do not run this
+def test_download_from_mast(test_output_dir):
+    """ Test we can download one file; this also obtains the input data for subsequent tests.
+    """
+    return shared_test_infrastructure.download_from_mast(TEST_INPUTS_NIRSPEC, test_output_dir)
 
-    stage1_outdir = os.path.join(shared_output_dir,"stage1")
+@pytest.mark.slow   # by default do not run this
+def test_run_stage1(test_output_dir):
+    """ Test run_stage_1 of the reduction pipeline on one uncal file."""
+    uncal_files = glob(os.path.join(test_output_dir,"*_uncal.fits"))
+
+    stage1_outdir = os.path.join(test_output_dir, "stage1")
 
     rate_files = run_stage1(uncal_files, stage1_outdir, overwrite=False, maximum_cores="1")
 
-    with fits.open(rate_files[0]) as hdul:
-        assert hdul[1].data.shape[0] > 0
+    for rate_file in rate_files:
+        # Verify the output rate file exists and is a valid JWST data model
+        datamodel = jwst.datamodels.open(rate_file)
+        assert isinstance(datamodel, jwst.datamodels.JwstDataModel)
+        assert datamodel.data.shape[0] > 0
+        print(rate_file + " OK!")
 
-def test_run_stage2(shared_output_dir):
-    stage1_outdir = os.path.join(shared_output_dir,"stage1")
-    filename = glob(os.path.join(stage1_outdir,"*_rate.fits"))[0]
-    rate_files = [filename]
+@pytest.mark.slow   # by default do not run this
+def test_run_stage2(test_output_dir):
+    """ Test run_stage_2 of the reduction pipeline on one rate file."""
 
-    stage2_outdir = os.path.join(shared_output_dir,"stage2")
+    rate_files = glob(os.path.join(test_output_dir, "stage1", "*_rate.fits"))
+
+    stage2_outdir = os.path.join(test_output_dir,"stage2")
 
     cal_files = run_stage2(rate_files, stage2_outdir, overwrite=False) #, maximum_cores="1")
 
-    with fits.open(cal_files[0]) as hdul:
-        assert hdul[1].data.shape[0] > 0
+    for cal_file in cal_files:
+        # Verify the output cal file exists and is a valid JWST data model
+        datamodel = jwst.datamodels.open(cal_file)
+        assert isinstance(datamodel, jwst.datamodels.JwstDataModel)
+        assert datamodel.data.shape[0] > 0
+        print(cal_file + " OK!")
 
-# def test_step1(shared_output_dir):
-#     # writes to shared_output_dir/...
-#     utils_dir = os.path.join(shared_output_dir,"utils")
+
+# def test_step1(test_output_dir):
+#     # writes to test_output_dir/...
+#     utils_dir = os.path.join(test_output_dir,"utils")
 #
 #     ###### Step 0 ######
 #
