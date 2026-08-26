@@ -1561,7 +1561,7 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_
 
 def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_spec_filename,
                                         wv_nodes=None, suffix = None,
-                                        coords_offset = None,coords_filename_filter=None,
+                                        coords_offset = None, coords_filename_filter=None,
                                         mask_charge_transfer_radius=None, mppool=None,
                                         ra_dec_point_sources=None,aper_rad=None,
                                         overwrite=False,targetname=None,

@@ -133,7 +133,7 @@ def test_linear_model_recovers_tutorial_values():
     expected_paras = np.linalg.lstsq(M_norm, d_norm, rcond=None)[0]
 
     # Act
-    log_prob, log_prob_H0, rchi2, linparas, linparas_err = fitfm(
+    log_prob, rchi2, linparas, linparas_err = fitfm(
         nonlin_paras=[], dataobj=instrument, fm_func=linear_fm_func, fm_paras={}
     )
 
@@ -141,7 +141,7 @@ def test_linear_model_recovers_tutorial_values():
     np.testing.assert_allclose(linparas, expected_paras, rtol=1e-10)
     np.testing.assert_allclose(linparas, [2.19, -0.35], atol=1e-10)
     assert np.all(np.isfinite(linparas_err))
-    assert np.isfinite(log_prob) and np.isfinite(log_prob_H0)
+    assert np.isfinite(log_prob)
     assert rchi2 > 0
 
 
@@ -151,7 +151,7 @@ def test_noiseless_gaussian_exact_recovery(noiseless_gaussian_instrument):
     instrument = noiseless_gaussian_instrument
 
     # Act
-    log_prob, log_prob_H0, rchi2, linparas, linparas_err = fitfm(
+    log_prob, rchi2, linparas, linparas_err = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=instrument,
         fm_func=gaussian_fm_func,
@@ -163,7 +163,7 @@ def test_noiseless_gaussian_exact_recovery(noiseless_gaussian_instrument):
         linparas, [GAUSS_AMPLITUDE_TRUE, GAUSS_BACKGROUND_TRUE], atol=1e-10
     )
     assert rchi2 == pytest.approx(0.0, abs=1e-20)
-    assert log_prob > log_prob_H0
+    assert np.isfinite(log_prob)
 
 
 def test_polynomial_three_linear_parameters_exact_recovery():
@@ -175,12 +175,11 @@ def test_polynomial_three_linear_parameters_exact_recovery():
     instrument = make_instrument(x, y, np.full_like(x, 0.1))
 
     # Act
-    _, _, rchi2, linparas, _ = fitfm(
+    _, rchi2, linparas, _ = fitfm(
         nonlin_paras=[],
         dataobj=instrument,
         fm_func=polynomial_fm_func,
         fm_paras={},
-        computeH0=False,
     )
 
     # Assert
@@ -203,12 +202,11 @@ def test_linear_parameters_match_normal_equations():
     expected = np.linalg.solve(M_norm.T @ M_norm, M_norm.T @ d_norm)
 
     # Act
-    _, _, _, linparas, _ = fitfm(
+    _, _, linparas, _ = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=instrument,
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Assert
@@ -225,12 +223,11 @@ def test_noisy_gaussian_recovers_truth_within_uncertainty():
     instrument = make_instrument(x, y, np.full_like(x, sigma_noise))
 
     # Act
-    _, _, _, linparas, linparas_err = fitfm(
+    _, _, linparas, linparas_err = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=instrument,
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
         scale_noise=False,
     )
 
@@ -259,21 +256,24 @@ def test_uncertainties_unscaled_match_inverse_normal_matrix():
     M_norm, _ = normalized_design_matrix(
         instrument, gaussian_fm_func, [GAUSS_MU_TRUE], {"sigma": GAUSS_SIGMA}
     )
+    d_norm = instrument.data.flatten() / instrument.noise.flatten()
+    paras = np.linalg.solve(M_norm.T @ M_norm, M_norm.T @ d_norm)
+    residuals = d_norm - M_norm @ paras
     expected_err = np.sqrt(np.diag(np.linalg.inv(M_norm.T @ M_norm)))
+    expected_rchi2 = np.sum(residuals ** 2) / residuals.size
 
     # Act
-    _, _, rchi2, _, linparas_err = fitfm(
+    _, rchi2, _, linparas_err = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=instrument,
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
         scale_noise=False,
     )
 
     # Assert
     np.testing.assert_allclose(linparas_err, expected_err, rtol=1e-8)
-    assert rchi2 == 1  # by construction in the scale_noise=False branch
+    assert rchi2 == pytest.approx(expected_rchi2, rel=1e-10)
 
 
 def test_uncertainties_scaled_by_noise_scaling_factor():
@@ -304,12 +304,11 @@ def test_uncertainties_scaled_by_noise_scaling_factor():
         dataobj=instrument,
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Act
-    _, _, _, _, err_unscaled = fitfm(scale_noise=False, **common)
-    _, _, rchi2, _, err_scaled = fitfm(scale_noise=True, **common)
+    _, _, _, err_unscaled = fitfm(scale_noise=False, **common)
+    _, rchi2, _, err_scaled = fitfm(scale_noise=True, **common)
 
     # Assert
     assert rchi2 > 4.0, "test setup should produce a badly underestimated noise"
@@ -348,12 +347,11 @@ def test_uncertainties_are_statistically_calibrated():
             truth + rng.normal(0.0, true_scatter, x.size),
             np.full_like(x, quoted_sigma),
         )
-        _, _, _, linparas, linparas_err = fitfm(
+        _, _, linparas, linparas_err = fitfm(
             nonlin_paras=[GAUSS_MU_TRUE],
             dataobj=instrument,
             fm_func=gaussian_fm_func,
             fm_paras={"sigma": GAUSS_SIGMA},
-            computeH0=False,
             scale_noise=True,
         )
         amplitudes[i] = linparas[0]
@@ -390,12 +388,11 @@ def test_uncertainties_calibrated_when_noise_correctly_specified():
         instrument = make_instrument(
             x, truth + rng.normal(0.0, sigma_noise, x.size), np.full_like(x, sigma_noise)
         )
-        _, _, _, linparas, linparas_err = fitfm(
+        _, _, linparas, linparas_err = fitfm(
             nonlin_paras=[GAUSS_MU_TRUE],
             dataobj=instrument,
             fm_func=gaussian_fm_func,
             fm_paras={"sigma": GAUSS_SIGMA},
-            computeH0=False,
             scale_noise=False,
         )
         amplitudes[i] = linparas[0]
@@ -423,13 +420,12 @@ def test_linear_scaling_invariance():
         nonlin_paras=[GAUSS_MU_TRUE],
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
         scale_noise=False,
     )
 
     # Act
-    _, _, _, linparas, linparas_err = fitfm(dataobj=instrument, **common)
-    _, _, _, scaled_paras, scaled_err = fitfm(dataobj=scaled_instrument, **common)
+    _, _, linparas, linparas_err = fitfm(dataobj=instrument, **common)
+    _, _, scaled_paras, scaled_err = fitfm(dataobj=scaled_instrument, **common)
 
     # Assert
     np.testing.assert_allclose(scaled_paras, scale * linparas, rtol=1e-10)
@@ -450,13 +446,12 @@ def test_heteroscedastic_noise_is_correctly_weighted():
         nonlin_paras=[GAUSS_MU_TRUE],
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
         scale_noise=False,
     )
 
     # Act
-    _, _, _, weighted_paras, weighted_err = fitfm(dataobj=correct_instrument, **common)
-    _, _, _, flat_paras, flat_err = fitfm(dataobj=flat_instrument, **common)
+    _, _, weighted_paras, weighted_err = fitfm(dataobj=correct_instrument, **common)
+    _, _, flat_paras, flat_err = fitfm(dataobj=flat_instrument, **common)
 
     # Assert: correct weighting is both tighter and closer to the truth
     truth = np.array([GAUSS_AMPLITUDE_TRUE, GAUSS_BACKGROUND_TRUE])
@@ -479,12 +474,11 @@ def test_rchi2_near_unity_for_correct_noise_model():
     instrument = make_instrument(x, y, np.full_like(x, sigma_noise))
 
     # Act
-    _, _, rchi2, _, _ = fitfm(
+    _, rchi2, _, _ = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=instrument,
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
         scale_noise=True,
     )
 
@@ -508,13 +502,12 @@ def test_rchi2_scales_as_square_of_noise_underestimate():
         nonlin_paras=[GAUSS_MU_TRUE],
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
         scale_noise=True,
     )
 
     # Act
-    _, _, rchi2_correct, _, _ = fitfm(dataobj=correct_instrument, **common)
-    _, _, rchi2_understated, _, _ = fitfm(dataobj=understated_instrument, **common)
+    _, rchi2_correct, _, _ = fitfm(dataobj=correct_instrument, **common)
+    _, rchi2_understated, _, _ = fitfm(dataobj=understated_instrument, **common)
 
     # Assert
     assert rchi2_correct == pytest.approx(1.0, abs=0.15)
@@ -523,12 +516,8 @@ def test_rchi2_scales_as_square_of_noise_underestimate():
     )
 
 
-def test_rchi2_is_unity_when_scale_noise_false():
-    """The scale_noise=False branch hard-sets rchi2 to exactly one.
-
-    This is a bookkeeping flag rather than a measured goodness of fit: no noise
-    rescaling is applied, so the reported value is 1 regardless of the data.
-    """
+def test_rchi2_is_measured_when_scale_noise_false():
+    """With scale_noise=False, returned rchi2 is still measured from residuals."""
     # Arrange: wildly inconsistent noise so that a *measured* rchi2 would be huge
     rng = np.random.default_rng(23)
     x = np.linspace(0.0, 10.0, 101)
@@ -536,17 +525,16 @@ def test_rchi2_is_unity_when_scale_noise_false():
     instrument = make_instrument(x, y, np.full_like(x, 0.01))
 
     # Act
-    _, _, rchi2, _, _ = fitfm(
+    _, rchi2, _, _ = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=instrument,
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
         scale_noise=False,
     )
 
-    # Assert
-    assert rchi2 == 1
+    # Assert: inconsistent noise should produce a very poor reduced chi square
+    assert rchi2 > 1000
 
 
 def test_get_lsq_fit_with_explicit_n_data_returns_correct_chi2():
@@ -675,67 +663,17 @@ def test_log_prob_matches_analytic_expression():
     )
 
     # Act
-    actual_log_prob, _, actual_rchi2, _, _ = fitfm(
+    actual_log_prob, actual_rchi2, _, _ = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=instrument,
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
         scale_noise=True,
     )
 
     # Assert
     assert actual_rchi2 == pytest.approx(rchi2, rel=1e-10)
     assert actual_log_prob == pytest.approx(expected_log_prob, rel=1e-10)
-
-
-def test_log_prob_H0_matches_analytic_expression():
-    """The H0 log probability is the same expression with the first column dropped.
-
-    The H0 hypothesis removes the first (companion) column of the design matrix.
-    Note that ``_compute_H0`` is always called with the default
-    ``noise_scaling=1`` and uses the *full* model's column count in the
-    prefactors; the reference value reproduces that convention.
-    """
-    # Arrange
-    rng = np.random.default_rng(43)
-    x = np.linspace(0.0, 10.0, 51)
-    sigma_noise = 0.3
-    y = gaussian_truth(x) + rng.normal(0.0, sigma_noise, x.size)
-    noise = np.full_like(x, sigma_noise)
-    instrument = make_instrument(x, y, noise)
-
-    M_norm, d_norm = normalized_design_matrix(
-        instrument, gaussian_fm_func, [GAUSS_MU_TRUE], {"sigma": GAUSS_SIGMA}
-    )
-    n_data, n_linpara = M_norm.shape
-    M_H0 = M_norm[:, 1:]
-    paras_H0 = np.linalg.lstsq(M_H0, d_norm, rcond=None)[0]
-    residuals_H0 = d_norm - M_H0 @ paras_H0
-
-    chi2_H0 = np.sum(residuals_H0 ** 2)
-    logdet_Sigma = np.sum(2 * np.log(noise))
-    logdet_icovphi0_H0 = np.linalg.slogdet(M_H0.T @ M_H0)[1]
-
-    expected_log_prob_H0 = (
-        ((n_linpara - n_data) / 2) * np.log(2 * np.pi)
-        - 0.5 * logdet_Sigma
-        - 0.5 * logdet_icovphi0_H0
-        - ((n_data - n_linpara) / 2) * np.log(1.0)
-        - 0.5 * chi2_H0 / 1.0
-    )
-
-    # Act
-    _, actual_log_prob_H0, _, _, _ = fitfm(
-        nonlin_paras=[GAUSS_MU_TRUE],
-        dataobj=instrument,
-        fm_func=gaussian_fm_func,
-        fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=True,
-    )
-
-    # Assert
-    assert actual_log_prob_H0 == pytest.approx(expected_log_prob_H0, rel=1e-10)
 
 
 def test_log_prob_peaks_at_true_nonlinear_parameter():
@@ -823,81 +761,6 @@ def test_log_prob_peak_width_scales_with_noise_level():
     assert width_high == pytest.approx(2.0 * width_low, rel=1e-3)
 
 
-def test_bayes_factor_large_with_signal_and_small_without():
-    """log_prob - log_prob_H0 discriminates a real companion from pure noise.
-
-    ``scale_noise=False`` is used deliberately so that both hypotheses are
-    evaluated with the same noise scaling.  (With ``scale_noise=True`` the H1
-    branch uses the fitted ``noise_scaling`` while ``_compute_H0`` is always
-    invoked with its default ``noise_scaling=1``, which makes the two terms not
-    directly comparable.)
-
-    With both hypotheses on the same footing the difference reduces to an
-    analytic form: a signal-independent "Occam" term from the extra model column
-    plus half the chi-square improvement.  With ``chi2`` now the plain sum of
-    squared (noise-normalized) residuals, this is the textbook log likelihood
-    ratio, so a strong companion produces a very large evidence gain.
-    """
-    # Arrange
-    rng = np.random.default_rng(53)
-    x = np.linspace(0.0, 10.0, 201)
-    sigma_noise = 0.2
-    noise = np.full_like(x, sigma_noise)
-    with_signal = make_instrument(
-        x, gaussian_truth(x) + rng.normal(0.0, sigma_noise, x.size), noise
-    )
-    without_signal = make_instrument(
-        x,
-        np.full_like(x, GAUSS_BACKGROUND_TRUE) + rng.normal(0.0, sigma_noise, x.size),
-        noise,
-    )
-    common = dict(
-        nonlin_paras=[GAUSS_MU_TRUE],
-        fm_func=gaussian_fm_func,
-        fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=True,
-        scale_noise=False,
-    )
-
-    def analytic_evidence_gain(instrument):
-        M_norm, d_norm = normalized_design_matrix(
-            instrument, gaussian_fm_func, [GAUSS_MU_TRUE], {"sigma": GAUSS_SIGMA}
-        )
-        M_H0 = M_norm[:, 1:]
-        chi2_H1 = np.sum(
-            (d_norm - M_norm @ np.linalg.lstsq(M_norm, d_norm, rcond=None)[0]) ** 2
-        )
-        chi2_H0 = np.sum(
-            (d_norm - M_H0 @ np.linalg.lstsq(M_H0, d_norm, rcond=None)[0]) ** 2
-        )
-        occam = -0.5 * (
-            np.linalg.slogdet(M_norm.T @ M_norm)[1]
-            - np.linalg.slogdet(M_H0.T @ M_H0)[1]
-        )
-        return occam + 0.5 * (chi2_H0 - chi2_H1)
-
-    # Act
-    lp_sig, lp_H0_sig, _, paras_sig, err_sig = fitfm(dataobj=with_signal, **common)
-    lp_bg, lp_H0_bg, _, paras_bg, err_bg = fitfm(dataobj=without_signal, **common)
-    evidence_gain_sig = lp_sig - lp_H0_sig
-    evidence_gain_bg = lp_bg - lp_H0_bg
-
-    # Assert: the evidence gain matches its analytic decomposition
-    assert evidence_gain_sig == pytest.approx(
-        analytic_evidence_gain(with_signal), rel=1e-8
-    )
-    assert evidence_gain_bg == pytest.approx(
-        analytic_evidence_gain(without_signal), rel=1e-8
-    )
-    # A real companion is decisively favoured; pure background is not
-    assert evidence_gain_sig > 1000
-    assert evidence_gain_bg < 0
-    assert evidence_gain_sig > 100 * abs(evidence_gain_bg)
-    # Sanity check on the corresponding amplitudes
-    assert paras_sig[0] / err_sig[0] > 20  # high signal to noise detection
-    assert abs(paras_bg[0] / err_bg[0]) < 3  # consistent with zero
-
-
 def test_marginalize_noise_scaling_matches_analytic_expression():
     """The marginalized-noise-scaling branch matches its analytic form.
 
@@ -938,12 +801,11 @@ def test_marginalize_noise_scaling_matches_analytic_expression():
         dataobj=instrument,
         fm_func=gaussian_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Act
-    lp_marg, _, _, paras_marg, err_marg = fitfm(marginalize_noise_scaling=True, **common)
-    lp_plain, _, _, paras_plain, err_plain = fitfm(
+    lp_marg, _, paras_marg, err_marg = fitfm(marginalize_noise_scaling=True, **common)
+    lp_plain, _, paras_plain, err_plain = fitfm(
         marginalize_noise_scaling=False, **common
     )
 
@@ -976,7 +838,6 @@ def test_marginalize_noise_scaling_peaks_at_true_nonlinear_parameter():
                 dataobj=instrument,
                 fm_func=gaussian_fm_func,
                 fm_paras={"sigma": GAUSS_SIGMA},
-                computeH0=False,
                 marginalize_noise_scaling=True,
             )[0]
             for mu in mu_grid
@@ -1049,7 +910,7 @@ def test_four_output_fm_without_regularization_matches_three_output(
     assert four_output[1] == pytest.approx(three_output[1], rel=1e-12)
     assert four_output[2] == pytest.approx(three_output[2], rel=1e-12)
     np.testing.assert_allclose(four_output[3], three_output[3], rtol=1e-12)
-    np.testing.assert_allclose(four_output[4], three_output[4], rtol=1e-12)
+    np.testing.assert_allclose(four_output[3], three_output[3], rtol=1e-12)
 
 
 def test_strong_regularization_pulls_parameter_toward_prior(
@@ -1064,12 +925,11 @@ def test_strong_regularization_pulls_parameter_toward_prior(
     )
 
     # Act
-    _, _, _, linparas, _ = fitfm(
+    _, _, linparas, _ = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=noisy_gaussian_instrument,
         fm_func=fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Assert
@@ -1090,12 +950,11 @@ def test_weak_regularization_recovers_unregularized_solution(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=noisy_gaussian_instrument,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Act
-    _, _, _, unregularized, _ = fitfm(fm_func=gaussian_fm_func, **common)
-    _, _, _, weakly_regularized, _ = fitfm(fm_func=fm_func, **common)
+    _, _, unregularized, _ = fitfm(fm_func=gaussian_fm_func, **common)
+    _, _, weakly_regularized, _ = fitfm(fm_func=fm_func, **common)
 
     # Assert
     np.testing.assert_allclose(weakly_regularized, unregularized, rtol=1e-6)
@@ -1111,16 +970,15 @@ def test_regularization_strength_interpolates_between_limits(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=noisy_gaussian_instrument,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
-    _, _, _, unregularized, _ = fitfm(fm_func=gaussian_fm_func, **common)
+    _, _, unregularized, _ = fitfm(fm_func=gaussian_fm_func, **common)
 
     # Act
     backgrounds = [
         fitfm(
             fm_func=make_regularized_fm([np.nan, prior_background], [np.nan, s_reg]),
             **common,
-        )[3][1]
+        )[2][1]
         for s_reg in (1e-4, 1e-2, 1e-1, 1e0, 1e4)
     ]
 
@@ -1146,12 +1004,11 @@ def test_regularization_nan_entries_leave_parameter_unconstrained(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=noisy_gaussian_instrument,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Act
-    _, _, _, unregularized, _ = fitfm(fm_func=gaussian_fm_func, **common)
-    _, _, _, all_nan_priors, _ = fitfm(fm_func=fm_func, **common)
+    _, _, unregularized, _ = fitfm(fm_func=gaussian_fm_func, **common)
+    _, _, all_nan_priors, _ = fitfm(fm_func=fm_func, **common)
 
     # Assert
     np.testing.assert_allclose(all_nan_priors, unregularized, rtol=1e-10)
@@ -1171,12 +1028,11 @@ def test_regularization_does_not_constrain_the_companion_amplitude(
     )
 
     # Act
-    _, _, _, linparas, linparas_err = fitfm(
+    _, _, linparas, linparas_err = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=noisy_gaussian_instrument,
         fm_func=fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Assert: the background is pinned, the amplitude still recovers the truth
@@ -1196,14 +1052,13 @@ def test_regularization_with_scale_noise_false_runs_and_differs(
         dataobj=noisy_gaussian_instrument,
         fm_func=fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Act
-    lp_scaled, _, rchi2_scaled, paras_scaled, err_scaled = fitfm(
+    lp_scaled, rchi2_scaled, paras_scaled, err_scaled = fitfm(
         scale_noise=True, **common
     )
-    lp_plain, _, rchi2_plain, paras_plain, err_plain = fitfm(scale_noise=False, **common)
+    lp_plain, rchi2_plain, paras_plain, err_plain = fitfm(scale_noise=False, **common)
 
     # Assert
     for value in (lp_scaled, lp_plain, rchi2_scaled, rchi2_plain):
@@ -1232,7 +1087,6 @@ def test_regularization_with_marginalize_noise_scaling_raises(
             dataobj=noisy_gaussian_instrument,
             fm_func=fm_func,
             fm_paras={"sigma": GAUSS_SIGMA},
-            computeH0=False,
             marginalize_noise_scaling=True,
         )
 
@@ -1243,9 +1097,8 @@ def test_regularization_with_marginalize_noise_scaling_raises(
 
 def assert_invalid_outputs(result, n_linpara):
     """Assert that fitfm returned its 'nothing could be fitted' sentinel values."""
-    log_prob_value, log_prob_H0, rchi2, linparas, linparas_err = result
+    log_prob_value, rchi2, linparas, linparas_err = result
     assert log_prob_value == -np.inf
-    assert log_prob_H0 == -np.inf
     assert rchi2 == np.inf
     assert linparas.shape == (n_linpara,)
     assert linparas_err.shape == (n_linpara,)
@@ -1345,11 +1198,11 @@ def test_all_zero_columns_are_dropped_and_returned_as_nan(noisy_gaussian_instrum
 
     # Assert
     assert padded[3].shape == (3,)
-    assert np.isnan(padded[3][2]) and np.isnan(padded[4][2])
+    assert np.isnan(padded[2][2]) and np.isnan(padded[3][2])
     np.testing.assert_allclose(padded[3][:2], reference[3], rtol=1e-12)
-    np.testing.assert_allclose(padded[4][:2], reference[4], rtol=1e-12)
+    np.testing.assert_allclose(padded[2][:2], reference[2], rtol=1e-12)
     assert padded[0] == pytest.approx(reference[0], rel=1e-12)
-    assert padded[2] == pytest.approx(reference[2], rel=1e-12)
+    assert padded[1] == pytest.approx(reference[1], rel=1e-12)
 
 
 def test_singular_design_matrix_returns_invalid_outputs(noisy_gaussian_instrument):
@@ -1371,7 +1224,6 @@ def test_singular_design_matrix_returns_invalid_outputs(noisy_gaussian_instrumen
         dataobj=noisy_gaussian_instrument,
         fm_func=degenerate_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Assert
@@ -1384,45 +1236,24 @@ def single_parameter_fm_func(nonlin_paras, instrument, **fm_paras):
     return d, M[:, :1], s
 
 
-def test_single_linear_parameter_with_computeH0_raises(noisy_gaussian_instrument):
-    """A one-parameter model cannot support the H0 test and is rejected.
-
-    Note that ``Warning`` is an exception class, so this ``raise Warning(...)``
-    is a hard error rather than a soft warning.  Callers with a single linear
-    parameter, such as the Gaussian example in the breads tutorial, must pass
-    ``computeH0=False`` explicitly.
-    """
-    # Act / Assert
-    with pytest.raises(Warning, match="cannot test H0 hypothesis"):
-        fitfm(
-            nonlin_paras=[GAUSS_MU_TRUE],
-            dataobj=noisy_gaussian_instrument,
-            fm_func=single_parameter_fm_func,
-            fm_paras={"sigma": GAUSS_SIGMA},
-            computeH0=True,
-        )
-
-
-def test_single_linear_parameter_with_computeH0_false_works(
+def test_single_linear_parameter_fit_works(
     noiseless_gaussian_instrument,
 ):
-    """With computeH0=False a single-parameter model fits and returns NaN for H0."""
+    """A one-parameter model still fits and returns finite outputs."""
     # Arrange: the data contain a constant background that this model cannot
     # represent, so the recovered amplitude is only approximately the truth.
     instrument = noiseless_gaussian_instrument
 
     # Act
-    log_prob_value, log_prob_H0, rchi2, linparas, linparas_err = fitfm(
+    log_prob_value, rchi2, linparas, linparas_err = fitfm(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=instrument,
         fm_func=single_parameter_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
-        computeH0=False,
     )
 
     # Assert
     assert linparas.shape == (1,)
-    assert np.isnan(log_prob_H0)
     assert np.isfinite(log_prob_value)
     assert np.isfinite(linparas[0]) and np.isfinite(linparas_err[0])
     assert linparas[0] == pytest.approx(GAUSS_AMPLITUDE_TRUE, rel=0.5)
@@ -1469,7 +1300,6 @@ def test_infinite_bounds_equivalent_to_none(noisy_gaussian_instrument):
     assert explicit[1] == pytest.approx(default[1], rel=1e-12)
     assert explicit[2] == pytest.approx(default[2], rel=1e-12)
     np.testing.assert_allclose(explicit[3], default[3], rtol=1e-12)
-    np.testing.assert_allclose(explicit[4], default[4], rtol=1e-12)
 
 
 def test_bounds_argument_is_not_mutated(noisy_gaussian_instrument):
@@ -1497,7 +1327,7 @@ def test_bounds_argument_is_not_mutated(noisy_gaussian_instrument):
 # --------------------------------------------------------------------------
 
 def test_log_prob_matches_fitfm_first_output(noisy_gaussian_instrument):
-    """log_prob returns exactly the first output of fitfm with computeH0=False."""
+    """log_prob returns exactly the first output of fitfm."""
     # Arrange
     common = dict(
         nonlin_paras=[GAUSS_MU_TRUE],
@@ -1508,7 +1338,7 @@ def test_log_prob_matches_fitfm_first_output(noisy_gaussian_instrument):
 
     # Act
     wrapper_value = log_prob(**common)
-    direct_value = fitfm(computeH0=False, **common)[0]
+    direct_value = fitfm(**common)[0]
 
     # Assert
     assert wrapper_value == pytest.approx(direct_value, rel=1e-12)
@@ -1529,9 +1359,9 @@ def test_log_prob_respects_scale_noise_flag(noisy_gaussian_instrument):
     unscaled = log_prob(scale_noise=False, **common)
 
     # Assert
-    assert scaled == pytest.approx(fitfm(computeH0=False, scale_noise=True, **common)[0])
+    assert scaled == pytest.approx(fitfm(scale_noise=True, **common)[0])
     assert unscaled == pytest.approx(
-        fitfm(computeH0=False, scale_noise=False, **common)[0]
+        fitfm(scale_noise=False, **common)[0]
     )
     assert scaled != unscaled
 
@@ -1601,12 +1431,7 @@ def test_log_prob_returns_neg_inf_when_fm_raises(noisy_gaussian_instrument):
 def test_log_prob_handles_single_linear_parameter_without_raising(
     noisy_gaussian_instrument,
 ):
-    """log_prob works with a one-parameter model because it disables the H0 test.
-
-    log_prob calls fitfm with computeH0=False, so the single-parameter guard is
-    not triggered and a finite value is returned; a genuinely failing model is
-    what produces -inf.  This test pins down that distinction.
-    """
+    """log_prob works with a one-parameter model and returns a finite value."""
     # Act
     single_param_value = log_prob(
         nonlin_paras=[GAUSS_MU_TRUE],

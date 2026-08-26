@@ -15,7 +15,6 @@ from multiprocessing.sharedctypes import RawArray
 from tqdm import tqdm
 
 from breads.utils import get_spline_model
-from breads.instruments import Instrument
 from breads.fit import fitfm
 
 def _task_normrows(paras):
@@ -284,6 +283,9 @@ def _task_fit_3dspline(paras):
     """
 
     """
+
+    from breads.instruments import Instrument   # runtime import here to avoid circular import problem
+
     stamp_ids, x_nodes, y_nodes,wv_nodes, wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map, types_tuple = paras
     mp_float_type, mp_bp_type = types_tuple
 

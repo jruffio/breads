@@ -4,7 +4,7 @@ import os
 import astropy
 from glob import glob
 
-from breads.jwst_tools.reduction_utils import run_stage1,run_stage2
+from breads.jwst_reduction.reduction_utils import run_stage1,run_stage2
 
 @pytest.fixture(scope="module")
 def shared_output_dir(tmp_path_factory):
@@ -35,7 +35,7 @@ def test_run_stage1(shared_output_dir):
 
     stage1_outdir = os.path.join(shared_output_dir,"stage1")
 
-    rate_files = run_stage1(uncal_files, stage1_outdir, overwrite=False, maximum_cores="1")
+    rate_files = run_stage1(uncal_files, stage1_outdir, overwrite=False)
 
     with fits.open(rate_files[0]) as hdul:
         assert hdul[1].data.shape[0] > 0
@@ -47,7 +47,7 @@ def test_run_stage2(shared_output_dir):
 
     stage2_outdir = os.path.join(shared_output_dir,"stage2")
 
-    cal_files = run_stage2(rate_files, stage2_outdir, overwrite=False, maximum_cores="1")
+    cal_files = run_stage2(rate_files, stage2_outdir, overwrite=False)
 
     with fits.open(cal_files[0]) as hdul:
         assert hdul[1].data.shape[0] > 0
