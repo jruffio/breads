@@ -576,7 +576,7 @@ def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_fl
             meddev = median_abs_deviation(res2plot[np.where(np.isfinite(res2plot))])
             plt.ylim([-10*meddev,10*meddev])
         plt.xlim([dataobj.wv_sampling[0], dataobj.wv_sampling[-1]])
-        plt.xlabel("Wavelength ($\mu$m)", fontsize=fontsize)
+        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
         plt.ylabel("Diff. (MJy)", fontsize=fontsize)
         plt.gca().tick_params(axis='x', labelsize=fontsize)
         plt.gca().tick_params(axis='y', labelsize=fontsize)
@@ -586,8 +586,8 @@ def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_fl
             xcoord_label = 'IFU x (arcsec)'
             ycoord_label = 'IFU y (arcsec)'
         elif "sky" in dataobj.breads_header['COORDS']:
-            xcoord_label = '$\Delta$RA (arcsec)'
-            ycoord_label = '$\Delta$Dec (arcsec)'
+            xcoord_label = '$\\Delta$RA (arcsec)'
+            ycoord_label = '$\\Delta$Dec (arcsec)'
 
         ax1 = plt.subplot(gs[3, 0])
         plt.plot(dataobj.wv_sampling, _med_bestfit_paras[:, 2],label="Best fit")
@@ -608,7 +608,7 @@ def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_fl
         meddev = median_abs_deviation(res2plot[np.where(np.isfinite(res2plot))])
         plt.ylim([-10*meddev,10*meddev])
         plt.xlim([dataobj.wv_sampling[0], dataobj.wv_sampling[-1]])
-        plt.xlabel("Wavelength ($\mu$m)", fontsize=fontsize)
+        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
         plt.ylabel("Diff.", fontsize=fontsize)
         plt.gca().tick_params(axis='x', labelsize=fontsize)
         plt.gca().tick_params(axis='y', labelsize=fontsize)
@@ -620,7 +620,7 @@ def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_fl
         plt.xlim([dataobj.wv_sampling[0], dataobj.wv_sampling[-1]])
         med,mad = np.nanmedian( _med_bestfit_paras[:, 3]),median_abs_deviation( _med_bestfit_paras[np.where(np.isfinite( _med_bestfit_paras[:, 3]))[0], 3])
         plt.ylim([med-10*mad,med+10*mad])
-        plt.xlabel("Wavelength ($\mu$m)", fontsize=fontsize)
+        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
         plt.ylabel(ycoord_label, fontsize=fontsize)
         plt.gca().tick_params(axis='x', labelsize=fontsize)
         plt.gca().tick_params(axis='y', labelsize=fontsize)
@@ -633,7 +633,7 @@ def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_fl
         meddev = median_abs_deviation(res2plot[np.where(np.isfinite(res2plot))])
         plt.ylim([-10*meddev,10*meddev])
         plt.xlim([dataobj.wv_sampling[0], dataobj.wv_sampling[-1]])
-        plt.xlabel("Wavelength ($\mu$m)", fontsize=fontsize)
+        plt.xlabel("Wavelength ($\\mu$m)", fontsize=fontsize)
         plt.ylabel("Diff.", fontsize=fontsize)
         plt.gca().tick_params(axis='x', labelsize=fontsize)
         plt.gca().tick_params(axis='y', labelsize=fontsize)

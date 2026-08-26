@@ -895,7 +895,8 @@ def _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map,dq_rate,extend_sat=1):
 
 def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
                                 clean_1f_noise=True,model_charge_transfer=False,
-                              utils_dir=None, init_centroid=None,mppool=None,targetname=None,extend_sat=2):
+                              utils_dir=None, init_centroid=None,mppool=None,targetname=None,extend_sat=2,
+                                verbose=True):
     """
     Remove the 1/f noise  and/or the charge transferfrom rate files of the NIRSpec IFU.
     Inspired by NSClean but different implementation using column-wise splines.
@@ -973,6 +974,8 @@ def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
     priheader.add_history('Processed with BREADS (https://github.com/jruffio/breads)')
 
     if model_charge_transfer:
+        if verbose:
+            print("Modeling and subtracting charge transfer from saturated pixels...")
         charge_transfer_model = fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,rn_noise,poisson_noise,targetname=targetname,mppool=mppool,
                                                             use_stpsf=False,use_breadspsf=True,init_centroid=init_centroid)
         priheader.add_history('Subtracted charge transfer')
@@ -985,6 +988,8 @@ def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
     # plt.imshow(new_rate_im)
     # plt.show()
     if clean_1f_noise:
+        if verbose:
+            print("Modeling and subtracting 1/f noise...")
         model_1f_noise = fit_1f_noise_nirspec(new_rate_im,noise,bkg_bad_pixels,N_nodes,mppool=mppool)
         priheader.add_history('Applied 1/f noise subtraction using column-wise spline')
 
