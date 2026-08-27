@@ -82,7 +82,7 @@ class JWSTNirspec_cal(JWST_IFUs):
         from gwcs import wcstools
 
         hdulist = pyfits.open(filename)
-        calfile = jwst.datamodels.open(hdulist)  # save time opening by passing the already opened file
+        calfile = datamodels.open(filename)
         photom_dataset = DataSet(calfile)
 
         # Compute 2D wavelength and pixel area arrays for the whole image
@@ -136,10 +136,10 @@ class JWSTNirspec_cal(JWST_IFUs):
                 y = y.reshape(y.shape[0], 1) * np.ones((1, xmax - xmin))
 
                 # Transform all those pixels to RA, Dec, wavelength
-                _out = wcses[i](x, y)
-                ra_array[ymin:ymax, xmin:xmax] = _out[0]
-                dec_array[ymin:ymax, xmin:xmax] = _out[1]
-                wavelen_array[ymin:ymax, xmin:xmax] = _out[2]
+                skycoords, speccoord = wcses[i].pixel_to_world(x, y)
+                ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
+                dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
+                wavelen_array[ymin:ymax, xmin:xmax] = speccoord
 
                 self.trace_id_map[ymin:ymax, xmin:xmax][np.where(np.isfinite(ra_array[ymin:ymax, xmin:xmax]))] = i
 

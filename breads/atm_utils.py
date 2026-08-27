@@ -353,6 +353,11 @@ def object_memory_profiler(obj,g            ,level = 0, verbose=True):
 class broadRGI():
     def __init__(self,model_name,R=2700,preload=False):
         self.model_name = model_name
+        if R=='G395H':
+            self.poly_R = [4.2315854443768986e-14,4.215698787414372e-13,1.699575420882817e-12,-9.87177642957125e-13,-8.185987144420465e-11,-8.453742730219556e-10,-5.860480131264309e-09,-2.939035110960792e-08,-7.94761733834428e-08,3.591607770339932e-07,7.2865753776287735e-06,6.358725700123504e-05,0.0003646853948763622,0.001041269547985175,-0.005449555942462263,-0.09658241243063508,-0.5623949528975328,1.1010988145692728,53.03401867050948,443.60184378697863,249.37795708365255]
+            self.R_flag = True
+        else:
+            self.R_flag = False
         self.R = R
 
         self.identity = 'broadRGI_'+model_name+'_R'+str(R)
@@ -440,9 +445,17 @@ class broadRGI():
         
         broad_cube = np.empty(global_reshaped_cube.shape)
 
+        if self.R_flag:
+            R = np.polyval(self.poly_R,w)
+            print('polynomial R')
+            plt.plot(w,R)
+            plt.show()
+        else:
+            R = self.R
+            
         def _broadening_task(i):
             rprint('broadening... {}/{} '.format(i+1,n_grid_points))
-            return broaden(w,global_reshaped_cube[i,:],R=self.R)
+            return broaden(w,global_reshaped_cube[i,:],R=R)
 
         from multiprocess import Pool
         threads = os.cpu_count()

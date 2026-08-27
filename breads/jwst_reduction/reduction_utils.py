@@ -68,7 +68,7 @@ from collections import defaultdict
 ###########################################################################
 #                       JWST reduction tools
 #
-# This module contains utility functions for JWST reductions, particularly 
+# This module contains utility functions for JWST reductions, particularly
 # for invoking the JWST pipeline with some customizations and additions for
 # tuned for the kind of processing we want to do with breads.
 
@@ -226,7 +226,7 @@ def run_stage1_nirspec(uncal_files, output_dir, overwrite=False, maximum_cores="
 def run_stage2(uncal_files, output_dir, skip_cubes=True, overwrite=False, TA=False, nsclean_skip=False, save_plots=True):
     warnings.warn("run_stage2 is deprecated. Please use run_stage2_nirspec instead.")
     return run_stage2_nirspec(uncal_files, output_dir, skip_cubes=skip_cubes, overwrite=overwrite, TA=TA,
-                              nsclean_skip=nsclean_skip, save_plots=save_plots)
+                              cleanflicker_skip=nsclean_skip, save_plots=save_plots)
 
 def run_stage2_nirspec(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False, cleanflicker_skip=True, save_plots=True):
     """
@@ -895,7 +895,8 @@ def _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map,dq_rate,extend_sat=1):
 
 def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
                                 clean_1f_noise=True,model_charge_transfer=False,
-                              utils_dir=None, init_centroid=None,mppool=None,targetname=None,extend_sat=2):
+                              utils_dir=None, init_centroid=None,mppool=None,targetname=None,extend_sat=2,
+                                verbose=True):
     """
     Remove the 1/f noise  and/or the charge transferfrom rate files of the NIRSpec IFU.
     Inspired by NSClean but different implementation using column-wise splines.
@@ -973,6 +974,8 @@ def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
     priheader.add_history('Processed with BREADS (https://github.com/jruffio/breads)')
 
     if model_charge_transfer:
+        if verbose:
+            print("Modeling and subtracting charge transfer from saturated pixels...")
         charge_transfer_model = fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,rn_noise,poisson_noise,targetname=targetname,mppool=mppool,
                                                             use_stpsf=False,use_breadspsf=True,init_centroid=init_centroid)
         priheader.add_history('Subtracted charge transfer')
@@ -985,6 +988,8 @@ def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
     # plt.imshow(new_rate_im)
     # plt.show()
     if clean_1f_noise:
+        if verbose:
+            print("Modeling and subtracting 1/f noise...")
         model_1f_noise = fit_1f_noise_nirspec(new_rate_im,noise,bkg_bad_pixels,N_nodes,mppool=mppool)
         priheader.add_history('Applied 1/f noise subtraction using column-wise spline')
 
@@ -1391,7 +1396,7 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
 
 
 ###########################################################################
-# Host Star PSF Subtraction 
+# Host Star PSF Subtraction
 
 
 def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_sampling=None,
@@ -1556,7 +1561,7 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_
 
 def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_spec_filename,
                                         wv_nodes=None, suffix = None,
-                                        coords_offset = None,coords_filename_filter=None,
+                                        coords_offset = None, coords_filename_filter=None,
                                         mask_charge_transfer_radius=None, mppool=None,
                                         ra_dec_point_sources=None,aper_rad=None,
                                         overwrite=False,targetname=None,
