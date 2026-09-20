@@ -17,7 +17,9 @@ General
    tutorials/jwst/nirspec_1_running_BREADS_pipeline_tutorial.ipynb
    tutorials/jwst/nirspec_2_analyzing_data_products_CCF_covariance.ipynb
    tutorials/jwst/nirspec_3_spectral_modelling_likelihood_joint_analysis.ipynb
-
+   tutorials/jwst/MIRI_Tutorial_1_Data_Reductions_for_BREADS.ipynb   
+   tutorials/jwst/MIRI_Tutorial_2_MRS_Forward_Modeling_and_SNR.ipynb 
+   tutorials/jwst/MIRI_Tutorial_3_MRS_Cube-ish_build.ipynbi
 
 
 .. toctree::
@@ -25,5 +27,4 @@ General
    :caption: KPIC
 
    tutorials/kpic/KPIC_Tutorial_1_Placeholder.ipynb
-
 
