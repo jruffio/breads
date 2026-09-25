@@ -145,8 +145,7 @@ def run_stage1(uncal_files, output_dir, overwrite=False, maximum_cores="all", sa
     """
     from jwst.pipeline import Detector1Pipeline
 
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     time0 = time.perf_counter()
 
@@ -221,8 +220,7 @@ def run_stage2(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=Fals
     from jwst.pipeline import Spec2Pipeline
 
     # We need to check that the desired output directories exist, and if not create them
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
         # Start a timer to keep track of runtime
     time0 = time.perf_counter()
@@ -931,8 +929,7 @@ def run_noise_clean(rate_files, stage2_dir, output_dir, N_nodes=40, model_charge
 
     """
     # We need to check that the desired output directories exist, and if not create them
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     # Start a timer to keep track of runtime
     time0 = time.perf_counter()
@@ -1316,6 +1313,7 @@ def run_complete_stage1_2_clean_reduction(input_dir, output_root_dir=None, overw
 
     # Run all reduction steps
     rate_files = run_stage1(uncal_files, output_dir=det1_dir, overwrite=overwrite)
+    cal_files = run_stage2(rate_files, output_dir=spec2_dir, overwrite=overwrite)
     cleaned_rate_files = run_noise_clean(rate_files, spec2_dir, clean_det1_dir, overwrite=overwrite)
     cleaned_cal_files = run_stage2(cleaned_rate_files, output_dir=clean_spec2_dir, overwrite=overwrite)
 
@@ -1323,15 +1321,6 @@ def run_complete_stage1_2_clean_reduction(input_dir, output_root_dir=None, overw
 
 ###########################################################################
 # Functions for invoking the MIRI/MRS pipeline
-
-def mkdir_miri_files(path):
-    """Short function to create directories for MIRI files"""
-    if type(path) != str:
-        raise TypeError("'path' must be a string")
-
-    if not os.path.exists(path):
-        os.makedirs(path)
-    return path
 
 def sort_by_target_name(input_dir, filetype='uncal.fits'):
     files = find_files_to_process(input_dir, filetype)
@@ -1345,7 +1334,7 @@ def sort_by_target_name(input_dir, filetype='uncal.fits'):
     return dict(targname_groups)
 
 
-def select_miri_output_directory(uncal_path, target_name, channel, band):
+def select_miri_output_directory(output_dir, target_name, channel, band):
     """Short function to select the right MIRI output directory"""
 
     if band == 'SHORT':
@@ -1356,41 +1345,66 @@ def select_miri_output_directory(uncal_path, target_name, channel, band):
         band_alias = 'C'
     else:
         raise ValueError(f"Band {band} is not supported for stage 1 forward modeling")
-    return os.path.join(uncal_path, target_name, channel + band_alias, 'stage1')
+    return os.path.join(output_dir, target_name, channel + band_alias, 'stage1')
 
 
-def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores="1", skip_dark=False):
-    """Run pipeline stage 1, with some customizations for reductions"""
+def run_stage1_miri(uncal_path, output_dir=None, list_bands=None, overwrite=False, maximum_cores="1", skip_dark=False):
+    """Run pipeline stage 1, with some customizations for MIRI MRS reductions
+
+    Input uncal files are discovered by scanning uncal_path and are grouped by
+    target name. Outputs are organized into subdirectories
+    ``output_dir/<target_name>/<band>/stage1``.
+
+    For each input file, before doing any reduction, the expected output filename
+    is inferred, and it checks whether that output file already exists.
+    If so, then it is NOT reduced again by default.
+    Set the overwrite flag to True to re-reduce files
+
+    Parameters
+    ----------
+    uncal_path : string
+        Directory path to scan for uncal files to reduce
+    output_dir : string
+        Root directory path for where to put the output files. Outputs are written
+        to ``output_dir/<target_name>/<band>/stage1``. Defaults to uncal_path.
+    list_bands : list of strings
+        MIRI MRS bands to process. Defaults to all bands.
+    overwrite : bool
+        Re-reduce and overwrite outputs, if these data were already reduced before?
+        Default is to SKIP re-reducing anything already reduced.
+    maximum_cores : string
+        Passed to JWST pipeline functions that use multiprocessing, such as ramp fit
+    skip_dark : bool
+        Skip the dark current subtraction step?
+    """
+
+    if output_dir is None:
+        output_dir = uncal_path
 
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
     dict_files_by_target_names = sort_by_target_name(uncal_path)
     target_names = list(dict_files_by_target_names.keys())
-    print("DEBUG target_names", target_names)
 
     time0 = time.perf_counter()
-    print(time0)
     rate_files = []
 
     for target_name in target_names:
-        print("DEBUG target_name", target_name)
         uncal_files = dict_files_by_target_names[target_name]
 
         for band in list_bands:
-            mkdir_miri_files(os.path.join(uncal_path, target_name, band, 'stage1'))
-
-        rate_files = []
+            os.makedirs(os.path.join(output_dir, target_name, band, 'stage1'), exist_ok=True)
 
         for i, file in enumerate(uncal_files):
             print(f"Processing file {i + 1} of {len(uncal_files)}.")
             hdu_uncal = fits.open(file)
             band_uncal = hdu_uncal[0].header['BAND']
             channel_uncal = hdu_uncal[0].header['CHANNEL']
-            output_dir = select_miri_output_directory(uncal_path, target_name, channel_uncal, band_uncal)
+            band_output_dir = select_miri_output_directory(output_dir, target_name, channel_uncal, band_uncal)
 
             new_name = os.path.basename(file).replace('uncal.fits', 'rate.fits')
-            out_name = os.path.join(output_dir, new_name)
+            out_name = os.path.join(band_output_dir, new_name)
 
             rate_files.append(out_name)
 
@@ -1417,7 +1431,7 @@ def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores=
                     # gain_scale : run with defaults
                 }
 
-                det1.call(file, save_results=True, output_dir=output_dir,
+                det1.call(file, save_results=True, output_dir=band_output_dir,
                           steps=step_parameters)
 
     # Print out the time benchmark
@@ -1427,16 +1441,25 @@ def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores=
 
     return rate_files, target_names
 
-def run_bkg_subtraction(uncal_path, target_name, list_bands=None, overwrite=False):
+def run_bkg_subtraction(uncal_path, target_name, output_dir=None, list_bands=None, overwrite=False):
+    """Custom background subtraction for MIRI MRS rate files.
+
+    Reads rate files from ``output_dir/<target_name>/<band>/stage1`` and writes
+    background-subtracted rate files to ``output_dir/<target_name>/<band>/stage1_sub_bkg``.
+    output_dir defaults to uncal_path.
+    """
+    if output_dir is None:
+        output_dir = uncal_path
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
     for band in list_bands:
-        output_dir = os.path.join(uncal_path, target_name, band, 'stage1_sub_bkg')
-        mkdir_miri_files(output_dir)
-        background_outputdir = os.path.join(uncal_path, target_name, band, 'master_bkg')
-        mkdir_miri_files(background_outputdir)
-        rate_files_all = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1'), filetype='rate.fits')
+        band_output_dir = os.path.join(output_dir, target_name, band, 'stage1_sub_bkg')
+        os.makedirs(band_output_dir, exist_ok=True)
+        background_outputdir = os.path.join(output_dir, target_name, band, 'master_bkg')
+        os.makedirs(background_outputdir, exist_ok=True)
+        rate_files_all = find_files_to_process(os.path.join(output_dir, target_name, band, 'stage1'), filetype='rate.fits')
 
         bkg_files = [f for f in rate_files_all if 'BACKGROUND' in fits.getheader(f)['OBSLABEL']
                      or 'BKG' in fits.getheader(f)['OBSLABEL']]
@@ -1451,7 +1474,7 @@ def run_bkg_subtraction(uncal_path, target_name, list_bands=None, overwrite=Fals
         fits.writeto(os.path.join(background_outputdir,f"background_master_{band}.fits"), bkg_master, overwrite=overwrite)
 
         for fid, rate_file in enumerate(rate_files):
-            out_name = os.path.join(output_dir, os.path.basename(rate_file))
+            out_name = os.path.join(band_output_dir, os.path.basename(rate_file))
             rate = fits.getdata(rate_file)
             with fits.open(rate_file, mode="readonly") as hdu:
                 hdu_copy = fits.HDUList([hd.copy() for hd in hdu])
@@ -1460,13 +1483,22 @@ def run_bkg_subtraction(uncal_path, target_name, list_bands=None, overwrite=Fals
                 hdu_copy.writeto(out_name, overwrite=overwrite)
 
 
-def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=None, flat_extended=False, bkg_sub=False,
+def flat_fringing_stage1(uncal_path, target_name, output_dir=None, list_bands=None, flat_path=None, flat_extended=False, bkg_sub=False,
                          overwrite=False):
+    """Apply custom fringe flats to MIRI MRS rate files.
+
+    Reads rate files from ``output_dir/<target_name>/<band>/stage1`` (or
+    ``stage1_sub_bkg`` if bkg_sub is True) and writes fringe-corrected rate files
+    to ``output_dir/<target_name>/<band>/stage1_flat``. output_dir defaults to uncal_path.
+    """
+    if output_dir is None:
+        output_dir = uncal_path
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
     for band in list_bands:
-        mkdir_miri_files(os.path.join(uncal_path, target_name, band, 'stage1_flat'))
+        os.makedirs(os.path.join(output_dir, target_name, band, 'stage1_flat'), exist_ok=True)
 
     # Start a timer to keep track of runtime
     time0 = time.perf_counter()
@@ -1474,15 +1506,15 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
 
     for band in list_bands:
         if bkg_sub:
-            rate_files = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1_sub_bkg'), filetype='rate.fits')
+            rate_files = find_files_to_process(os.path.join(output_dir, target_name, band, 'stage1_sub_bkg'), filetype='rate.fits')
         else:
-            rate_files = find_files_to_process(os.path.join(uncal_path, target_name, band, 'stage1'), filetype='rate.fits')
-        output_dir = os.path.join(uncal_path, target_name, band, 'stage1_flat')
+            rate_files = find_files_to_process(os.path.join(output_dir, target_name, band, 'stage1'), filetype='rate.fits')
+        band_output_dir = os.path.join(output_dir, target_name, band, 'stage1_flat')
         rate_filtered_files = []
         for fid, rate_file in enumerate(rate_files):
             print(fid, rate_file)
 
-            out_name = os.path.join(output_dir, os.path.basename(rate_file))
+            out_name = os.path.join(band_output_dir, os.path.basename(rate_file))
             rate_filtered_files.append(out_name)
 
             if os.path.exists(out_name) and not overwrite:
@@ -1495,7 +1527,7 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
 
             if flat_path is None:
                 flat_path_rate = os.getenv("FLAT_PATH")
-                if output_dir is None:
+                if flat_path_rate is None:
                     raise ValueError("No FLAT_PATH specified to apply the fringe flat")
             else:
                 flat_path_rate = flat_path
@@ -1539,29 +1571,52 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
                 hdu_copy.writeto(out_name, overwrite=overwrite)
                 print(f"==> Wrote fringe-corrected file to {out_name}")
 
-def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=True, custom_bkg_sub=False, skip_cubes=True, skip_fringe=False,
+def run_stage2_miri(uncal_path, target_name, output_dir=None, list_bands=None, custom_flatted=True, custom_bkg_sub=False, skip_cubes=True, skip_fringe=False,
                     skip_residual_fringes=False,
                     skip_flatfield=False, skip_straylight=True, overwrite=False):
+    """Run pipeline stage 2, with some customizations for MIRI MRS reductions
+
+    Input rate files are discovered under ``output_dir/<target_name>/<band>/stage1*``
+    (as written by run_stage1_miri). Outputs are written to
+    ``output_dir/<target_name>/<band>/stage2``.
+
+    Parameters
+    ----------
+    uncal_path : string
+        Root directory path of the reduction (where the uncal files were found)
+    target_name : string
+        Target name used to select the subdirectory of files to process
+    output_dir : string
+        Root directory path for where to find stage1 outputs and put the stage2
+        output files. Defaults to uncal_path.
+    list_bands : list of strings
+        MIRI MRS bands to process. Defaults to all bands.
+    overwrite : bool
+        Re-reduce and overwrite outputs, if these data were already reduced before?
+        Default is to SKIP re-reducing anything already reduced.
+    """
+    if output_dir is None:
+        output_dir = uncal_path
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
     for band in list_bands:
-        mkdir_miri_files(os.path.join(uncal_path, target_name, band, 'stage2'))
+        os.makedirs(os.path.join(output_dir, target_name, band, 'stage2'), exist_ok=True)
 
     time0 = time.perf_counter()
-    print(time0)
 
     cal_files = []
     for band in list_bands:
         if custom_flatted:
-            rate_file_band_path = os.path.join(uncal_path, target_name, band, 'stage1_flat')
+            rate_file_band_path = os.path.join(output_dir, target_name, band, 'stage1_flat')
             print(f"Processing the custom flatted rate files in {rate_file_band_path} for stage 2.")
         else:
             if custom_bkg_sub:
-                rate_file_band_path = os.path.join(uncal_path, target_name, band, 'stage1_sub_bkg')
+                rate_file_band_path = os.path.join(output_dir, target_name, band, 'stage1_sub_bkg')
                 print(f"Processing the background subtracted rate files in {rate_file_band_path} for stage 2.")
             else:
-                rate_file_band_path = os.path.join(uncal_path, target_name, band, 'stage1')
+                rate_file_band_path = os.path.join(output_dir, target_name, band, 'stage1')
                 print(f"Processing the rate files in {rate_file_band_path} for stage 2.")
 
         rate_files = find_files_to_process(rate_file_band_path, filetype='rate.fits')
@@ -1570,8 +1625,8 @@ def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=Tru
             print(fid, rate_file)
 
             # Setting up steps and running the Spec2 portion of the pipeline.
-            outputdir = os.path.join(uncal_path, target_name, band, 'stage2')
-            out_name = os.path.join(outputdir, os.path.basename(rate_file).replace('rate.fits', 'cal.fits'))
+            band_output_dir = os.path.join(output_dir, target_name, band, 'stage2')
+            out_name = os.path.join(band_output_dir, os.path.basename(rate_file).replace('rate.fits', 'cal.fits'))
             cal_files.append(out_name)
             if os.path.exists(out_name) and not overwrite:
                 print(f"Output file {out_name} already exists;\n\tskipping {rate_file}.")
@@ -1596,7 +1651,7 @@ def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=Tru
             }
             spec2.save_bsub = True
 
-            spec2.call(rate_file, save_results=True, output_dir=outputdir,
+            spec2.call(rate_file, save_results=True, output_dir=band_output_dir,
                        steps=step_parameters)
 
         # Print out the time benchmark
@@ -1608,16 +1663,26 @@ def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=Tru
     return cal_files
 
 
-def run_stage3_miri(uncal_path, target_name, list_bands=None, overwrite=False):
+def run_stage3_miri(uncal_path, target_name, output_dir=None, list_bands=None, overwrite=False):
+    """Run pipeline stage 3 for MIRI MRS reductions.
+
+    Reads cal files from ``output_dir/<target_name>/<band>/stage2`` and writes
+    stage 3 outputs to ``output_dir/<target_name>/<band>/stage3``.
+    output_dir defaults to uncal_path.
+    """
+    if output_dir is None:
+        output_dir = uncal_path
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
     for band in list_bands:
-        outputdir = mkdir_miri_files(os.path.join(uncal_path, target_name, band, 'stage3'))
+        outputdir = os.path.join(output_dir, target_name, band, 'stage3')
+        os.makedirs(outputdir, exist_ok=True)
         if os.path.exists(os.path.join(outputdir, f'Level3_ch{band[0]}-short_s3d.fits')) and overwrite is False:
             print(f"Output file Level3_ch{band[0]}-short_s3d.fits already exists;\n\tskipping.")
             continue
 
-        inputdir = os.path.join(uncal_path, target_name, band, 'stage2')
+        inputdir = os.path.join(output_dir, target_name, band, 'stage2')
 
         # Start a timer to keep track of runtime
         time0 = time.perf_counter()
@@ -1644,12 +1709,12 @@ def run_stage3_miri(uncal_path, target_name, list_bands=None, overwrite=False):
         runspec3(asnlist[0], outputdir)
 
 
-def run_full_miri_default_pipeline(uncal_path, target_name, list_bands=None, overwrite=False):
-    run_stage1_miri(uncal_path, list_bands=list_bands, overwrite=overwrite, maximum_cores="1", skip_dark=False)
-    run_stage2_miri(uncal_path, target_name, list_bands=list_bands, custom_flatted=False, skip_cubes=False,
+def run_full_miri_default_pipeline(uncal_path, target_name, output_dir=None, list_bands=None, overwrite=False):
+    run_stage1_miri(uncal_path, output_dir=output_dir, list_bands=list_bands, overwrite=overwrite, maximum_cores="1", skip_dark=False)
+    run_stage2_miri(uncal_path, target_name, output_dir=output_dir, list_bands=list_bands, custom_flatted=False, skip_cubes=False,
                     skip_fringe=False, skip_residual_fringes=True, skip_flatfield=False, skip_straylight=False,
                     overwrite=overwrite)
-    run_stage3_miri(uncal_path, target_name, list_bands=list_bands, overwrite=overwrite)
+    run_stage3_miri(uncal_path, target_name, output_dir=output_dir, list_bands=list_bands, overwrite=overwrite)
 
     return 1
 
@@ -1696,14 +1761,14 @@ def sort_calfiles(files):
     return files12A, files12B, files12C, files34A, files34B, files34C
 
 
-def runspec3(filename, outputdir):
+def runspec3(filename, output_dir):
     # This initial setup is just to make sure that we get the latest parameter reference files
     # pulled in for our files.  This is a temporary workaround to get around an issue with
     # how this pipeline calling method works.
     crds_config = Spec3Pipeline.get_config_from_reference('l3asn-12A.json')  # The exact asn file used doesn't matter
     spec3 = Spec3Pipeline.from_config_section(crds_config)
 
-    spec3.output_dir = outputdir
+    spec3.output_dir = output_dir
     spec3.save_results = True
 
     spec3.master_background.skip = True  # Computes and subtracts a master background signal
