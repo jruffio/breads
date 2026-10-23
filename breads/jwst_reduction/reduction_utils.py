@@ -796,7 +796,7 @@ def fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,rn_noise,poisson_noi
 
     return charge_transfer_model
 
-def _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map,dq_rate,extend_sat=1):
+def _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map,dq_rate,rn_noise,poisson_noise,extend_sat=1):
     # kernel = np.ones((3, 3))
     # mask = copy(cal_trace_id_map)
     # mask[np.where(~np.isfinite(cal_trace_id_map))] = 0
@@ -827,6 +827,8 @@ def _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map,dq_rate,extend_sat=1):
     where_zero_noise = np.where(noise == 0)
     noise[where_zero_noise] = np.nan
     bkg_bad_pixels[where_zero_noise] = np.nan
+    #remove pixels dominated by photons
+    bkg_bad_pixels[np.where(poisson_noise/rn_noise>1)] = np.nan
 
 
     if "nrs1" in detector:
@@ -962,7 +964,7 @@ def clean_rate_nirspec_per_file(rate_file, cal_file_dir, clean_dir, N_nodes=40,
     rate_dataobj.data = copy(im)
     rate_dataobj.noise = noise
 
-    bkg_bad_pixels = _get_bkg_bad_pixels(rate_dataobj, cal_trace_id_map, dq_rate, extend_sat=extend_sat)
+    bkg_bad_pixels = _get_bkg_bad_pixels(rate_dataobj, cal_trace_id_map, dq_rate,rn_noise,poisson_noise, extend_sat=extend_sat)
     # _tmp = os.path.join(rate_dataobj.utils_dir,os.path.basename(rate_dataobj.filename)+"_bad_pixels_tmp.npy")
     # if not os.path.exists(_tmp):
     #     bkg_bad_pixels = _get_bkg_bad_pixels(rate_dataobj,cal_trace_id_map, dq_rate,extend_sat=extend_sat)
@@ -1061,9 +1063,9 @@ def clean_rate_nirspec(rate_files, stage2_dir, output_dir, N_nodes=40, clean_1f_
         outname = os.path.join(output_dir, os.path.basename(rate_file))
         cleaned_rate_files.append(outname)
         # skip if already processed
-        if os.path.exists(outname) and not overwrite: #todo undo
-            print(f"\tOutput file {os.path.basename(outname)} already exists in the cleaned output directory; skipping {os.path.basename(rate_file)}.")
-            continue
+        # if os.path.exists(outname) and not overwrite: #todo undo
+        #     print(f"\tOutput file {os.path.basename(outname)} already exists in the cleaned output directory; skipping {os.path.basename(rate_file)}.")
+        #     continue
 
         N_files_processed += 1
         clean_rate_nirspec_per_file(rate_file, stage2_dir, output_dir,N_nodes=N_nodes,
@@ -1091,7 +1093,7 @@ def recenter_coordinates_of_sequence_nirspec(cal_files, utils_dir,combined_contn
                                              init_centroid=None,
                                              wv_sampling=None,
                                              mask_charge_transfer_radius=None,ra_dec_point_sources=None,
-                                             IWA_init=0.0, OWA_init=1.0, frac_init_bandpass=0.005,
+                                             IWA_init=None, OWA_init=None, frac_init_bandpass=0.005,
                                              IWA=0.0, OWA=0.5,
                                              mppool=None,
                                              overwrite=False,
@@ -1101,7 +1103,8 @@ def recenter_coordinates_of_sequence_nirspec(cal_files, utils_dir,combined_contn
                                              stis_spectrum=None,
                                              use_stpsf = True,
                                              use_breadspsf = None,
-                                             poly_deg_coords = 2):
+                                             poly_deg_coords = 2,
+                                           wv_min = None, wv_max = None,):
     """
 
 
@@ -1118,6 +1121,11 @@ def recenter_coordinates_of_sequence_nirspec(cal_files, utils_dir,combined_contn
 
         if use_breadspsf is not None:
             use_stpsf = False
+
+        if IWA_init is None:
+            IWA_init = IWA
+        if OWA_init is None:
+            OWA_init = OWA
 
         if not os.path.exists(utils_dir):
             os.makedirs(utils_dir)
@@ -1193,7 +1201,8 @@ def recenter_coordinates_of_sequence_nirspec(cal_files, utils_dir,combined_contn
                                                                init_centroid=init_centroid,
                                                                IWA=IWA, OWA=OWA, out_filename=fitpsf_filename,
                                                                overwrite=False, mppool=mppool, debug_wv_range=None,
-                                                               stis_spectrum=stis_spectrum, poly_deg_coords=poly_deg_coords)
+                                                               stis_spectrum=stis_spectrum, poly_deg_coords=poly_deg_coords,
+                                                                   wv_min = wv_min, wv_max = wv_max)
     return poly_centroid_filename,poly_fluxcal_filename
 
 
@@ -1201,7 +1210,7 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
                                            init_centroid=None,
                                              wv_sampling=None,
                                              mask_charge_transfer_radius=None,ra_dec_point_sources=None,
-                                             IWA_init=0.0, OWA_init=1.0, frac_init_bandpass=0.005,
+                                             IWA_init=None, OWA_init=None, frac_init_bandpass=0.005,
                                              IWA=0.0, OWA=0.5,
                                              mppool=None,
                                              overwrite=False,
@@ -1246,12 +1255,13 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
         os.makedirs(utils_dir)
 
     if use_breadspsf is not None:
-        use_stpsf = False
+        if isinstance(use_breadspsf, bool) and use_breadspsf:
+            use_stpsf = False
 
-    if init_centroid is None:
-        _tmp_centroid = np.array([0, 0])
-    else:
-        _tmp_centroid = np.array(init_centroid)
+    if IWA_init is None:
+        IWA_init = IWA
+    if OWA_init is None:
+        OWA_init = OWA
 
     grating = fits.getheader(cal_files[0])['GRATING'].strip()
     detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
@@ -1556,7 +1566,7 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_
 
 def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_spec_filename,
                                         wv_nodes=None, suffix = None,
-                                        coords_offset = None,coords_filename_filter=None,
+                                        coords_offset = None,coords_filename=None,coords_filename_filter=None,centroid_per_frame=False,
                                         mask_charge_transfer_radius=None, mppool=None,
                                         ra_dec_point_sources=None,aper_rad=None,
                                         overwrite=False,targetname=None,
@@ -1586,7 +1596,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
 
         if wv_nodes is None:
             wv_nodes = default.nodes_dict[grating][detector]
-        if coords_offset is None:
+        if coords_offset is None and coords_filename_filter is None and coords_filename is None:
             coords_offset = (0,0)
 
         dataobj_list = []
@@ -1598,17 +1608,20 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
                 dataobj.default_filenames["compute_advanced_badpix"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits","_"+suffix+".fits")
                 dataobj.default_filenames["compute_starsubtraction"] = dataobj.default_filenames["compute_starsubtraction"].replace(".fits","_"+suffix+".fits")
 
-            if coords_filename_filter is not None:
-                coords_filename = glob(os.path.join(utils_dir,os.path.basename(dataobj.filename).replace(".fits", coords_filename_filter)))[0]
+            if coords_filename_filter is not None and centroid_per_frame and coords_filename is None:
+                _coords_filename = glob(os.path.join(utils_dir,os.path.basename(dataobj.filename).replace(".fits", coords_filename_filter)))[0]
+                coords_offset = None
+            elif coords_filename is not None:
+                _coords_filename = coords_filename
                 coords_offset = None
             else:
-                coords_filename = None
+                _coords_filename = None
 
             # Define a series of processing tasks to be performed on each input file.
             preproc_task_list = [
                 ["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}, True, True],# True,True means "save data and load if you can"
                 ["compute_coordinates_arrays", {'targname': targetname}, True, True],
-                ["apply_coords_offset", {"coords_offset": coords_offset,"coords_filename":coords_filename}],
+                ["apply_coords_offset", {"coords_offset": coords_offset,"coords_filename":_coords_filename}],
                 ["compute_starspectrum_contnorm", {"wv_nodes": wv_nodes,"threshold_badpix": 100, "iterative": False,"spline3d_prior_filename":spline3d_prior_filename,
                                                    "mppool": mppool}, True, True],
                 ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool, "iterative": False}, False, True],# don't save, but load, temporary reduction only
@@ -1641,10 +1654,10 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
 
 def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_filename,
                       wv_nodes=None,x_nodes=None,y_nodes=None,save_pickle=False, load_pickle=False,
-                      coords_filename_filter = None,numthreads=1,spline3d_suffix = "",
+                      coords_filename=None,coords_filename_filter = None,numthreads=1,spline3d_suffix = "",
                       centroid_per_frame=True, overwrite=False,mask_charge_transfer_radius=None,ra_dec_point_sources=None,aper_rad =None,
                       stamp_size = (0.2,0.2),
-                      subtract_comp = None):
+                      subtract_comp = None,iterative_3dspline=True):
 
     grating = fits.getheader(cal_files[0])['GRATING'].strip()
     detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
@@ -1670,9 +1683,9 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
             dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir)
             dataobj.run_preproc_list(save_utils=True, load_utils=True,preproc_task_list=preproc_task_list)
 
-            if coords_filename_filter is not None and centroid_per_frame:
-                coords_filename = glob(os.path.join(utils_dir,os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
-                dataobj.apply_coords_offset(coords_filename = coords_filename)
+            if coords_filename_filter is not None and centroid_per_frame and coords_filename is None:
+                _coords_filename = glob(os.path.join(utils_dir,os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+                dataobj.apply_coords_offset(coords_filename = _coords_filename)
 
             if mask_charge_transfer_radius is not None:
                 dataobj.compute_charge_bleeding_mask(threshold2mask=mask_charge_transfer_radius)
@@ -1689,9 +1702,11 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
         # combined data object
         combdataobj = JWSTNirspec_multiple_cals(dataobj_list)
 
-        if coords_filename_filter is not None and not centroid_per_frame:
-            coords_filename = glob(os.path.join(utils_dir,os.path.basename(combdataobj.filename).replace(".fits", coords_filename_filter)))[0]
+        if coords_filename is not None:
             combdataobj.apply_coords_offset(coords_filename = coords_filename)
+        elif coords_filename_filter is not None and not centroid_per_frame:
+            _coords_filename = glob(os.path.join(utils_dir,os.path.basename(combdataobj.filename).replace(".fits", coords_filename_filter)))[0]
+            combdataobj.apply_coords_offset(coords_filename = _coords_filename)
 
         combdataobj.default_filenames["compute_starspectrum_contnorm_3dspline"] = (
             combdataobj.default_filenames["compute_starspectrum_contnorm_3dspline"].replace(".fits",spline3d_suffix + ".fits"))
@@ -1725,7 +1740,7 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
     new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline3d_paras,spline3d_paras_err,wv_nodes,x_nodes,y_nodes = _out
     # exit()
 
-    _out = combdataobj.compute_starsubtraction_3dspline(save_utils=True,max_cores=numthreads,iterative=True,
+    _out = combdataobj.compute_starsubtraction_3dspline(save_utils=True,max_cores=numthreads,iterative=iterative_3dspline,
                                                         threshold_badpix=10,only_identify_badpix=True)
     subtracted_im, spline_cont0, spline3d_paras, spline3d_paras_err, wv_nodes, x_nodes, y_nodes = _out
 
@@ -2189,10 +2204,178 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
 
     return results
 
+def _nanmedian_chunk_task(paras):
+    rows_chunk, half_width = paras
+    return generic_filter(
+        rows_chunk,
+        function=np.nanmedian,
+        size=(1, 2 * half_width + 1),
+        mode='reflect'
+    )
+
+
+def compute_breads_flatfield(cal_files, utils_dir,combined_contnorm_spec_filename,
+                    suffix=None,contnorm_suffix=None,
+                    mppool=None,
+                    overwrite=False,
+                    targetname=None,
+                    smooth_kernel_half_width=None):
+
+    if not os.path.exists(utils_dir):
+        os.makedirs(utils_dir)
+
+    grating = fits.getheader(cal_files[0])['GRATING'].strip()
+    detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
+
+    if suffix is None:
+        suffix = grating+"_flatfield"
+
+    splitbasename = os.path.basename(cal_files[0]).split("_")
+    flatfield_output_filename = os.path.join(utils_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + detector + "_" + suffix+".fits")
+    if not overwrite and os.path.exists(flatfield_output_filename):
+        with fits.open(flatfield_output_filename) as hdulist:
+            _priheader = hdulist[0].header
+            _extheader = hdulist[1].header
+            breads_flatfield = hdulist['flat'].data
+            breads_flatfield_err = hdulist['err'].data
+            total_flux_map = hdulist['flux'].data
+            med_res_map = hdulist['res'].data
+            std_res_map = hdulist['res_std'].data
+            wv_nodes = hdulist['wv_nodes'].data
+            _breads_header = hdulist['BREADS'].data
+
+        return breads_flatfield,breads_flatfield_err,total_flux_map,med_res_map,std_res_map
+    else:
+        model_list = []
+        res_list = []
+        for filename in cal_files:
+            print(filename)
+            dataobj = JWSTNirspec_cal(filename, utils_dir=utils_dir)
+
+            if contnorm_suffix is not None:
+                dataobj.default_filenames["compute_starspectrum_contnorm"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits", "_" + contnorm_suffix + ".fits")
+                dataobj.default_filenames["compute_advanced_badpix"] = dataobj.default_filenames["compute_starspectrum_contnorm"].replace(".fits", "_" + contnorm_suffix + ".fits")
+                dataobj.default_filenames["compute_starsubtraction"] = dataobj.default_filenames["compute_starsubtraction"].replace(".fits", "_" + contnorm_suffix + ".fits")
+
+            hdulist = fits.open(dataobj.default_filenames["compute_starspectrum_contnorm"])
+            spline_paras0 = hdulist['SPLINE_PARAS0'].data
+            if 'STELLAR_FEATURES' in hdulist:
+                stellar_features0 = hdulist['STELLAR_FEATURES'].data
+                with_3dspline_prior = True
+            else:
+                stellar_features0 = None
+                with_3dspline_prior = False
+            wv_nodes = hdulist['wv_nodes'].data
+            hdulist.close()
+
+            # Define a series of processing tasks to be performed on each input file.
+            # coords_filename = glob(fitpsf_filename.replace(".fits","_poly_centroid*.txt"))[0]
+            preproc_task_list = [
+                                     ["compute_med_filt_badpix", {"window_size": 50, "mad_threshold": 50}],
+                                     ["compute_coordinates_arrays", {'targname': targetname}]
+                                ]
+
+            if with_3dspline_prior:
+                _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool,
+                                                     "combined_contnorm_filename": combined_contnorm_spec_filename,
+                                                     "load_starspectrum_contnorm": None}]
+            else:
+                _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool,
+                                                     "combined_contnorm_filename": combined_contnorm_spec_filename,
+                                                     "load_starspectrum_contnorm": dataobj.default_filenames["compute_starspectrum_contnorm"]}]
+            preproc_task_list.append(_task)
+
+            dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
+
+            with fits.open(dataobj.default_filenames["compute_starsubtraction"]) as hdul:
+                model = hdul["STARMODEL"].data
+                res = hdul["IM_SUB"].data
+
+
+            if smooth_kernel_half_width is not None:
+                n_chunks = mppool._processes*3  # or however many workers you have
+                row_chunks = np.array_split(res, n_chunks, axis=0)
+                paras_list = [(chunk, smooth_kernel_half_width) for chunk in row_chunks]
+                pool_out = [o for o in tqdm(mppool.imap(_nanmedian_chunk_task, paras_list),
+                                             total=len(paras_list), ncols=100)]
+                smoothed = np.concatenate(pool_out, axis=0)
+
+                res -= smoothed
+                model += smoothed
+
+
+            # plt.plot(res[740,:])
+            # plt.plot(model[740,:])
+            # plt.plot(res[740,:]/model[740,:])
+            # plt.show()
+            model_list.append(model)
+            res_list.append(res)
+
+            # plot_row = 740
+            # plt.plot((res[plot_row, :] / model[plot_row, :]) + 1, color="grey")
+
+            # plt.subplot(1,3,1)
+            # plt.imshow(res,origin="lower")
+            # plt.clim([100,100])
+            # plt.subplot(1,3,2)
+            # plt.imshow(model,origin="lower")
+            # plt.clim([100,100])
+            # plt.subplot(1,3,3)
+            # plt.imshow(res/model,origin="lower")
+            # plt.clim([-0.1,0.1])
+            # plt.show()
+
+        model_arr = np.array(model_list)
+        res_arr = np.array(res_list)
+
+
+        breads_flatfield_err = np.nanstd(res_arr / model_arr, axis=0)/np.sqrt(model_arr.shape[0])
+        breads_flatfield = np.nanmedian(res_arr / model_arr, axis=0) + 1
+        # breads_flatfield[np.where(breads_flatfield<=0.1)] = np.nan
+        total_flux_map = np.nansum(model_arr, axis=0)
+        med_res_map = np.nanmedian(res_arr, axis=0)
+        std_res_map = np.nanstd(res_arr, axis=0)
+
+        # print("coucou")
+        # print(np.nanvar(res_arr[:,740,:]))
+        # print(np.nanvar(res_arr[:,740,:]-med_res_map[None,740,:]))
+        # print(np.nanvar(res_arr[:,740,:]-(np.nanmedian(res_arr / model_arr, axis=0))[None,740,:]*model_arr[:,740,:]))
+        # exit()
+        # plt.show()
+
+        # filepath = "/stow/jruffio/data/JWST/crds_cache/references/jwst/nirspec/flat_backup/jwst_nirspec_sflat_0215.fits"
+        # with fits.open(filepath) as hdul:
+        #     crds_flat = hdul["SCI"].data
+        #     DQ = hdul["DQ"].data
+        # plt.plot(crds_flat[plot_row, :], color="orange", label="CRDS SFLAT")
+        # plt.plot(breads_flatfield[plot_row,:],color="blue",label="Flat from residuals")
+        # plt.legend()
+
+        # plt.figure()
+        # plt.imshow(breads_flatfield, origin="lower")
+        # plt.clim(0.9, 1.1)
+        # plt.show()
+
+        hdulist = fits.HDUList()
+        hdulist.append(fits.PrimaryHDU(header=dataobj.priheader))
+        hdulist.append(fits.ImageHDU(data=breads_flatfield, header=dataobj.extheader, name="flat"))
+        hdulist.append(fits.ImageHDU(data=breads_flatfield_err, name='err'))
+        hdulist.append(fits.ImageHDU(data=total_flux_map, name='flux'))
+        hdulist.append(fits.ImageHDU(data=med_res_map, name='res'))
+        hdulist.append(fits.ImageHDU(data=std_res_map, name='res_std'))
+        hdulist.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+        hdulist.append(fits.ImageHDU(header=dataobj.breads_header, name='BREADS'))
+        hdulist.writeto(flatfield_output_filename, overwrite=True)
+        hdulist.close()
+
+        return breads_flatfield,breads_flatfield_err,total_flux_map,med_res_map,std_res_map
 
 def compute_snr_grid(cal_files, utils_dir, out_dir,
-                    combined_contnorm_spec_filename, coords_filename_filter,
-                    model_grid_h5py,grid_paras,photfilter_filename,N_KL=3,
+                    combined_contnorm_spec_filename,
+                     photfilter_filename,
+                    coords_filename=None,coords_filename_filter=None,centroid_per_frame=False,
+                    model_dict=None,model_grid_h5py=None,grid_paras=None,
+                     N_KL=3,
                     suffix=None,contnorm_suffix=None,
                     x_vec=None,y_vec=None,rv_vec=None,
                     mask_charge_transfer_radius=None,ra_dec_point_sources=None,fix_fitting_region_around_xy=None,
@@ -2201,7 +2384,9 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
                     overwrite=False,
                     targetname=None,
                     use_stpsf=False, use_breadspsf=True,
-                    ifucoords=False):
+                    ifucoords=False,
+                     scale_noise=True,
+                     flatfield = None,subtract_map=None):
 
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
@@ -2227,6 +2412,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
     flux_arr_list=[]
     fluxerr_arr_list=[]
     log_prob_list=[]
+    rchi2_list = []
     for filename in cal_files:
         print(filename)
 
@@ -2238,6 +2424,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
                 flux_arr = hdulist['flux_arr'].data
                 fluxerr_arr = hdulist['fluxerr_arr'].data
                 log_prob = hdulist['log_prob'].data
+                rchi2 = hdulist['rchi2'].data
                 x_vec = hdulist['x_vec'].data
                 y_vec = hdulist['y_vec'].data
                 rv_vec = hdulist['rv_vec'].data
@@ -2249,6 +2436,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             flux_arr_list.append(flux_arr)
             fluxerr_arr_list.append(fluxerr_arr)
             log_prob_list.append(log_prob)
+            rchi2_list.append(rchi2)
 
             continue
 
@@ -2264,6 +2452,10 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         if 'STELLAR_FEATURES' in hdulist:
             stellar_features0 = hdulist['STELLAR_FEATURES'].data
             with_3dspline_prior = True
+            # plt.figure()
+            # plt.imshow(stellar_features0,origin="lower")
+            # plt.clim([0,1e4])
+            # plt.show()
         else:
             stellar_features0 = None
             with_3dspline_prior = False
@@ -2299,8 +2491,13 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         # plt.plot(new_wavelengths, combined_fluxes)
         # plt.show()
 
-        coords_filename = glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
-        dataobj.apply_coords_offset(coords_filename=coords_filename)
+        if coords_filename is not None:
+            dataobj.apply_coords_offset(coords_filename = coords_filename)
+        elif coords_filename_filter is not None and not centroid_per_frame:
+            _coords_filename = glob(os.path.join(utils_dir,os.path.basename(dataobj.filename).replace(".fits", coords_filename_filter)))[0]
+            dataobj.apply_coords_offset(coords_filename = _coords_filename)
+        # coords_filename = glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+        # dataobj.apply_coords_offset(coords_filename=coords_filename)
 
         # Do some masking
         if mask_charge_transfer_radius is not None:
@@ -2329,6 +2526,11 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             breadsPSF_path = os.path.join(BREADS_DATA_ENV, "BreadsPSF", use_breadspsf_str)
             dataobj.reload_breadspsf_model(breadsPSF_path)
 
+        if flatfield is not None:
+            dataobj.data /= flatfield
+            dataobj.noise /= flatfield
+        if subtract_map is not None:
+            dataobj.data -= subtract_map
 
         if stellar_features0 is None:
             hdulist = fits.open(dataobj.default_filenames["compute_starsubtraction"])
@@ -2370,6 +2572,10 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             subtracted_im = hdulist["IM_SUB"].data
             hdulist.close()
 
+            if flatfield is not None:
+                subtracted_im /= flatfield
+            if subtract_map is not None:
+                subtracted_im -= subtract_map
             # plt.figure()
             # plt.subplot(1,2,1)
             # plt.imshow(subtracted_im,origin="lower")
@@ -2428,41 +2634,86 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
 
         # Define planet model grid from BTsettl
         minwv, maxwv = np.min(dataobj.wavelengths), np.max(dataobj.wavelengths)
-        with h5py.File(model_grid_h5py,'r') as hf:
-            grid_specs = np.array(hf.get("spec"))
-            grid_temps = np.array(hf.get("temps"))
-            grid_loggs = np.array(hf.get("loggs"))
-            grid_wvs = np.array(hf.get("wvs"))
-        grid_dwvs = grid_wvs[1::] - grid_wvs[0:np.size(grid_wvs) - 1]
-        grid_dwvs = np.insert(grid_dwvs, 0, grid_dwvs[0])
-        filter_norm = np.nansum((grid_dwvs * u.um) * photfilter_f(grid_wvs))
-        Flambda = np.nansum((grid_dwvs * u.um)[None, None, :] * photfilter_f(grid_wvs)[None, None, :] * (
-                    grid_specs * u.W * u.m ** -2 / u.um), axis=2) / filter_norm
-        Fnu = Flambda * (photfilter_wv0 * u.um) ** 2 / const.c  # from Flambda back to Fnu
-        grid_specs = grid_specs / Fnu[:, :, None].to(u.MJy).value
+        if model_grid_h5py is not None:
+            print(model_grid_h5py)
+            with h5py.File(model_grid_h5py,'r') as hf:
+                grid_specs = np.array(hf.get("spec"))
+                # grid_temps = np.array(hf.get("temps"))
+                # grid_loggs = np.array(hf.get("loggs"))
+                grid_wvs = np.array(hf.get("wvs"))
 
-        myinterpgrid = RegularGridInterpolator((grid_temps, grid_loggs), grid_specs, method="linear",
-                                               bounds_error=False, fill_value=np.nan)
-        # teff, logg, vsini, rv, dra_comp, ddec_comp = 1500, 5.0, 0.0, None, None, None
-        teff, logg, vsini = grid_paras
-        rv, dra_comp, ddec_comp = None, None, None
-        fix_parameters = [teff, logg, vsini, rv, dra_comp, ddec_comp]
+                # plt.plot(grid_wvs, grid_specs[1, 5, 1, :])
+                # plt.show()
+                # Number of extensions that are neither "wvs" nor "spec"
+                n_other = sum(1 for name in hf.keys() if name not in ("wvs", "spec"))
+                # print("Number of other extensions:", n_other)
 
-        fm_paras = {"atm_grid": myinterpgrid, "atm_grid_wvs": grid_wvs, "star_func": dataobj.star_func,
+                if len(grid_specs.shape) != n_other+1:
+                    raise ValueError("Shape of spec array does not match number of extensions in hdf5 files")
+
+                para_vec_list = []
+                para_id = 0
+                print("Model grid parameters:")
+                for name in hf.keys():
+                    if name not in ("wvs", "spec"):
+                        # print(name)
+                        para_vec = np.array(hf.get(name))
+                        # print(grid_specs_Flambda.shape[para_id], np.size(para_vec),para_vec)
+                        if grid_specs.shape[para_id] != np.size(para_vec):
+                            err_msg = "Shape {0} of spec array do not match the size of the vector for extension (expecting {1}, finding {2}): {3}".format(
+                                grid_specs.shape,np.size(para_vec),grid_specs.shape[para_id],name)
+                            raise ValueError(err_msg)
+                        print(name,para_vec)
+                        para_vec_list.append(para_vec)
+                        para_id +=1
+
+            grid_dwvs = grid_wvs[1::] - grid_wvs[0:np.size(grid_wvs) - 1]
+            grid_dwvs = np.insert(grid_dwvs, 0, grid_dwvs[0])
+            filter_norm = np.nansum((grid_dwvs * u.um) * photfilter_f(grid_wvs))
+            # print(grid_dwvs.shape)
+            # print(grid_dwvs[(None,) * n_other + (...,)].shape)
+            # exit()
+            Flambda = np.nansum((grid_dwvs * u.um)[(None,) * n_other + (...,)] * photfilter_f(grid_wvs)[(None,) * n_other + (...,)] * (
+                        grid_specs * u.W * u.m ** -2 / u.um), axis=-1) / filter_norm
+            Fnu = Flambda * (photfilter_wv0 * u.um) ** 2 / const.c  # from Flambda back to Fnu
+            # print(Fnu.shape)
+            # print(Fnu[...,None].shape)
+            # exit()
+            print(grid_dwvs[(None,) * n_other + (...,)].shape)
+            grid_specs = grid_specs / Fnu[...,None].to(u.MJy).value
+
+            # plt.plot(grid_wvs,grid_specs[1,5,1,:])
+            # plt.show()
+
+            myinterpgrid = RegularGridInterpolator(para_vec_list, grid_specs, method="linear",
+                                                   bounds_error=False, fill_value=np.nan)
+            #example:  teff, logg, vsini = grid_paras
+            rv, dra_comp, ddec_comp = None, None, None
+            fix_parameters = grid_paras+[rv, dra_comp, ddec_comp]
+        elif model_dict is not None:
+            raise Exception("model_dict not yet implemented")
+            # atm_model_func = interp1d(atm_wvs,atm_model)
+        else:
+            raise Exception("No valid atmospheric model given")
+
+        fm_paras = {"atm_grid": myinterpgrid, "atm_grid_wvs": grid_wvs,#"atm_model_func": atm_model_func,
+                    "star_func": dataobj.star_func,
                     "radius_as": aper_radius, "badpixfraction": 0.5, "nodes": wv_nodes,
                     "fix_parameters": fix_parameters,
                     "wvs_KLs_f": wvs_KLs_f_list,
-                    "regularization": "user","reg_mean_map":reg_mean_map, "reg_std_map":reg_std_map,"stellar_features0":stellar_features0,#
+                    "regularization": "user","reg_mean_map":reg_mean_map, "reg_std_map":reg_std_map,"stellar_features0":stellar_features0,
                     "use_stpsf":use_stpsf,
                     "fix_fitting_region_around_xy":fix_fitting_region_around_xy}
         fm_func = hc_atmgrid_splinefm_jwst_ifu_cal
+
 
         if 0:
             print("ra_dec_point_sources",ra_dec_point_sources)
             # nonlin_paras = [16.84, ra_dec_point_sources[0][1]/1000., ra_dec_point_sources[0][0]/1000.]  # rv (km/s),y (pix), x (pix),
             # print("nonlin_paras",nonlin_paras)
-            # nonlin_paras = [16.84, 0.1, 0.6]  # rv (km/s),y (pix), x (pix),
-            nonlin_paras = (np.float64(16.84), np.float64(0.35000000000000003), np.float64(0.2500000000000011))
+            nonlin_paras = [16.376,-1.3,1.2]  # rv (km/s),y (pix), x (pix),
+            # nonlin_paras = [16.376,-2.35,-1.60]  # rv (km/s),y (pix), x (pix),
+            # nonlin_paras = (np.float64(16.84), np.float64(0.35000000000000003), np.float64(0.2500000000000011))
             print("nonlin_paras",nonlin_paras)
             # exit()
             # nonlin_paras = [0.0, ra_dec_point_sources[1][1]/1000., ra_dec_point_sources[1][0]/1000.]
@@ -2508,13 +2759,13 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             M = M / s[:, None]
 
             from breads.fit import fitfm
-            log_prob, rchi2, linparas, linparas_err = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,scale_noise=False, bounds=None)
-            print("best fit", linparas[0:5])
-            print("best fit err", linparas_err[0:5])
-            print("best fit snr", linparas[0:5] / linparas_err[0:5])
-            print("rchi2", rchi2)
-            print("log_prob", log_prob)
-            nonlin_paras = [nonlin_paras[0],nonlin_paras[1]+1e-5,nonlin_paras[2]]
+            # log_prob, rchi2, linparas, linparas_err = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,scale_noise=False, bounds=None)
+            # print("best fit", linparas[0:5])
+            # print("best fit err", linparas_err[0:5])
+            # print("best fit snr", linparas[0:5] / linparas_err[0:5])
+            # print("rchi2", rchi2)
+            # print("log_prob", log_prob)
+            # nonlin_paras = [nonlin_paras[0],nonlin_paras[1]+1e-5,nonlin_paras[2]]
             log_prob, rchi2, linparas, linparas_err = fitfm(nonlin_paras, dataobj, fm_func, fm_paras,scale_noise=False, bounds=None)
 
             paras = linparas[validpara]
@@ -2533,7 +2784,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
 
             # logdet_Sigma = np.sum(2 * np.log(s))
             m = np.dot(M, paras)
-            # r = d - m
+            r = d - m
             # chi2 = np.nansum(r ** 2)
             # N_data = np.size(d)
             # rchi2 = chi2 / N_data
@@ -2546,7 +2797,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
 
             canvas = np.zeros(subtracted_im.shape)
             canvas[where_finite] = m*s
-            # row_id = 1368
+            # row_id = 1841
             row_id = np.argmax(np.nansum(canvas,axis=1))
             print(row_id)
             # canvas[where_finite] = M[:,0]
@@ -2593,6 +2844,8 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             plt.plot( (m - paras[0] * M[:, 0]) * s, label="starlight model")
             plt.plot( d * s-m * s, label="residuals")
             plt.plot(s*rchi2, label="noise")
+            if stellar_features0 is not None:
+                plt.plot(stellar_features0[where_finite]/np.nanmax(stellar_features0[where_finite])*np.nanmax(m * s),label="stellar psf")
             # where_even_rows = np.where((reg_rows % 2) == 0)
             # plt.errorbar(reg_wvs[where_even_rows], d_reg[where_even_rows], yerr=s_reg[where_even_rows],
             #              label="even rows prior")
@@ -2608,6 +2861,12 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
             plt.plot((d-m)/rchi2)
             plt.subplot(2,1,2)
             plt.plot(np.cumsum(d-m))
+
+
+            plt.figure()
+            canvas = np.zeros(subtracted_im.shape)
+            canvas[where_finite] = r
+            plt.imshow(canvas,origin="lower")
             plt.show()
 
         if mppool is not None:
@@ -2615,7 +2874,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         else:
             numthreads = None
         log_prob, rchi2, linparas, linparas_err = grid_search([rv_vec, y_vec, x_vec], dataobj, fm_func, fm_paras,
-                                                                           numthreads=numthreads, scale_noise=True)
+                                                                           numthreads=numthreads, scale_noise=scale_noise)
         N_linpara = linparas.shape[-1]
 
         _priheader = dataobj.priheader
@@ -2643,6 +2902,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         flux_arr_list.append(flux_arr)
         fluxerr_arr_list.append(fluxerr_arr)
         log_prob_list.append(log_prob)
+        rchi2_list.append(rchi2)
 
 
         fig0 = plt.figure(figsize=(12,12))
@@ -2677,9 +2937,16 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         # plt.show()
         plt.close(fig0)
 
+    # print("coucou")
 
     fluxmap_arr = np.array(flux_arr_list)
     fluxerrmap_arr = np.array(fluxerr_arr_list)
+    rchi2_arr = np.array(rchi2_list)
+    # print(rchi2_arr.shape)
+    # print(fluxerrmap_arr.shape)
+    # exit()
+    if 0:
+        fluxerrmap_arr *= rchi2_arr
     fluxmap_combined = np.nansum(fluxmap_arr / fluxerrmap_arr ** 2, axis=0) / np.nansum(1 / fluxerrmap_arr ** 2, axis=0)
     fluxerrmap_combined = 1 / np.sqrt(np.nansum(1 / fluxerrmap_arr ** 2, axis=0))
     snrmap_combined=fluxmap_combined/fluxerrmap_combined
@@ -2687,6 +2954,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
     log_prob_arr = np.array(log_prob_list)
     log_prob_combined = np.sum(log_prob_arr, axis=0)
 
+    rchi2_combined = np.nanmean(rchi2_arr, axis=0)
 
     splitbasename = os.path.basename(cal_files[0]).split("_")
     grid_search_combined_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1]+ "_" + detector+ "_" + grating+"_"+suffix + "_combined.fits")
@@ -2696,6 +2964,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
     hdulist.append(fits.ImageHDU(data=fluxmap_combined, header=_extheader, name="flux_arr"))
     hdulist.append(fits.ImageHDU(data=fluxerrmap_combined, name='fluxerr_arr'))
     hdulist.append(fits.ImageHDU(data=log_prob_combined, name='log_prob'))
+    hdulist.append(fits.ImageHDU(data=rchi2_combined, name='rchi2'))
     hdulist.append(fits.ImageHDU(data=rv_vec, name='rv_vec'))
     hdulist.append(fits.ImageHDU(data=x_vec, name='x_vec'))
     hdulist.append(fits.ImageHDU(data=y_vec, name='y_vec'))

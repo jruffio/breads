@@ -5,6 +5,7 @@ import numpy as np
 import pysiaf
 import stpsf
 from poppy.utils import quantity_input
+import copy
 
 import os
 import astropy.io.fits as fits
@@ -352,7 +353,7 @@ def azimuthal_slice_interp_pa(image, ra_vec, dec_vec,
     angles_deg = (np.degrees(angles)) % 360.0
     return angles_deg, intensities
 
-def visualize_nrs_psf(V3PA, sep_planets, pa_planets, grating, detector, wv=None, convolve=False):
+def visualize_nrs_psf(V3PA, sep_planets, pa_planets, grating, detector, wv=None, convolve=False,convolve_rad = 0.15):
     """
     Visualize the JWST NIRSpec IFU PSF (or its autocorrelation) in the
     instrument's IFU frame, overlaid with the projected positions of companions,
@@ -423,8 +424,18 @@ def visualize_nrs_psf(V3PA, sep_planets, pa_planets, grating, detector, wv=None,
     breadsPSF_path = os.path.join(BREADS_DATA_ENV, "BreadsPSF", use_breadspsf_str)
     hdulist = fits.open(breadsPSF_path)
     psfs = hdulist['EPSFS'].data
-    psf_X = hdulist['X'].data
-    psf_Y = hdulist['Y'].data
+    _, ny, nx = psfs.shape
+    if ny % 2 == 0:
+        y0,y1 = 0,ny-1
+    else:
+        y0,y1 = 0,ny
+    if nx % 2 == 0:
+        x0,x1 = 0,nx-1
+    else:
+        x0,x1 = 0,nx
+    psfs = psfs[:, y0:y1, x0:x1]
+    psf_X = hdulist['X'].data[y0:y1, x0:x1]
+    psf_Y = hdulist['Y'].data[y0:y1, x0:x1]
     wv_sampling = hdulist['WAVE'].data
     if wv is None:
         wv_id = np.size(wv_sampling)//2
@@ -434,18 +445,25 @@ def visualize_nrs_psf(V3PA, sep_planets, pa_planets, grating, detector, wv=None,
         wv_id = np.argmin(np.abs(wv_sampling - wv))
     hdulist.close()
 
+
     x_vec = psf_X[0,:]
     y_vec = psf_Y[:,0]
 
-    psf_im = psfs[wv_id, :, :]/np.nanmax(psfs[wv_id, :, :])
+    psf_im = psfs[wv_id,:,:] / np.nanmax(psfs[wv_id,:,:])
 
     if convolve:
+
         # nan-resistant convolution: zero out nans, then correct for
         # the missing coverage by convolving a validity mask too
         valid = np.isfinite(psf_im).astype(float)
         psf_filled = np.nan_to_num(psf_im, nan=0.0)
+        if convolve_rad is not None:
+            psf_filled_aper = psf_filled.copy()
+            psf_filled_aper[np.where(np.sqrt(psf_X**2 + psf_Y**2)>convolve_rad)] = 0
+        else:
+            psf_filled_aper = psf_filled
 
-        num = fftconvolve(psf_filled, psf_filled, mode="same")
+        num = fftconvolve(psf_filled, psf_filled_aper, mode="same")
         norm = fftconvolve(valid, valid, mode="same")
 
         # avoid divide-by-zero where there's no overlap at all
@@ -544,7 +562,6 @@ def visualize_nrs_psf(V3PA, sep_planets, pa_planets, grating, detector, wv=None,
 #  Functions for using STPSF to generate and plot a mock IFU slice for a star with companion(s)
 
 import stpsf
-import copy
 
 def arrow_angle(ax, angle, pos=(0.15, 0.15), length=0.075, color='skyblue', labelN=False, **kwargs):
     # astronomy angle convention relative to +Y

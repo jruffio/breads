@@ -40,8 +40,6 @@ def _task_normrows(paras):
     paras_out = np.full((im_rows.shape[0],np.size(wv_nodes)), np.nan)
     for k in range(im_rows.shape[0]):
 
-        M_spline = get_spline_model(wv_nodes, im_wvs_rows[k, :], spline_degree=3)
-
         finite_mask = (
             np.isfinite(im_rows[k, :])
             & np.isfinite(badpix_rows[k, :])
@@ -60,15 +58,35 @@ def _task_normrows(paras):
             res[k, :] = np.nan
             continue
 
+        M_spline = get_spline_model(wv_nodes, im_wvs_rows[k, :], spline_degree=3)
+        if 1: # remove redundant spline modes
+            dotprod_M = np.dot(M_spline.transpose(),M_spline)
+            dotprod_M_diag = np.sqrt(np.diag(dotprod_M))
+            dotprod_M = np.abs(dotprod_M/(dotprod_M_diag[np.newaxis,:]*dotprod_M_diag[:,np.newaxis]))
+            # plt.imshow(dotprod_M)
+            # plt.show()
+            d1 = np.diag(dotprod_M, k=1) # First off diagonal
+            is_one = d1 > (1-5e-3)#np.isclose(d1, 1)
+            not_one_idx = np.flatnonzero(~is_one)  # indices where v is NOT ~1
+            if not_one_idx.size == 0:
+                # vector is all ones
+                last_lead, first_trail = len(d1) - 1, 0
+            else:
+                last_lead = not_one_idx[0] - 1 if is_one[0] else -1  # -1 = no leading ones
+                first_trail = not_one_idx[-1] + 1 if is_one[-1] else M_spline.shape[1]-1  # M_spline.shape[1]-1 = no trailing ones
+            M_spline[:,0:last_lead+1] = 0
+            M_spline[:,first_trail+1:M_spline.shape[1]] = 0
+
         d = im_rows[k, where_data_finite[0]]
         d_err = noise_rows[k, where_data_finite[0]]
 
         M = M_spline[where_data_finite[0], :] * stellar_features[k, where_data_finite[0], None]
 
-        if regularization:
-            validpara = np.where(np.nansum(M > np.nanmax(M) * 0.00001, axis=0) != 0)
-        else:
-            validpara = np.where(np.nansum(M > np.nanmax(M) * 0.01, axis=0) != 0)
+        # if regularization:
+        #     validpara = np.where(np.nansum(M > np.nanmax(M) * 0.00001, axis=0) != 0)
+        # else:
+        #     validpara = np.where(np.nansum(M > np.nanmax(M) * 0.01, axis=0) != 0)
+        validpara = np.where(np.nansum(M > 0, axis=0) != 0)
         M = M[:, validpara[0]]
 
         if len(validpara[0]) == 0:
@@ -841,12 +859,12 @@ def evaluate_3dspline(ifux,ifuy,wvs,
 
     if 0:
         print(spline3d_filename)
-        stamp_list = stamp_list[200:221]
-        # stamp_list = stamp_list[243:245]
-        # stamp_list = stamp_list[(840-41*0)::41]
+        stamp_list = stamp_list[74:75]
+        # # stamp_list = stamp_list[243:245]
+        # # stamp_list = stamp_list[(840-41*0)::41]
         # for stamp_id,stamp_tuple in enumerate(stamp_list):
         #     k0,k1,k2,k3,l0,l1,l2,l3,m0,m1 = stamp_tuple
-        #     print("stamp_id",stamp_id)
+        #     print("stamp_id",stamp_id,stamp_tuple)
         #     print("x", x_nodes[k0],x_nodes[k1],x_nodes[k2],x_nodes[k3])
         #     print("y", y_nodes[l0],y_nodes[l1],y_nodes[l2],y_nodes[l3])
         # N_stamps = len(stamp_list)
@@ -1048,8 +1066,8 @@ def plot_3dspline_residuals(combdataobj, overwrite = False):
             # plt.axis('equal')
             plt.xlabel("x ifu (arcsec)")
             plt.ylabel("y ifu (arcsec)")
-            plt.xlim(-2, 2)
-            plt.ylim(-2, 2)
+            plt.xlim(-4, 4)
+            plt.ylim(-4, 4)
 
             plt.subplot(2,2, 2)
             plt.scatter(_y,  np.abs(_si)/_sm, s=1,label="Residuals/Model")
@@ -1067,7 +1085,7 @@ def plot_3dspline_residuals(combdataobj, overwrite = False):
             plt.scatter(_y,  np.abs(_si), s=1, label="Residuals",alpha=0.2)
             plt.xlabel("y ifu (arcsec)")
             plt.ylabel("MJy/sr")
-            plt.ylim([0.1*mad_sm,np.nanmax(_d)])
+            plt.ylim([np.abs(np.percentile(_d, 1))*0.01,np.abs(np.percentile(_d, 99))*10])
             plt.yscale("log")
             plt.legend()
 
@@ -1077,7 +1095,7 @@ def plot_3dspline_residuals(combdataobj, overwrite = False):
             plt.scatter(_x, np.abs(_si), s=1, label="Residuals",alpha=0.2)
             plt.xlabel("x ifu (arcsec)")
             plt.ylabel("MJy/sr")
-            plt.ylim([0.1*mad_sm,np.nanmax(_d)])
+            plt.ylim([np.abs(np.percentile(_d, 1))*0.01,np.abs(np.percentile(_d, 99))*10])
             plt.yscale("log")
             plt.legend()
 

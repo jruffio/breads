@@ -483,6 +483,9 @@ class JWST_IFUs(ABC):
             self.breads_header['AREAUNIT'] = hdulist['AREA2D'].header['BUNIT']
 
         self.x, self.y, self.area2d = x, y, area2d
+
+        self.bad_pixels[np.where(~(np.isfinite(self.x)*np.isfinite(self.y)*np.isfinite(wave_array)*np.isfinite(self.trace_id_map)))] = np.nan
+
         return wave_array, x, y, area2d
 
     def set_coords2ifu(self):

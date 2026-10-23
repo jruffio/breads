@@ -122,6 +122,7 @@ class JWSTNirspec_cal(JWST_IFUs):
             dec_array = np.zeros(self.data.shape) + np.nan
             wavelen_array = np.zeros(self.data.shape) + np.nan
 
+            new_badpix = np.ones(self.data.shape)
             print(f"Computing coords for {len(wcses)} slices...")
             for i in tqdm(range(len(wcses)), total=len(wcses), ncols=100):
                 # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
@@ -145,8 +146,8 @@ class JWSTNirspec_cal(JWST_IFUs):
 
         arcsec2_to_steradians = (2.*np.pi/(360.*3600.))**2
 
-        self.ra_array = ra_array
-        self.dec_array = dec_array
+        self.ra_array = ra_array*new_badpix
+        self.dec_array = dec_array*new_badpix
         self.area2d = area2d * arcsec2_to_steradians #convert area2d in steradians
 
         return ra_array, dec_array, wavelen_array, area2d

@@ -1,4 +1,5 @@
 import multiprocessing as mp
+from tqdm import tqdm
 import numpy as np
 import itertools
 
@@ -120,7 +121,7 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,s
         out = np.reshape(_out,out_shape)
     else:
         mypool = mp.Pool(processes=numthreads)
-        chunk_size = np.max([1,np.size(para_grids[0])//(3*numthreads)])
+        chunk_size = np.max([1,np.size(para_grids[0])//(5*numthreads)])
         N_chunks = np.size(para_grids[0])//chunk_size
         nonlin_paras_lists = []
         indices_lists = []
@@ -130,13 +131,21 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,s
         nonlin_paras_lists.append([pgrid[((N_chunks-1)*chunk_size):np.size(para_grids[0])] for pgrid in para_grids])
         indices_lists.append(np.arange(((N_chunks-1)*chunk_size),np.size(para_grids[0])))
 
-        output_lists = mypool.map(process_chunk, zip(nonlin_paras_lists,
-                                                     itertools.repeat(dataobj),
-                                                     itertools.repeat(fm_func),
-                                                     itertools.repeat(fm_paras),
-                                                     itertools.repeat(bounds),
-                                                     itertools.repeat(scale_noise),
-                                                     itertools.repeat(marginalize_noise_scaling)))
+        output_lists = list(tqdm(mypool.imap(process_chunk, zip(nonlin_paras_lists,
+                                                                itertools.repeat(dataobj),
+                                                                itertools.repeat(fm_func),
+                                                                itertools.repeat(fm_paras),
+                                                                itertools.repeat(bounds),
+                                                                itertools.repeat(scale_noise),
+                                                                itertools.repeat(marginalize_noise_scaling))),
+                                 total=N_chunks))
+        # output_lists = mypool.map(process_chunk, zip(nonlin_paras_lists,
+        #                                              itertools.repeat(dataobj),
+        #                                              itertools.repeat(fm_func),
+        #                                              itertools.repeat(fm_paras),
+        #                                              itertools.repeat(bounds),
+        #                                              itertools.repeat(scale_noise),
+        #                                              itertools.repeat(marginalize_noise_scaling)))
 
         outarr_not_created = True
         for k,(indices, output_list) in enumerate(zip(indices_lists,output_lists)):

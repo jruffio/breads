@@ -94,8 +94,8 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
         splitbasename = os.path.basename(dataobj_list[0].filename).split("_")
         prefix0 = splitbasename[0] + "_" + splitbasename[1] + "_*_" + splitbasename[3]
         for dataobj in dataobj_list:
-            if not fnmatch.fnmatch(os.path.basename(dataobj.filename), prefix0+"*.fits"):
-                raise Exception(f"All files given to jwstnirspec_multiple_cals should be from the same dither sequence, detector, and grating/filter pair. {dataobj.filename} does not match {prefix0}.")
+            # if not fnmatch.fnmatch(os.path.basename(dataobj.filename), prefix0+"*.fits"):
+            #     raise Exception(f"All files given to jwstnirspec_multiple_cals should be from the same dither sequence, detector, and grating/filter pair. {dataobj.filename} does not match {prefix0}.")
             self.filelist.append(dataobj.filename)
             self.priheader_list.append(dataobj.priheader)
             self.extheader_list.append(dataobj.extheader)

@@ -419,8 +419,8 @@ def _fit_wpsf_task(paras):
                     th = 0.0
             else:
                 xc, yc, th = p0[0], p0[1], 0
-            m0 = webbpsf_interp(X - xc, Y - yc)
-            a = np.nansum(Z * m0 / Zerr ** 2) / np.nansum(m0 ** 2 / Zerr ** 2)
+            m = webbpsf_interp(X - xc, Y - yc)
+            a = np.nansum(Z * m / Zerr ** 2) / np.nansum(m ** 2 / Zerr ** 2)
         except:
             a, xc, yc, th = np.nan, np.nan, np.nan, np.nan
 
@@ -515,10 +515,22 @@ def analyze_fitpsf_results(dataobj,bestfit_paras,poly_deg_coords = 4,poly_deg_fl
     else:
         _wv_max = wv_max
     wherefinite = np.where(np.isfinite(_med_bestfit_paras[:, 2]) * (dataobj.wv_sampling > _wv_min) * (dataobj.wv_sampling < _wv_max))
-    poly_p_x = np.polyfit(dataobj.wv_sampling[wherefinite], _med_bestfit_paras[:, 2][wherefinite], deg=poly_deg_coords)
+    _w, _c = dataobj.wv_sampling[wherefinite], _med_bestfit_paras[:, 2][wherefinite]
+    poly_p_x = np.polyfit(_w, _c, deg=poly_deg_coords)
+    polyval_vec = np.polyval(poly_p_x, _w)
+    res = _c-polyval_vec
+    _mad = median_abs_deviation(res)
+    within_thresh = np.where(np.abs(res)<10*_mad)
+    poly_p_x = np.polyfit(_w[within_thresh], _c[within_thresh], deg=poly_deg_coords)
 
     wherefinite = np.where(np.isfinite(_med_bestfit_paras[:, 3]) * (dataobj.wv_sampling > _wv_min) * (dataobj.wv_sampling < _wv_max))
-    poly_p_y = np.polyfit(dataobj.wv_sampling[wherefinite], _med_bestfit_paras[:, 3][wherefinite], deg=poly_deg_coords)
+    _w, _c = dataobj.wv_sampling[wherefinite], _med_bestfit_paras[:, 3][wherefinite]
+    poly_p_y = np.polyfit(_w, _c, deg=poly_deg_coords)
+    polyval_vec = np.polyval(poly_p_y, _w)
+    res = _c-polyval_vec
+    _mad = median_abs_deviation(res)
+    within_thresh = np.where(np.abs(res)<10*_mad)
+    poly_p_y = np.polyfit(_w[within_thresh], _c[within_thresh], deg=poly_deg_coords)
 
     # Save centroids to a text file
     if poly_centroid_filename is not None:

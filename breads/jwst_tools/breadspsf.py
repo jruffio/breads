@@ -100,9 +100,10 @@ def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,
     dx = x_vec[1] - x_vec[0]
     dy = y_vec[1] - y_vec[0]
     extent = [x_vec[0] - dx / 2.0, x_vec[-1] + dx / 2.0, y_vec[0] - dy / 2.0, y_vec[-1] + dy / 2.0]
-    vmax = 4 + np.log10(np.abs(median_abs_deviation(breadspsf[np.where(np.isfinite(breadspsf))])))
+    _valid_bpsf = breadspsf[np.where(np.isfinite(breadspsf))]
+    vmin,vmax = np.abs(np.percentile(_valid_bpsf, 1)),np.abs(np.percentile(_valid_bpsf, 99))
     save_cube_as_gif(np.log10(np.abs(breadspsf[::50])), filename=out_filename.replace(".fits", ".gif"),
-                     fps=24, vmin=vmax-6, vmax=vmax, extent=extent, wv_nodes=wv_sampling[::50], dpi=100)
+                     fps=24, vmin=vmin, vmax=vmax, extent=extent, wv_nodes=wv_sampling[::50], dpi=100)
 
     return breadspsf, breadspsf_err
 

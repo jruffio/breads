@@ -162,6 +162,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
 
     finite_mask = (
         np.isfinite(data)
+        & np.isfinite(noise)
         & np.isfinite(bad_pixels)
         & np.isfinite(comp_spec)
         & np.isfinite(star_func(wvs))
@@ -171,6 +172,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
         finite_mask
         & new_mask
         & larger_mask_comp
+        # & (noise >= ((1e-6)*np.nanmedian(noise[np.where(finite_mask)])))
         & (noise != 0)
     )
 
@@ -342,7 +344,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
     if stellar_features0 is None:
         stellar_features = star_func(w)[:, None]
     else:
-        stellar_features = stellar_features0[where_trace_finite] * star_func(w)[:, None]
+        stellar_features = (stellar_features0[where_trace_finite] * star_func(w))[:, None]
 
     M_speckles = np.reshape(M_speckles, (Nd, Nrows * N_nodes))
     M_speckles = M_speckles * stellar_features
