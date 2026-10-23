@@ -351,8 +351,9 @@ def object_memory_profiler(obj,g            ,level = 0, verbose=True):
             return sys.getsizeof(obj)
 
 class broadRGI():
-    def __init__(self,model_name,R=2700,preload=False):
+    def __init__(self, model_name, R=2700, preload=False, wavelength_bounds = None):
         self.model_name = model_name
+        self.wavelength_bounds = wavelength_bounds
         if R=='G395H':
             self.poly_R = [4.2315854443768986e-14,4.215698787414372e-13,1.699575420882817e-12,-9.87177642957125e-13,-8.185987144420465e-11,-8.453742730219556e-10,-5.860480131264309e-09,-2.939035110960792e-08,-7.94761733834428e-08,3.591607770339932e-07,7.2865753776287735e-06,6.358725700123504e-05,0.0003646853948763622,0.001041269547985175,-0.005449555942462263,-0.09658241243063508,-0.5623949528975328,1.1010988145692728,53.03401867050948,443.60184378697863,249.37795708365255]
             self.R_flag = True
@@ -360,7 +361,9 @@ class broadRGI():
             self.R_flag = False
         self.R = R
 
-        self.identity = 'broadRGI_'+model_name+'_R'+str(R)
+        wbstr = '_'+str(wavelength_bounds[0])+'-'+str(wavelength_bounds[1])+'um' if not wavelength_bounds is None else ''
+        Rstr = '_R'+str(R) if not R is None else ''
+        self.identity = 'broadRGI_'+model_name+Rstr+wbstr
         self.savedir = database.data_folder[:-6]+'/broadRGI/'
         self.filename = self.savedir+self.identity+'.hdf5'
 
@@ -368,12 +371,23 @@ class broadRGI():
         self.points = RM.get_points()
         self.bounds = RM.get_bounds()
 
+        #load wavelength and restrict
+        with h5py.File(database.database, "r") as hdf_file:
+            model = hdf_file['models'][self.model_name]
+            self.wavelength = np.copy(model['wavelength'])
+        if self.wavelength_bounds is not None:
+            print('restricting wavelengths: {} to {} um'.format(self.wavelength_bounds[0],self.wavelength_bounds[1]))
+            self.wavelength_bool = np.logical_and(self.wavelength>=self.wavelength_bounds[0],
+                                                  self.wavelength<=self.wavelength_bounds[1])
+            self.wavelength = self.wavelength[self.wavelength_bool]
+            #print(len(self.wavelength))
+
         if not os.path.exists(self.savedir):
             os.mkdir(self.savedir)
         if not os.path.exists(self.filename):
             self.pre_broaden()
         else:
-            print('already exists, no preperations.')
+            print('already exists, no preparations.')
 
         with h5py.File(database.database, "r") as hdf_file:
             model = hdf_file['models'][self.model_name]
@@ -389,7 +403,7 @@ class broadRGI():
             self.preload = preload
             with h5py.File(self.filename,'a') as f:
                 hypercube = np.copy(f['flux'])
-                self.wavelength = np.copy(f['wavelength'])
+                #self.wavelength = np.copy(f['wavelength'])
             self.miniRGI = RegularGridInterpolator(tuple(self.param_list), hypercube, method='linear', fill_value=np.nan)
             print('done.')
 
@@ -435,27 +449,30 @@ class broadRGI():
         with h5py.File(database.database, "r") as hdf_file:
             model = hdf_file['models'][self.model_name]    
             model_hypercube = np.copy(model['flux'])
-            w = np.copy(model['wavelength'])
+            #w = np.copy(model['wavelength'])
 
         parameter_shape = model_hypercube.shape[:-1]
         n_grid_points = np.prod(parameter_shape)
         
         global global_reshaped_cube
         global_reshaped_cube = model_hypercube.reshape(n_grid_points,-1)
+        if self.wavelength_bounds is not None:
+            global_reshaped_cube = global_reshaped_cube[:,self.wavelength_bool]
+        print(global_reshaped_cube.shape)
         
         broad_cube = np.empty(global_reshaped_cube.shape)
 
         if self.R_flag:
-            R = np.polyval(self.poly_R,w)
+            R = np.polyval(self.poly_R,self.wavelength)
             print('polynomial R')
-            plt.plot(w,R)
+            plt.plot(self.wavelength,R)
             plt.show()
         else:
             R = self.R
             
         def _broadening_task(i):
             rprint('broadening... {}/{} '.format(i+1,n_grid_points))
-            return broaden(w,global_reshaped_cube[i,:],R=R)
+            return broaden(self.wavelength,global_reshaped_cube[i,:],R=R)
 
         from multiprocess import Pool
         threads = os.cpu_count()
@@ -469,4 +486,4 @@ class broadRGI():
 
         with h5py.File(self.filename,'a') as f:
             f['flux'] = re_reshaped_cube
-            f['wavelength'] = w
+            f['wavelength'] = self.wavelength
