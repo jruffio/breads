@@ -4,6 +4,9 @@ import os
 import astropy
 from glob import glob
 
+# These tests run the STScI jwst pipeline, which is only available with the [jwst] extra.
+pytest.importorskip("jwst")
+
 from breads.jwst_reduction.reduction_utils import run_stage1,run_stage2
 
 @pytest.fixture(scope="module")
@@ -15,8 +18,7 @@ if BREADS_DATA_ENV is None:
     jwst_test_data_path = os.path.join(str(astropy.utils.data._get_download_cache_loc()),'jwst_test_data')
 else:
     jwst_test_data_path = os.path.join(os.environ['BREADS_DATA'], "jwst_test_data")
-if not os.path.exists(jwst_test_data_path):
-        os.mkdir(jwst_test_data_path)
+os.makedirs(jwst_test_data_path, exist_ok=True)
 print("The JWST test data will be downloaded in: {}".format(jwst_test_data_path))
 
 test_file = 'jw03399002001_03102_00001_nrs2_uncal.fits'
