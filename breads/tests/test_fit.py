@@ -1148,12 +1148,12 @@ def test_empty_data_returns_invalid_outputs(noisy_gaussian_instrument):
     assert_invalid_outputs(result, n_linpara)
 
 
-def test_first_column_all_zero_returns_invalid_outputs(noisy_gaussian_instrument):
-    """If the companion column is identically zero, nothing can be fitted.
+def test_first_column_all_zero_is_dropped_like_any_other(noisy_gaussian_instrument):
+    """A zero companion column is not special: it is dropped and returned as NaN.
 
-    The first column of M is by convention the companion flux.  A column of
-    zeros means the companion is unconstrained by the data, so fitfm bails out
-    rather than returning a meaningless amplitude.
+    The first column of M is by convention the companion flux.  If it is
+    identically zero, fitfm does not bail out; it fits the remaining columns
+    exactly as if the companion column had never been included.
     """
     # Arrange
     def zero_companion_fm_func(nonlin_paras, instrument, **fm_paras):
@@ -1162,16 +1162,28 @@ def test_first_column_all_zero_returns_invalid_outputs(noisy_gaussian_instrument
         M[:, 0] = 0.0
         return d, M, s
 
-    # Act
-    result = fitfm(
+    def background_only_fm_func(nonlin_paras, instrument, **fm_paras):
+        d, M, s = gaussian_fm_func(nonlin_paras, instrument, **fm_paras)
+        return d, M[:, 1:], s
+
+    common = dict(
         nonlin_paras=[GAUSS_MU_TRUE],
         dataobj=noisy_gaussian_instrument,
-        fm_func=zero_companion_fm_func,
         fm_paras={"sigma": GAUSS_SIGMA},
     )
 
+    # Act
+    reference = fitfm(fm_func=background_only_fm_func, **common)
+    result = fitfm(fm_func=zero_companion_fm_func, **common)
+
     # Assert
-    assert_invalid_outputs(result, 2)
+    assert result[2].shape == (2,)
+    assert np.isnan(result[2][0]) and np.isnan(result[3][0])
+    np.testing.assert_allclose(result[2][1:], reference[2], rtol=1e-12)
+    np.testing.assert_allclose(result[3][1:], reference[3], rtol=1e-12)
+    assert np.isfinite(result[0])
+    assert result[0] == pytest.approx(reference[0], rel=1e-12)
+    assert result[1] == pytest.approx(reference[1], rel=1e-12)
 
 
 def test_all_zero_columns_are_dropped_and_returned_as_nan(noisy_gaussian_instrument):
@@ -1260,17 +1272,16 @@ def test_single_linear_parameter_fit_works(
     assert rchi2 > 0
 
 
-def test_finite_bounds_raise_warning(noisy_gaussian_instrument):
-    """Any finite bound is rejected because it invalidates the marginalization.
+def test_finite_bounds_emit_warning(noisy_gaussian_instrument):
+    """Any finite bound triggers a warning because it invalidates the marginalization.
 
-    As with the H0 check, ``Warning`` is raised as an exception, so in practice
-    the ``bounds`` argument can only be used with infinite limits.
+    The fit still proceeds, but the returned log_prob is only an approximation.
     """
     # Arrange: a non-negativity constraint on the companion flux
     bounds = ([0.0, -np.inf], [np.inf, np.inf])
 
     # Act / Assert
-    with pytest.raises(Warning, match="only theoretically accurate"):
+    with pytest.warns(UserWarning, match="only theoretically accurate"):
         fitfm(
             nonlin_paras=[GAUSS_MU_TRUE],
             dataobj=noisy_gaussian_instrument,
