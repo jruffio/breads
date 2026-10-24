@@ -181,7 +181,7 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,s
 
         if outarr_not_created:
             raise RuntimeError("All process_chunk calls returned None. Check for errors in fitfm or the input data.")
-        
+
     N_linpara = int((out.shape[-1]-2)/2)
     out = np.moveaxis(out, -1, 0)
     log_prob = out[0]
