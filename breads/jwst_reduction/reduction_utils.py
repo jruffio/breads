@@ -1756,7 +1756,7 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
     return combdataobj
 
 
-def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filename, coords_filename_filter,
+def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filename, coords_filename_filter=None,
                     mode="raw", suffix=None, contnorm_suffix=None,
                     x_vec=None, y_vec=None, wv_sampling=None,
                     mask_charge_transfer_radius=None, ra_dec_point_sources=None,
@@ -1851,9 +1851,11 @@ def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filena
             preproc_task_list.append(_task)
             dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
 
-            coords_filename = \
-            glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
-            dataobj.apply_coords_offset(coords_filename=coords_filename)
+            # Recenter the coordinates with the per-frame centroid file, if any
+            if coords_filename_filter is not None:
+                coords_filename = \
+                glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+                dataobj.apply_coords_offset(coords_filename=coords_filename)
 
             if "RDI" in mode:
                 dataobj.compute_interpdata_regwvs(wv_sampling=wv_sampling, save_utils=False)
@@ -1940,7 +1942,7 @@ def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filena
     return flux_cube, fluxerr_cube, x_grid, y_grid, wv_sampling
 
 
-def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
+def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None, extract_speckles=False):
     """
     Extract the spectrum of one or more point sources (planets) from an IFU cube.
     A separate FITS file is written for each planet. An interactive Plotly HTML
@@ -1963,12 +1965,19 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
         plots. Defaults to "0", "1", "2", ... if not provided. Ignored (no
         filename suffix added) when only a single planet is given and labels
         is not provided.
+    extract_speckles : bool, optional
+        If True, also extract the speckle spectra in an annulus at the separation
+        of each companion and their standard deviation. This requires a cube
+        covering that annulus. If False (default), the speckle extensions (STD_MJy, SPECKLES,
+        STD_FLAM, SPECKLES_FLAM) are not written to the FITS file and the speckles
+        are not plotted in the preview.
 
     Returns
     -------
     results : list of dict
         One entry per planet, each with keys:
         'label', 'out_filename', 'wv_sampling', 'spectrum_Flambda', 'speckle_std_Flambda'
+        ('speckle_std_Flambda' is None if extract_speckles is False)
     """
     # --- Normalize input: allow either a single (x, y) tuple or a list of them ---
     if len(xy_coords) == 2 and np.isscalar(xy_coords[0]) and np.isscalar(xy_coords[1]):
@@ -2056,37 +2065,42 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
         r2comp_grid = np.sqrt((x_grid - x) ** 2 + (y_grid - y) ** 2)
         kmax, lmax = np.unravel_index(np.nanargmin(r2comp_grid), r2comp_grid.shape)
 
-        sep_comp = np.sqrt(x ** 2 + y ** 2)
-        speckles_mask = (r2star_grid > (sep_comp - 0.05)) * (r2star_grid < (sep_comp + 0.05) * (r2comp_grid > 0.3))
-        whereannulus = np.where(speckles_mask)
-
-        speckles = flux_cube[:, whereannulus[0], whereannulus[1]]
-        speckle_std = np.nanstd(speckles, axis=1)
-        speckle_std[np.where(speckle_std == 0)] = np.nan
-
         spectrum = flux_cube[:, kmax, lmax]
         err = fluxerr_cube[:, kmax, lmax]
 
         spectrum_Flambda = to_Flambda(spectrum)
         err_Flambda = to_Flambda(err)
-        speckle_std_Flambda = to_Flambda(speckle_std)
-        speckles_Flambda = (speckles * u.MJy * const.c / (wv_sampling[:, None] * u.um) ** 2).to(u.W * u.m ** -2 / u.um).value
-
         spectrum_Jy = (spectrum * u.MJy).to(u.Jy).value
-        speckle_std_Jy = (speckle_std * u.MJy).to(u.Jy).value
-        speckles_Jy = (speckles * u.MJy).to(u.Jy).value
+
+        if extract_speckles:
+            sep_comp = np.sqrt(x ** 2 + y ** 2)
+            speckles_mask = (r2star_grid > (sep_comp - 0.05)) * (r2star_grid < (sep_comp + 0.05) * (r2comp_grid > 0.3))
+            whereannulus = np.where(speckles_mask)
+
+            speckles = flux_cube[:, whereannulus[0], whereannulus[1]]
+            speckle_std = np.nanstd(speckles, axis=1)
+            speckle_std[np.where(speckle_std == 0)] = np.nan
+
+            speckle_std_Flambda = to_Flambda(speckle_std)
+            speckles_Flambda = (speckles * u.MJy * const.c / (wv_sampling[:, None] * u.um) ** 2).to(u.W * u.m ** -2 / u.um).value
+            speckle_std_Jy = (speckle_std * u.MJy).to(u.Jy).value
+            speckles_Jy = (speckles * u.MJy).to(u.Jy).value
+        else:
+            speckle_std_Flambda = None
 
         # --- Write FITS output for this planet ---
         hdulist_out = fits.HDUList()
         hdulist_out.append(fits.ImageHDU(data=wv_sampling, name='WAVE'))
         hdulist_out.append(fits.ImageHDU(data=spectrum, name='FLUX_MJy'))
         hdulist_out.append(fits.ImageHDU(data=err, name='ERR_MJy'))
-        hdulist_out.append(fits.ImageHDU(data=speckle_std, name='STD_MJy'))
-        hdulist_out.append(fits.ImageHDU(data=speckles, name='SPECKLES'))
+        if extract_speckles:
+            hdulist_out.append(fits.ImageHDU(data=speckle_std, name='STD_MJy'))
+            hdulist_out.append(fits.ImageHDU(data=speckles, name='SPECKLES'))
         hdulist_out.append(fits.ImageHDU(data=spectrum_Flambda, name='FLUX_FLAM'))
         hdulist_out.append(fits.ImageHDU(data=err_Flambda, name='ERR_FLAM'))
-        hdulist_out.append(fits.ImageHDU(data=speckle_std_Flambda, name='STD_FLAM'))
-        hdulist_out.append(fits.ImageHDU(data=speckles_Flambda, name='SPECKLES_FLAM'))
+        if extract_speckles:
+            hdulist_out.append(fits.ImageHDU(data=speckle_std_Flambda, name='STD_FLAM'))
+            hdulist_out.append(fits.ImageHDU(data=speckles_Flambda, name='SPECKLES_FLAM'))
         if wv_nodes is not None:
             hdulist_out.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
         hdulist_out[0].header['LABEL'] = label
@@ -2099,73 +2113,80 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
         hdulist_out.close()
 
         # --- 1D spectrum: add traces for this planet to the shared Plotly figure ---
-        upper = spectrum_Flambda + speckle_std_Flambda
-        lower = spectrum_Flambda - speckle_std_Flambda
-        # Shaded noise band via the 'tonexty' pattern: an invisible upper-bound
-        # trace, followed by a lower-bound trace that fills up to the previous one.
-        # This is more robust to NaN gaps than the 'toself' polygon-concatenation
-        # trick, which can self-intersect and balloon out where speckle_std is NaN.
-        N_speckles = speckles_Flambda.shape[1]
-        speckle_subset = speckles_Flambda[:, ::N_speckles // 5]
-        for i in range(speckle_subset.shape[1]):
-            fig_spec.add_trace(go.Scatter(
-                x=wv_sampling, y=speckle_subset[:, i], mode='lines',
-                name="speckles " + label, legendgroup=label,
-                opacity=0.5, showlegend=(i == 0),
-                line=dict(color="grey", width=1),
-            ), row=1, col=1)
+        if extract_speckles:
+            N_speckles = speckles_Flambda.shape[1]
+            speckle_subset = speckles_Flambda[:, ::max(N_speckles // 5, 1)]
+            for i in range(speckle_subset.shape[1]):
+                fig_spec.add_trace(go.Scatter(
+                    x=wv_sampling, y=speckle_subset[:, i], mode='lines',
+                    name="speckles " + label, legendgroup=label,
+                    opacity=0.5, showlegend=(i == 0),
+                    line=dict(color="grey", width=1),
+                ), row=1, col=1)
         if wv_nodes is not None:
+            # Nodes are drawn above the spectrum, offset by the speckle std if available, else by the error
+            node_offset_Flambda = speckle_std_Flambda if extract_speckles else err_Flambda
             marker = dict(symbol='line-ns', size=12, line=dict(color='black', width=2))
             fig_spec.add_trace(go.Scatter(
-                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Flambda + 5*speckle_std_Flambda), mode='markers',
+                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Flambda + 5*node_offset_Flambda), mode='markers',
                 marker=marker,
                 showlegend=False, hoverinfo='skip', legendgroup=label,
             ), row=1, col=1)
-        fig_spec.add_trace(go.Scatter(
-            x=wv_sampling, y=upper, mode='lines', line=dict(width=0),
-            connectgaps=True,
-            showlegend=False, hoverinfo='skip', legendgroup=label,
-        ), row=1, col=1)
-        fig_spec.add_trace(go.Scatter(
-            x=wv_sampling, y=lower, mode='lines', line=dict(width=0),
-            fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
-            connectgaps=True,
-            showlegend=False, hoverinfo='skip', legendgroup=label,
-        ), row=1, col=1)
+        if extract_speckles:
+            upper = spectrum_Flambda + speckle_std_Flambda
+            lower = spectrum_Flambda - speckle_std_Flambda
+            # Shaded noise band via the 'tonexty' pattern: an invisible upper-bound
+            # trace, followed by a lower-bound trace that fills up to the previous one.
+            # This is more robust to NaN gaps than the 'toself' polygon-concatenation
+            # trick, which can self-intersect and balloon out where speckle_std is NaN.
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=upper, mode='lines', line=dict(width=0),
+                connectgaps=True,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=1, col=1)
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=lower, mode='lines', line=dict(width=0),
+                fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
+                connectgaps=True,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=1, col=1)
         fig_spec.add_trace(go.Scatter(
             x=wv_sampling, y=spectrum_Flambda, mode='lines', name=label,
             legendgroup=label, line=dict(color=color, width=2),
         ), row=1, col=1)
 
         # --- Same panel, in Jansky, added below the Flambda panel ---
-        upper_Jy = spectrum_Jy + speckle_std_Jy
-        lower_Jy = spectrum_Jy - speckle_std_Jy
-        speckle_subset_Jy = speckles_Jy[:, ::N_speckles // 5]
-        for i in range(speckle_subset_Jy.shape[1]):
-            fig_spec.add_trace(go.Scatter(
-                x=wv_sampling, y=speckle_subset_Jy[:, i], mode='lines',
-                name="speckles " + label, legendgroup=label,
-                opacity=0.5, showlegend=False,
-                line=dict(color="grey", width=1),
-            ), row=2, col=1)
+        if extract_speckles:
+            speckle_subset_Jy = speckles_Jy[:, ::max(N_speckles // 5, 1)]
+            for i in range(speckle_subset_Jy.shape[1]):
+                fig_spec.add_trace(go.Scatter(
+                    x=wv_sampling, y=speckle_subset_Jy[:, i], mode='lines',
+                    name="speckles " + label, legendgroup=label,
+                    opacity=0.5, showlegend=False,
+                    line=dict(color="grey", width=1),
+                ), row=2, col=1)
         if wv_nodes is not None:
+            node_offset_Jy = speckle_std_Jy if extract_speckles else (err * u.MJy).to(u.Jy).value
             marker = dict(symbol='line-ns', size=12, line=dict(color='black', width=2))
             fig_spec.add_trace(go.Scatter(
-                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Jy + 5*speckle_std_Jy), mode='markers',
+                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Jy + 5*node_offset_Jy), mode='markers',
                 marker=marker,
                 showlegend=False, hoverinfo='skip', legendgroup=label,
             ), row=2, col=1)
-        fig_spec.add_trace(go.Scatter(
-            x=wv_sampling, y=upper_Jy, mode='lines', line=dict(width=0),
-            connectgaps=True,
-            showlegend=False, hoverinfo='skip', legendgroup=label,
-        ), row=2, col=1)
-        fig_spec.add_trace(go.Scatter(
-            x=wv_sampling, y=lower_Jy, mode='lines', line=dict(width=0),
-            fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
-            connectgaps=True,
-            showlegend=False, hoverinfo='skip', legendgroup=label,
-        ), row=2, col=1)
+        if extract_speckles:
+            upper_Jy = spectrum_Jy + speckle_std_Jy
+            lower_Jy = spectrum_Jy - speckle_std_Jy
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=upper_Jy, mode='lines', line=dict(width=0),
+                connectgaps=True,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=2, col=1)
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=lower_Jy, mode='lines', line=dict(width=0),
+                fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
+                connectgaps=True,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=2, col=1)
         fig_spec.add_trace(go.Scatter(
             x=wv_sampling, y=spectrum_Jy, mode='lines', name=label,
             legendgroup=label, showlegend=False, line=dict(color=color, width=2),
@@ -2379,7 +2400,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
                     combined_contnorm_spec_filename,
                      photfilter_filename,
                     coords_filename=None,coords_filename_filter=None,centroid_per_frame=False,
-                    model_dict=None,model_grid_h5py=None,grid_paras=None,
+                    model_dict=None,model_grid_h5py=None,grid_paras=None,grid_para_names=("temps","loggs"),
                      N_KL=3,
                     suffix=None,contnorm_suffix=None,
                     x_vec=None,y_vec=None,rv_vec=None,
@@ -2649,28 +2670,23 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
 
                 # plt.plot(grid_wvs, grid_specs[1, 5, 1, :])
                 # plt.show()
-                # Number of extensions that are neither "wvs" nor "spec"
-                n_other = sum(1 for name in hf.keys() if name not in ("wvs", "spec"))
-                # print("Number of other extensions:", n_other)
-
+                # grid_para_names lists the hdf5 extensions of the grid parameters in the same order as the axes of
+                # the spec array (and as grid_paras). hdf5 keys cannot be used for this because they are sorted alphabetically.
+                n_other = len(grid_para_names)
                 if len(grid_specs.shape) != n_other+1:
-                    raise ValueError("Shape of spec array does not match number of extensions in hdf5 files")
+                    raise ValueError("Shape {0} of spec array does not match the number of grid parameters {1}".format(
+                        grid_specs.shape, grid_para_names))
 
                 para_vec_list = []
-                para_id = 0
                 print("Model grid parameters:")
-                for name in hf.keys():
-                    if name not in ("wvs", "spec"):
-                        # print(name)
-                        para_vec = np.array(hf.get(name))
-                        # print(grid_specs_Flambda.shape[para_id], np.size(para_vec),para_vec)
-                        if grid_specs.shape[para_id] != np.size(para_vec):
-                            err_msg = "Shape {0} of spec array do not match the size of the vector for extension (expecting {1}, finding {2}): {3}".format(
-                                grid_specs.shape,np.size(para_vec),grid_specs.shape[para_id],name)
-                            raise ValueError(err_msg)
-                        print(name,para_vec)
-                        para_vec_list.append(para_vec)
-                        para_id +=1
+                for para_id, name in enumerate(grid_para_names):
+                    para_vec = np.array(hf.get(name))
+                    if grid_specs.shape[para_id] != np.size(para_vec):
+                        err_msg = "Shape {0} of spec array do not match the size of the vector for extension (expecting {1}, finding {2}): {3}".format(
+                            grid_specs.shape,np.size(para_vec),grid_specs.shape[para_id],name)
+                        raise ValueError(err_msg)
+                    print(name,para_vec)
+                    para_vec_list.append(para_vec)
 
             grid_dwvs = grid_wvs[1::] - grid_wvs[0:np.size(grid_wvs) - 1]
             grid_dwvs = np.insert(grid_dwvs, 0, grid_dwvs[0])
@@ -2694,7 +2710,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
                                                    bounds_error=False, fill_value=np.nan)
             #example:  teff, logg, vsini = grid_paras
             rv, dra_comp, ddec_comp = None, None, None
-            fix_parameters = grid_paras+[rv, dra_comp, ddec_comp]
+            fix_parameters = list(grid_paras)+[rv, dra_comp, ddec_comp]
         elif model_dict is not None:
             raise Exception("model_dict not yet implemented")
             # atm_model_func = interp1d(atm_wvs,atm_model)
