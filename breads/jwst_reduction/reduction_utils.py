@@ -1756,7 +1756,7 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
     return combdataobj
 
 
-def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filename, coords_filename_filter=None,
+def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filename, coords_filename_filter=None, coords_filename=None,
                     mode="raw", suffix=None, contnorm_suffix=None,
                     x_vec=None, y_vec=None, wv_sampling=None,
                     mask_charge_transfer_radius=None, ra_dec_point_sources=None,
@@ -1851,11 +1851,13 @@ def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filena
             preproc_task_list.append(_task)
             dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
 
-            # Recenter the coordinates with the per-frame centroid file, if any
-            if coords_filename_filter is not None:
-                coords_filename = \
-                glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+            # Recenter the coordinates with a single centroid file for all frames, or with the per-frame centroid files, if any
+            if coords_filename is not None:
                 dataobj.apply_coords_offset(coords_filename=coords_filename)
+            elif coords_filename_filter is not None:
+                _coords_filename = \
+                glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+                dataobj.apply_coords_offset(coords_filename=_coords_filename)
 
             if "RDI" in mode:
                 dataobj.compute_interpdata_regwvs(wv_sampling=wv_sampling, save_utils=False)
@@ -2399,7 +2401,7 @@ def compute_breads_flatfield(cal_files, utils_dir,combined_contnorm_spec_filenam
 def compute_snr_grid(cal_files, utils_dir, out_dir,
                     combined_contnorm_spec_filename,
                      photfilter_filename,
-                    coords_filename=None,coords_filename_filter=None,centroid_per_frame=False,
+                    coords_filename=None,coords_filename_filter=None,
                     model_dict=None,model_grid_h5py=None,grid_paras=None,grid_para_names=("temps","loggs"),
                      N_KL=3,
                     suffix=None,contnorm_suffix=None,
@@ -2519,7 +2521,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
 
         if coords_filename is not None:
             dataobj.apply_coords_offset(coords_filename = coords_filename)
-        elif coords_filename_filter is not None and not centroid_per_frame:
+        elif coords_filename_filter is not None:
             _coords_filename = glob(os.path.join(utils_dir,os.path.basename(dataobj.filename).replace(".fits", coords_filename_filter)))[0]
             dataobj.apply_coords_offset(coords_filename = _coords_filename)
         # coords_filename = glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
