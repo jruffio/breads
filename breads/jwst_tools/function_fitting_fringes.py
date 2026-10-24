@@ -22,7 +22,7 @@ except ImportError:
     # non-JWST BREADS usage
     pass
 
-from breads.jwst_tools.reduction_utils import find_files_to_process
+from breads.jwst_reduction.reduction_utils import find_files_to_process
 
 from multiprocessing import Pool
 

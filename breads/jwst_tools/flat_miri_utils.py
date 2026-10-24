@@ -27,7 +27,7 @@ except ImportError:
 
 
 def use_find_files_to_process(input_dir, filetype='uncal.fits'):
-    from breads.jwst_tools.reduction_utils import find_files_to_process
+    from breads.jwst_reduction.reduction_utils import find_files_to_process
     return find_files_to_process(input_dir, filetype=filetype)
 
 def get_band_miri_header(prim_hdr):

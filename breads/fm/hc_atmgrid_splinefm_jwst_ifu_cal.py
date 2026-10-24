@@ -10,9 +10,11 @@ from breads.utils import get_spline_model
 
 
 # pos: (x,y) or fiber, position of the companion
-def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_grid_wvs=None, star_func=None,radius_as=0.2, nodes=20,
+def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
+             atm_grid=None, atm_grid_wvs=None, star_func=None,radius_as=0.2, nodes=20,
              badpixfraction=0.75, fix_parameters=None, Nrows_max=200, detec_KLs=None, wvs_KLs_f=None,
-             regularization=None, reg_mean_map=None, reg_std_map=None):
+             regularization=None, reg_mean_map=None, reg_std_map=None,stellar_features0=None,use_stpsf=True,
+             fix_fitting_region_around_xy = None):
 
     """
     For high-contrast companions (planet + speckles).
@@ -72,10 +74,11 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
     else:
         _nonlin_paras = nonlin_paras
 
-    if regularization is None:
-        min_spline_ampl = 0.02
-    else:
-        min_spline_ampl = 0.005
+    # if regularization is None:
+    #     min_spline_ampl = 0.02
+    # else:
+    #     min_spline_ampl = 0.005
+    # min_spline_ampl = 0.1
 
     Natmparas = len(atm_grid.values.shape)-1
     atm_paras = [p for p in _nonlin_paras[0:Natmparas]]
@@ -86,33 +89,32 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
     ny, nx = data.shape
     noise = cubeobj.noise
     bad_pixels = cubeobj.bad_pixels
-    ra_array = cubeobj.dra_as_array
-    dec_array = cubeobj.ddec_as_array
+    ra_array = cubeobj.x
+    dec_array = cubeobj.y
     wvs = cubeobj.wavelengths
     pixarea_steradians = cubeobj.area2d
 
     if ifu_name == 'miri':
-        if cubeobj.channel_reduction == '1' or cubeobj.channel_reduction == '4':
-            ra_array[:, 500:] = np.nan
-            dec_array[:, 500:] = np.nan
-            wvs[:, 500:] = np.nan
-        else:
-            ra_array[:, :500] = np.nan
-            dec_array[:, :500] = np.nan
-            wvs[:, :500] = np.nan
+        raise Exception('Miri model not yet implemented.')
+        # if cubeobj.channel_reduction == '1' or cubeobj.channel_reduction == '4':
+        #     ra_array[:, 500:] = np.nan
+        #     dec_array[:, 500:] = np.nan
+        #     wvs[:, 500:] = np.nan
+        # else:
+        #     ra_array[:, :500] = np.nan
+        #     dec_array[:, :500] = np.nan
+        #     wvs[:, :500] = np.nan
+        #
+        # #Transpose the arrays for miri
+        # data = data.transpose()
+        # ny, nx = data.shape
+        # bad_pixels = bad_pixels.transpose()
+        # noise = noise.transpose()
+        # wvs = wvs.transpose()
+        # dec_array = dec_array.transpose()
+        # ra_array = ra_array.transpose()
+        # pixarea_steradians = pixarea_steradians.transpose()
 
-        #Transpose the arrays for miri
-        data = data.transpose()
-        ny, nx = data.shape
-        bad_pixels = bad_pixels.transpose()
-        noise = noise.transpose()
-        wvs = wvs.transpose()
-        dec_array = dec_array.transpose()
-        ra_array = ra_array.transpose()
-        pixarea_steradians = pixarea_steradians.transpose()
-
-    steradians_to_arcsec2 = 1 / (2. * np.pi / (360. * 3600.)) ** 2
-    pixarea_arcsec2 = pixarea_steradians * steradians_to_arcsec2
 
     vsini, rv = other_nonlin_paras[0:2]
 
@@ -120,11 +122,65 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
         raise ValueError("vsini must be >= 0")
 
     # Defining the position of companion
-    comp_dra_as, comp_ddec_as = other_nonlin_paras[2], other_nonlin_paras[3]
+    comp_ddec_as,comp_dra_as  = other_nonlin_paras[2], other_nonlin_paras[3]
+    # print(other_nonlin_paras)
+    # exit()
 
-    comp_spec = _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs, pixarea_arcsec2)
+    planet_model = atm_grid(atm_paras)[0]
+    if cubeobj.breads_header["DATAUNIT"] != 'MJy/sr':
+        raise TypeError("cubeobj.breads_header['DATAUNIT'] must be 'MJy/sr'")
 
-    where_trace_finite, Nd, new_mask, larger_mask_comp, Nrows, rows_ids = _extract_companion_traces(ra_array, dec_array, comp_dra_as, comp_ddec_as, radius_as, nx, data, bad_pixels, noise, comp_spec, star_func, Nrows_max, wvs)
+    if np.all(planet_model == 0):
+        raise ValueError("Something wrong in planet spectrum, all values are 0")
+    elif np.size(atm_grid_wvs) != np.size(planet_model):
+        raise ValueError(
+            f"Something wrong in planet spectrum, the wavelength grid size is {np.size(atm_grid_wvs)} while the planet model size is {np.size(planet_model)} ")
+    else:
+        if vsini != 0:
+            spinbroad_model = pyasl.fastRotBroad(atm_grid_wvs, planet_model, 0.1, vsini)
+        else:
+            spinbroad_model = planet_model
+
+        planet_f = interp1d(atm_grid_wvs, spinbroad_model, bounds_error=False, fill_value=np.nan)
+
+        comp_spec = planet_f(wvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
+        comp_spec = comp_spec * (wvs * u.um) ** 2 / const.c  # from  Flambda to Fnu
+        comp_spec = comp_spec.to(u.MJy).value
+
+    if fix_fitting_region_around_xy is None:
+        dist2comp_as = np.sqrt((ra_array - comp_dra_as) ** 2 + (dec_array - comp_ddec_as) ** 2)
+    else:
+        fix_x,fix_y = fix_fitting_region_around_xy
+        dist2comp_as = np.sqrt((ra_array - fix_x) ** 2 + (dec_array - fix_y) ** 2)
+
+    mask_comp = dist2comp_as < radius_as
+    larger_mask_comp = dist2comp_as < 3 * radius_as
+    mask_vec = np.nansum(mask_comp, axis=1) >= 50
+    rows_ids = np.where(mask_vec)[0]
+
+    new_mask = np.tile(mask_vec[:, None], (1, nx))
+
+    finite_mask = (
+        np.isfinite(data)
+        & np.isfinite(noise)
+        & np.isfinite(bad_pixels)
+        & np.isfinite(comp_spec)
+        & np.isfinite(star_func(wvs))
+    )
+
+    valid_mask = (
+        finite_mask
+        & new_mask
+        & larger_mask_comp
+        # & (noise >= ((1e-6)*np.nanmedian(noise[np.where(finite_mask)])))
+        & (noise != 0)
+    )
+
+    where_trace_finite = np.where(valid_mask)
+    Nrows = np.size(rows_ids)
+    Nd = np.size(where_trace_finite[0])
+    if Nrows > Nrows_max:
+        raise Exception("Too many rows")
 
     d = data[where_trace_finite]
     s = noise[where_trace_finite]
@@ -155,10 +211,13 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
         s_reg_speckles = np.full((Nrows, N_nodes), np.nan)
         wvs_reg_speckles = np.full((Nrows, N_nodes), np.nan)
         rows_reg_speckles = np.tile(rows_ids[:, None],(1, N_nodes)) #Transform row vector into column vector and then duplicates N_nodes times the column to have a 2d matrix
+    N_KL_tot = 0
     if wvs_KLs_f is not None:
         M_KLs = np.zeros((Nd, Nrows, len(wvs_KLs_f)))
+        N_KL_tot += len(wvs_KLs_f)
     if detec_KLs is not None:
         M_KLs_detec = np.zeros((Nd, Nrows, detec_KLs.shape[1]))
+        N_KL_tot += detec_KLs.shape[1]
 
     for _k in range(Nrows):
         where_finite_and_in_row = np.where(where_trace_finite[0] == rows_ids[_k])
@@ -166,34 +225,129 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
             continue
         M_spline = get_spline_model(x_nodes, wvs[rows_ids[_k], :], spline_degree=3)
         selec_M_spline = M_spline[where_trace_finite[1][where_finite_and_in_row], :]
-        where_del_col = np.where(np.nanmax(np.abs(selec_M_spline), axis=0) < min_spline_ampl)  # 0.01#0.00001
 
-        if np.size(where_del_col[0]) == selec_M_spline.shape[1]:
-            #Nothing usable in this row (rows_ids[_k])
-            continue
+        dotprod_M = np.dot(selec_M_spline.transpose(),selec_M_spline)
+        dotprod_M_diag = np.sqrt(np.diag(dotprod_M))
+        dotprod_M = np.abs(dotprod_M/(dotprod_M_diag[np.newaxis,:]*dotprod_M_diag[:,np.newaxis]))
+        d1 = np.diag(dotprod_M, k=1) # First off diagonal
+        is_one = d1 > (1-5e-3)#np.isclose(d1, 1)
+        not_one_idx = np.flatnonzero(~is_one)  # indices where v is NOT ~1
+        if not_one_idx.size == 0:
+            # vector is all ones
+            last_lead, first_trail = len(d1) - 1, 0
+        else:
+            last_lead = not_one_idx[0] - 1 if is_one[0] else -1  # -1 = no leading ones
+            first_trail = not_one_idx[-1] + 1 if is_one[-1] else selec_M_spline.shape[1]-1  # selec_M_spline.shape[1]-1 = no trailing ones
+        # print(last_lead, first_trail+1)
+        # # valid means val<1-1e-6
+        # # 0:15
+        selec_M_spline[:,0:last_lead+1] = 0
+        selec_M_spline[:,first_trail+1:selec_M_spline.shape[1]] = 0
 
-        selec_M_spline[:, where_del_col[0]] = 0
+        # dotprod_M2 = np.dot(selec_M_spline.transpose(),selec_M_spline)
+        # dotprod_M2_diag = np.sqrt(np.diag(dotprod_M2))
+        # dotprod_M2 = np.abs(dotprod_M2/(dotprod_M2_diag[np.newaxis,:]*dotprod_M2_diag[:,np.newaxis]))
+        #
+        # where_del_col = np.where(np.nanmax(np.abs(selec_M_spline), axis=0) < min_spline_ampl)  # 0.01#0.00001
+        # # if np.size(where_del_col[0]) == selec_M_spline.shape[1]:
+        # #     #Nothing usable in this row (rows_ids[_k])
+        # #     continue
+        # #
+        # # plt.figure(figsize=(12,5))
+        # # plt.title("{0} {1} {2}".format(rows_ids[_k],_k,selec_M_spline.shape[1]))
+        # # for l in range(selec_M_spline.shape[1]):
+        # #     if np.nanmax(selec_M_spline[:,l]) >0.5:
+        # #         continue
+        # #     if l in where_del_col[0]:
+        # #         linestyle = "--"
+        # #     else:
+        # #         linestyle= "-"
+        # #     # plt.subplot(2,1,1)
+        # #     argextr_id = np.nanargmax(np.abs(selec_M_spline[:, l]))
+        # #     plt.plot(selec_M_spline[:,l]/selec_M_spline[argextr_id, l],label=f"{l}",linestyle=linestyle)
+        # #     # plt.subplot(2,1,2)
+        # #     # plt.plot(selec_M_spline[:,l]/s[where_finite_and_in_row[0]],label=f"{l}",linestyle=linestyle)
+        # # plt.legend()
+        #
+        # plt.figure()
+        # plt.subplot(1,2,1)
+        # plt.imshow(dotprod_M)
+        # plt.subplot(1,2,2)
+        # plt.imshow(dotprod_M2)
+        #
+        # # plt.figure()
+        # # plt.plot(d1)
+        #
+        # plt.show()
+
+        # selec_M_spline[:, where_del_col[0]] = 0
         M_speckles[where_finite_and_in_row[0], _k, :] = selec_M_spline
-        if regularization == "user":
+        if regularization == "user" and reg_mean_map is not None and reg_std_map is not None:
             d_reg_speckles[_k, :] = reg_mean_map[rows_ids[_k], :]
-            d_reg_speckles[_k, where_del_col[0]] = np.nan
             s_reg_speckles[_k, :] = reg_std_map[rows_ids[_k], :]
-            s_reg_speckles[_k, where_del_col[0]] = np.nan
             wvs_reg_speckles[_k, :] = x_nodes
-            wvs_reg_speckles[_k, where_del_col[0]] = np.nan
+            # d_reg_speckles[_k, where_del_col[0]] = np.nan
+            # s_reg_speckles[_k, where_del_col[0]] = np.nan
+            # wvs_reg_speckles[_k, where_del_col[0]] = np.nan
+            d_reg_speckles[_k, 0:last_lead+1] = np.nan
+            s_reg_speckles[_k, 0:last_lead+1] = np.nan
+            wvs_reg_speckles[_k, 0:last_lead+1] = np.nan
+            d_reg_speckles[_k, first_trail+1::] = np.nan
+            s_reg_speckles[_k, first_trail+1::] = np.nan
+            wvs_reg_speckles[_k, first_trail+1::] = np.nan
 
-        if wvs_KLs_f is not None:
+    if wvs_KLs_f is not None:
+        for _k in range(Nrows):
+            where_finite_and_in_row = np.where(where_trace_finite[0] == rows_ids[_k])
+            if np.size(where_finite_and_in_row[0]) <= N_KL_tot:
+                continue
             for KLid, KL_f in enumerate(wvs_KLs_f):
-                KL_vec = KL_f(wvs[rows_ids[_k], :])
-                selec_KL_vec = KL_vec[where_trace_finite[1][where_finite_and_in_row]]
-                M_KLs[where_finite_and_in_row[0], _k, KLid] = selec_KL_vec
+                max_val_KL = np.nanmax(np.abs(KL_f(np.linspace(np.nanmin(w),np.nanmax(w),2000))))
 
-        if detec_KLs is not None:
+                KL_vec = KL_f(wvs[rows_ids[_k], :])
+                # plt.plot(KL_vec)
+                selec_KL_vec = KL_vec[where_trace_finite[1][where_finite_and_in_row]]
+                # plt.plot(selec_KL_vec)
+                # plt.show()
+
+
+                if (np.nanmax(np.abs(selec_KL_vec)) < 1e-2*max_val_KL) or (np.sum(selec_KL_vec > (1e-2*max_val_KL)) <= N_KL_tot):
+                    M_KLs[where_finite_and_in_row[0], _k, KLid] = 0
+                else:
+                    M_KLs[where_finite_and_in_row[0], _k, KLid] = selec_KL_vec
+                # M_KLs[where_finite_and_in_row[0], _k, KLid] = selec_KL_vec
+
+            # _tmp = M_KLs[where_finite_and_in_row[0], _k, :]
+            # dotprod_M = np.dot(_tmp.transpose(),_tmp)
+            # dotprod_M_diag = np.sqrt(np.diag(dotprod_M))
+            # dotprod_M = np.abs(dotprod_M/(dotprod_M_diag[np.newaxis,:]*dotprod_M_diag[:,np.newaxis]))
+            # plt.figure()
+            # plt.imshow(dotprod_M)
+            # # plt.plot(_tmp[:,0])
+            # # plt.plot(_tmp[:,1])
+            # # plt.plot(_tmp[:,2])
+            # # plt.plot(_tmp[:,3])
+            # plt.show()
+
+    if detec_KLs is not None:
+        max_val_KL = np.nanmax(np.abs(detec_KLs[where_trace_finite[1][where_finite_and_in_row], :]))
+        for _k in range(Nrows):
+            where_finite_and_in_row = np.where(where_trace_finite[0] == rows_ids[_k])
+            if np.size(where_finite_and_in_row[0]) <= N_KL_tot:
+                continue
             selec_KL_vec = detec_KLs[where_trace_finite[1][where_finite_and_in_row], :]
-            M_KLs_detec[where_finite_and_in_row[0], _k, :] = selec_KL_vec
+            if (np.nanmax(np.abs(selec_KL_vec)) < 1e-2*max_val_KL) or (np.sum(selec_KL_vec > (1e-2*max_val_KL)) <= N_KL_tot):
+                M_KLs_detec[where_finite_and_in_row[0], _k, :] = 0
+            else:
+                M_KLs_detec[where_finite_and_in_row[0], _k, :] = selec_KL_vec
+
+    if stellar_features0 is None:
+        stellar_features = star_func(w)[:, None]
+    else:
+        stellar_features = (stellar_features0[where_trace_finite] * star_func(w))[:, None]
 
     M_speckles = np.reshape(M_speckles, (Nd, Nrows * N_nodes))
-    M_speckles = M_speckles * star_func(w)[:, None]
+    M_speckles = M_speckles * stellar_features
 
     if wvs_KLs_f is not None:
         M_KLs = np.reshape(M_KLs, (Nd, Nrows * len(wvs_KLs_f)))
@@ -205,11 +359,24 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
     else:
         M_KLs_detec = None
 
-    comp_model = cubeobj.webbpsf_interp((x - comp_dra_as) * cubeobj.webbpsf_wv0 / w,
-                                        (y - comp_ddec_as) * cubeobj.webbpsf_wv0 / w) * comp_spec #multiply off axis PSF by the companion spectrum
+    comp_model = cubeobj.webbpsf_interp((x - comp_dra_as) * cubeobj.breads_header['WBPSFWV0'] / w,
+                                        (y - comp_ddec_as) * cubeobj.breads_header['WBPSFWV0'] / w)
+    if use_stpsf:
+        # Get the median pixel area for the point source
+        rescale_flux = np.nansum(pixarea_steradians[where_trace_finite]*comp_model)/np.nansum(comp_model)
+        comp_model /= rescale_flux # to convert fitted fluxes from MJy/sr to MJy
+
+    # multiply off axis PSF by the companion spectrum, and return companion flux in uJy instead of MJy
+    comp_model = comp_model * comp_spec / 1e12
 
     # combine planet model with speckle model
-    M = _concatenate_matrices(M_speckles, comp_model, wvs_KLs_f, detec_KLs, M_KLs, M_KLs_detec)
+    M = np.concatenate([comp_model[:, None], M_speckles], axis=1)
+    # M = M_speckles
+
+    if wvs_KLs_f is not None:
+        M = np.concatenate([M, M_KLs], axis=1)
+    if detec_KLs is not None:
+        M = np.concatenate([M, M_KLs_detec], axis=1)
 
     if regularization == "user":
         #Vectorize the 2d arrays for regularization
@@ -247,64 +414,6 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj, atm_grid=None, atm_g
 
     return d, M, s, extra_outputs
 
-def _interpolate_companion_spectrum(cubeobj, atm_grid, atm_grid_wvs, atm_paras, vsini, rv, wvs, pixarea):
-    """Helper function to interpolate companion spectrum"""
-    planet_model = atm_grid(atm_paras)[0]
-    if cubeobj.data_unit != 'MJy':
-        raise TypeError("cubeobj.data_unit must be 'MJy', try running the convert_MJy_per_sr_to_MJy preprocessing step before")
-
-    if np.all(planet_model == 0):
-        raise ValueError("Something wrong in planet spectrum, all values are 0")
-    elif np.size(atm_grid_wvs) != np.size(planet_model):
-        raise ValueError(
-            f"Something wrong in planet spectrum, the wavelength grid size is {np.size(atm_grid_wvs)} while the planet model size is {np.size(planet_model)} ")
-    else:
-        if vsini != 0:
-            spinbroad_model = pyasl.fastRotBroad(atm_grid_wvs, planet_model, 0.1, vsini)
-        else:
-            spinbroad_model = planet_model
-
-        planet_f = interp1d(atm_grid_wvs, spinbroad_model, bounds_error=False, fill_value=np.nan)
-
-        comp_spec = planet_f(wvs * (1 - (rv - cubeobj.bary_RV) / const.c.to('km/s').value)) * (u.W / u.m ** 2 / u.um)
-        comp_spec = comp_spec * pixarea / cubeobj.webbpsf_spaxel_area  # normalized to peak flux
-        comp_spec = comp_spec * (wvs * u.um) ** 2 / const.c  # from  Flambda to Fnu
-        comp_spec = comp_spec.to(u.MJy).value
-
-    return comp_spec
-
-def _extract_companion_traces(ra_array, dec_array, comp_dra_as, comp_ddec_as, radius_as, nx, data, bad_pixels, noise, comp_spec, star_func, Nrows_max, wvs):
-    # extract planet trace in the detector 2D space
-    dist2comp_as = np.sqrt((ra_array - comp_dra_as) ** 2 + (dec_array - comp_ddec_as) ** 2)
-
-    mask_comp = dist2comp_as < radius_as
-    larger_mask_comp = dist2comp_as < 3 * radius_as
-    mask_vec = np.nansum(mask_comp, axis=1) != 0
-    rows_ids = np.where(mask_vec)[0]
-
-    new_mask = np.tile(mask_vec[:, None], (1, nx))
-
-    finite_mask = (
-        np.isfinite(data)
-        & np.isfinite(bad_pixels)
-        & np.isfinite(comp_spec)
-        & np.isfinite(star_func(wvs))
-    )
-
-    valid_mask = (
-        finite_mask
-        & new_mask
-        & larger_mask_comp
-        & (noise != 0)
-    )
-
-    where_trace_finite = np.where(valid_mask)
-    Nrows = np.size(rows_ids)
-    Nd = np.size(where_trace_finite[0])
-    if Nrows > Nrows_max:
-        raise Exception("Too many rows")
-
-    return where_trace_finite, Nd, new_mask, larger_mask_comp, Nrows, rows_ids
 
 def _create_nodes(cubeobj, nodes):
     """Manage all the different cases to define the position of the spline nodes"""
@@ -322,13 +431,3 @@ def _create_nodes(cubeobj, nodes):
         raise ValueError("Unknown format for nodes.")
 
     return x_nodes, N_nodes
-
-def _concatenate_matrices(M_speckles, comp_model, wvs_KLs_f, detec_KLs, M_KLs, M_KLs_detec):
-    M = np.concatenate([comp_model[:, None], M_speckles], axis=1)
-
-    if wvs_KLs_f is not None:
-        M = np.concatenate([M, M_KLs], axis=1)
-    if detec_KLs is not None:
-        M = np.concatenate([M, M_KLs_detec], axis=1)
-
-    return M
