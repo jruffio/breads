@@ -1,6 +1,6 @@
 import os, glob
 import astropy.utils.data
-import breads.jwst_tools.mast
+import breads.jwst_reduction.mast
 
 # Functions for shared test infrastructure for JWST reduction tests
 # These are used in both the test_jwst_miri.py and test_jwst_nirspec.py files, to avoid code duplication
@@ -37,6 +37,6 @@ def download_from_mast(filenames, test_output_dir):
     """ Test we can download one file; this also obtains the input data for subsequent tests.
     """
     for test_file in filenames:
-        breads.jwst_tools.mast.download_one_file(test_file, output_dir=test_output_dir, verbose=True)
+        breads.jwst_reduction.mast.download_one_file(test_file, output_dir=test_output_dir, verbose=True)
         assert os.path.exists(os.path.join(test_output_dir, test_file))
 

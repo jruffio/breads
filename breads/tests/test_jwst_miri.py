@@ -25,7 +25,7 @@ import pytest
 jwst = pytest.importorskip("jwst")
 
 import shared_test_infrastructure
-from breads.jwst_tools.reduction_utils import run_stage1_miri, run_stage2_miri
+from breads.jwst_reduction.reduction_utils import run_stage1_miri, run_stage2_miri
 
 @pytest.fixture(scope="module")
 def test_output_dir():
