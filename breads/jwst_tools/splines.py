@@ -739,7 +739,7 @@ def _task_evaluate_3dspline(paras):
 def evaluate_3dspline_grid(x_vec,y_vec,wv_sampling,spline3d_filename,
                            N_overlap_nodes = 2,max_cores = 1,
                       stamp_size = None):
-    wv_grid,y_grid,x_grid = np.meshgrid(wv_sampling,x_vec,y_vec,indexing='ij' )
+    wv_grid,y_grid,x_grid = np.meshgrid(wv_sampling,y_vec,x_vec,indexing='ij' )
     stellar_features = None
     return evaluate_3dspline(x_grid,y_grid,wv_grid,
                           spline3d_filename,
