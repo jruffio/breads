@@ -1210,7 +1210,7 @@ def recenter_coordinates_of_sequence_nirspec(cal_files, utils_dir,combined_contn
         bestfit_paras, data, bestfit_model, residuals = fitpsf(regwvs_combdataobj, use_stpsf=use_stpsf,use_breadspsf=use_breadspsf,
                                                                init_centroid=init_centroid,
                                                                IWA=IWA, OWA=OWA, out_filename=fitpsf_filename,
-                                                               overwrite=False, mppool=mppool, debug_wv_range=None,
+                                                               overwrite=overwrite, mppool=mppool, debug_wv_range=None,
                                                                stis_spectrum=stis_spectrum, poly_deg_coords=poly_deg_coords,
                                                                    wv_min = wv_min, wv_max = wv_max)
     return poly_centroid_filename,poly_fluxcal_filename
@@ -1356,7 +1356,7 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
             bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=use_stpsf,use_breadspsf=use_breadspsf,
                                                                    init_centroid=_init_centroid,
                                                                    IWA=IWA, OWA=OWA, out_filename=fitpsf_filename_perframe,
-                                                                   overwrite=False, mppool=mppool, debug_wv_range=None,
+                                                                   overwrite=overwrite, mppool=mppool, debug_wv_range=None,
                                                                    stis_spectrum=stis_spectrum,
                                                                    poly_deg_coords=poly_deg_coords,
                                                                    wv_min = wv_min, wv_max = wv_max)
@@ -4648,7 +4648,7 @@ def recenter_coordinates_per_frame_miri(cal_files, channel, utils_dir,combined_c
             bestfit_paras, data, bestfit_model, residuals = fitpsf(dataobj, use_stpsf=use_stpsf,use_breadspsf=use_breadspsf,
                                                                    init_centroid=_init_centroid,
                                                                    IWA=IWA, OWA=OWA, out_filename=fitpsf_filename_perframe,
-                                                                   overwrite=False, mppool=mppool, debug_wv_range=None,
+                                                                   overwrite=overwrite, mppool=mppool, debug_wv_range=None,
                                                                    stis_spectrum=stis_spectrum,
                                                                    poly_deg_coords=poly_deg_coords,
                                                                    wv_min = wv_min, wv_max = wv_max)
