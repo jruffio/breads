@@ -2086,7 +2086,7 @@ def cube_extraction_miri(cal_files, channel, sub_band, utils_dir, out_dir, combi
     splitbasename = os.path.basename(cal_files[0]).split("_")
 
     build_cube_filename = os.path.join(out_dir, splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[
-        3] + "_" + channel_band + "_cube.fits")
+        3] + "_" + channel_band + "_" + suffix + "_cube.fits")
     if not overwrite and os.path.exists(build_cube_filename):
         with fits.open(build_cube_filename) as hdulist:
             flux_cube = hdulist['FLUX'].data
