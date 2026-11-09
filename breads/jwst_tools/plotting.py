@@ -204,7 +204,11 @@ def point_cloud_interpolator_2d(x,y,wv_sampling, data,bad_pixels, wv0):
         x = x[where_good[0], wv0_index]
         y = y[where_good[0], wv0_index]
         z = data[where_good[0], wv0_index]
-        filtered_triangles = filter_big_triangles(x, y, 0.2)
+        # Maximum edge length: 0.2 arcsec, or twice the median edge length for sparser point clouds (e.g. a single
+        # MIRI frame, whose ~0.2 arcsec pixels would otherwise leave no triangle)
+        full_tri = tri.Triangulation(x, y)
+        edges = np.hypot(np.diff(x[full_tri.edges], axis=1), np.diff(y[full_tri.edges], axis=1))
+        filtered_triangles = filter_big_triangles(x, y, max(0.2, 2 * np.median(edges)))
         # Create filtered triangulation
         filtered_tri = tri.Triangulation(x, y, triangles=filtered_triangles)
         # Perform LinearTriInterpolator for filtered triangulation
