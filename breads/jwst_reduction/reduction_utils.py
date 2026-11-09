@@ -2126,6 +2126,9 @@ def cube_extraction_miri(cal_files, channel, sub_band, utils_dir, out_dir, combi
                 _task = ["compute_starsubtraction", {"threshold_badpix": 10, "mppool": mppool,
                                                      "combined_contnorm_filename": combined_contnorm_spec_filename,
                                                      "load_starspectrum_contnorm": None}]
+            else:
+                _task = ["compute_advanced_badpix", {"threshold_badpix": 10, "mppool": mppool,
+                                                     "combined_contnorm_filename": combined_contnorm_spec_filename}]
 
             preproc_task_list.append(_task)
             dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
