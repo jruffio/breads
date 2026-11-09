@@ -4646,6 +4646,9 @@ def recenter_coordinates_per_frame_miri(cal_files, channel, utils_dir,combined_c
                     where_pl = dataobj.where_point_source([ra_pl / 1000., dec_pl / 1000.], 0.16)
                     dataobj.bad_pixels[where_pl] = np.nan
 
+            # undoing the rough coordinate correction because we don't want this to bias the centroid later
+            if ra_dec_point_sources is not None:
+                dataobj.apply_coords_offset(-_init_centroid)
 
             ######
             # Fit the whole wavelength range
