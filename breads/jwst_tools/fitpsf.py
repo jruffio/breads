@@ -149,8 +149,8 @@ def fitpsf(dataobj, ref_dataobj = None,
         psf_X = hdulist['X'].data
         psf_Y = hdulist['Y'].data
         _wv_sampling = hdulist['WAVE'].data
-        if not hasattr(dataobj, "wv_sampling"):
-            if not np.allclose(dataobj.wv_sampling, _wv_sampling):
+        if getattr(dataobj, "wv_sampling", None) is not None:
+            if np.size(dataobj.wv_sampling) != np.size(_wv_sampling) or not np.allclose(dataobj.wv_sampling, _wv_sampling):
                 raise Exception("BreadsPSF wavelength sampling is different from the one in the data object.")
         stpsfX = np.tile(psf_X[None, :, :], (stpsfs.shape[0], 1, 1))
         stpsfY = np.tile(psf_Y[None, :, :], (stpsfs.shape[0], 1, 1))
@@ -916,8 +916,8 @@ def project_psf_model(dataobj, save_utils=False,centroid = None,OWA=None,spectru
 
     if mode == "webbpsf" or mode == "breadspsf":
         if interpgrid is None:
-            if not hasattr(dataobj, "wv_sampling"):
-                if not np.allclose(dataobj.wv_sampling, _wv_sampling):
+            if getattr(dataobj, "wv_sampling", None) is not None:
+                if np.size(dataobj.wv_sampling) != np.size(_wv_sampling) or not np.allclose(dataobj.wv_sampling, _wv_sampling):
                     raise Exception("BreadsPSF wavelength sampling is different from the one in the data object.")
             # print(_wv_sampling)
             # print(psf_Y_vec)
