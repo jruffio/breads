@@ -2033,6 +2033,7 @@ def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filena
         # plt.plot(ASDI_model[750,:])
         # plt.show()
         combdataobj.data -= ASDI_model
+        combdataobj.bad_pixels[~np.isfinite(ASDI_model)] = np.nan
 
     out = build_cube(combdataobj, x_vec, y_vec,
                      use_breadspsf=use_breadspsf, use_stpsf=use_stpsf,
