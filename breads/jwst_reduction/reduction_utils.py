@@ -2025,7 +2025,7 @@ def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filena
 
         # ASDI_contnorm_3dspline_filename,ASDI_starsub_3dspline_filename
         stellar_features = star_func(combdataobj.wavelengths)
-        max_cores = mppool._processes
+        max_cores = 1 if mppool is None else mppool._processes
         _out = evaluate_3dspline_pointcloud(combdataobj, ASDI_starsub_3dspline_filename, max_cores=max_cores,
                                             stellar_features=stellar_features)
         ASDI_model, _ = _out
