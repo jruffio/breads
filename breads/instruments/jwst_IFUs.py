@@ -734,12 +734,12 @@ class JWST_IFUs(ABC):
         y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[1], endpoint=True)
         webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
 
-        wpsfs_additional_header = {'PIXELSCL': pixelscale, 'im_mask': image_mask,
+        wpsfs_additional_header = {'PIXELSCL': IFU.pixelscale, 'im_mask': image_mask,
                         'oversamp': oversample, 'DATE-BEG': self.priheader['DATE-BEG']}
         self.breads_header.update(wpsfs_additional_header)
 
 
-        self.breads_header['WPSFAREA'] = pixelscale ** 2
+        self.breads_header['WPSFAREA'] = IFU.pixelscale ** 2
         psf_wv0_id = np.argmin(np.abs(wv_sampling-np.nanmedian(self.wavelengths)))
         self.webbpsf_im = wepsfs[psf_wv0_id]
         self.webbpsf_X = webbpsf_X
