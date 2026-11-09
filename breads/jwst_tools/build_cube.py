@@ -57,7 +57,7 @@ def _build_cube_task(inputs):
             # else:
             #     raise ValueError('ifu_name must be either nirspec or miri')
 
-            where_finite = np.where(np.isfinite(Zbp) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
+            where_finite = np.where(np.isfinite(Zbp) * np.isfinite(Z) * np.isfinite(Zerr) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
 
             if np.size(where_finite[0]) < N_pix_min:
                 mfflux_arr[k,l] = np.nan
