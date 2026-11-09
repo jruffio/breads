@@ -1264,9 +1264,9 @@ def recenter_coordinates_per_frame_nirspec(cal_files, utils_dir,combined_contnor
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
 
-    if use_breadspsf is not None:
-        if isinstance(use_breadspsf, bool) and use_breadspsf:
-            use_stpsf = False
+    # use_breadspsf can be True (default BreadsPSF file) or a BreadsPSF file name; only False/None keep STPSF
+    if use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
+        use_stpsf = False
 
     if IWA_init is None:
         IWA_init = IWA
