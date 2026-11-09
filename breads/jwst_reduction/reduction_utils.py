@@ -173,8 +173,7 @@ def run_stage1_nirspec(uncal_files, output_dir, overwrite=False, maximum_cores="
     """
     from jwst.pipeline import Detector1Pipeline
 
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
     time0 = time.perf_counter()
 
@@ -267,8 +266,7 @@ def run_stage2_nirspec(rate_files, output_dir, skip_cubes=True, overwrite=False,
     from jwst.pipeline import Spec2Pipeline
 
     # We need to check that the desired output directories exist, and if not create them
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
 
         # Start a timer to keep track of runtime
     time0 = time.perf_counter()
@@ -1055,10 +1053,8 @@ def clean_rate_nirspec(rate_files, stage2_dir, output_dir, N_nodes=40, clean_1f_
 
     """
     # We need to check that the desired output directories exist, and if not create them
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-    if not os.path.exists(utils_dir):
-        os.makedirs(utils_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(utils_dir, exist_ok=True)
 
     # Start a timer to keep track of runtime
     time0 = time.perf_counter()
@@ -1848,7 +1844,7 @@ def compute_3dsplines_miri(cal_files, channel, utils_dir, targetname, combined_c
     return combdataobj
 
 
-def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filename, coords_filename_filter,
+def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filename, coords_filename_filter=None, coords_filename=None,
                     mode="raw", suffix=None, contnorm_suffix=None,
                     x_vec=None, y_vec=None, wv_sampling=None,
                     mask_charge_transfer_radius=None, ra_dec_point_sources=None,
@@ -1943,10 +1939,13 @@ def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filena
             preproc_task_list.append(_task)
             dataobj.run_preproc_list(save_utils=True, load_utils=True, preproc_task_list=preproc_task_list)
 
-            if coords_filename_filter is not None:
-                coords_filename = \
-                glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+            # Recenter the coordinates with a single centroid file for all frames, or with the per-frame centroid files, if any
+            if coords_filename is not None:
                 dataobj.apply_coords_offset(coords_filename=coords_filename)
+            elif coords_filename_filter is not None:
+                _coords_filename = \
+                glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
+                dataobj.apply_coords_offset(coords_filename=_coords_filename)
 
             if "RDI" in mode:
                 dataobj.compute_interpdata_regwvs(wv_sampling=wv_sampling, save_utils=False)
@@ -2175,7 +2174,7 @@ def cube_extraction_miri(cal_files, channel, sub_band, utils_dir, out_dir, combi
     return flux_cube, fluxerr_cube, x_grid, y_grid, wv_sampling
 
 
-def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
+def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None, extract_speckles=False):
     """
     Extract the spectrum of one or more point sources (planets) from an IFU cube.
     A separate FITS file is written for each planet. An interactive Plotly HTML
@@ -2198,12 +2197,19 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
         plots. Defaults to "0", "1", "2", ... if not provided. Ignored (no
         filename suffix added) when only a single planet is given and labels
         is not provided.
+    extract_speckles : bool, optional
+        If True, also extract the speckle spectra in an annulus at the separation
+        of each companion and their standard deviation. This requires a cube
+        covering that annulus. If False (default), the speckle extensions (STD_MJy, SPECKLES,
+        STD_FLAM, SPECKLES_FLAM) are not written to the FITS file and the speckles
+        are not plotted in the preview.
 
     Returns
     -------
     results : list of dict
         One entry per planet, each with keys:
         'label', 'out_filename', 'wv_sampling', 'spectrum_Flambda', 'speckle_std_Flambda'
+        ('speckle_std_Flambda' is None if extract_speckles is False)
     """
     # --- Normalize input: allow either a single (x, y) tuple or a list of them ---
     if len(xy_coords) == 2 and np.isscalar(xy_coords[0]) and np.isscalar(xy_coords[1]):
@@ -2291,37 +2297,42 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
         r2comp_grid = np.sqrt((x_grid - x) ** 2 + (y_grid - y) ** 2)
         kmax, lmax = np.unravel_index(np.nanargmin(r2comp_grid), r2comp_grid.shape)
 
-        sep_comp = np.sqrt(x ** 2 + y ** 2)
-        speckles_mask = (r2star_grid > (sep_comp - 0.05)) * (r2star_grid < (sep_comp + 0.05) * (r2comp_grid > 0.3))
-        whereannulus = np.where(speckles_mask)
-
-        speckles = flux_cube[:, whereannulus[0], whereannulus[1]]
-        speckle_std = np.nanstd(speckles, axis=1)
-        speckle_std[np.where(speckle_std == 0)] = np.nan
-
         spectrum = flux_cube[:, kmax, lmax]
         err = fluxerr_cube[:, kmax, lmax]
 
         spectrum_Flambda = to_Flambda(spectrum)
         err_Flambda = to_Flambda(err)
-        speckle_std_Flambda = to_Flambda(speckle_std)
-        speckles_Flambda = (speckles * u.MJy * const.c / (wv_sampling[:, None] * u.um) ** 2).to(u.W * u.m ** -2 / u.um).value
-
         spectrum_Jy = (spectrum * u.MJy).to(u.Jy).value
-        speckle_std_Jy = (speckle_std * u.MJy).to(u.Jy).value
-        speckles_Jy = (speckles * u.MJy).to(u.Jy).value
+
+        if extract_speckles:
+            sep_comp = np.sqrt(x ** 2 + y ** 2)
+            speckles_mask = (r2star_grid > (sep_comp - 0.05)) * (r2star_grid < (sep_comp + 0.05) * (r2comp_grid > 0.3))
+            whereannulus = np.where(speckles_mask)
+
+            speckles = flux_cube[:, whereannulus[0], whereannulus[1]]
+            speckle_std = np.nanstd(speckles, axis=1)
+            speckle_std[np.where(speckle_std == 0)] = np.nan
+
+            speckle_std_Flambda = to_Flambda(speckle_std)
+            speckles_Flambda = (speckles * u.MJy * const.c / (wv_sampling[:, None] * u.um) ** 2).to(u.W * u.m ** -2 / u.um).value
+            speckle_std_Jy = (speckle_std * u.MJy).to(u.Jy).value
+            speckles_Jy = (speckles * u.MJy).to(u.Jy).value
+        else:
+            speckle_std_Flambda = None
 
         # --- Write FITS output for this planet ---
         hdulist_out = fits.HDUList()
         hdulist_out.append(fits.ImageHDU(data=wv_sampling, name='WAVE'))
         hdulist_out.append(fits.ImageHDU(data=spectrum, name='FLUX_MJy'))
         hdulist_out.append(fits.ImageHDU(data=err, name='ERR_MJy'))
-        hdulist_out.append(fits.ImageHDU(data=speckle_std, name='STD_MJy'))
-        hdulist_out.append(fits.ImageHDU(data=speckles, name='SPECKLES'))
+        if extract_speckles:
+            hdulist_out.append(fits.ImageHDU(data=speckle_std, name='STD_MJy'))
+            hdulist_out.append(fits.ImageHDU(data=speckles, name='SPECKLES'))
         hdulist_out.append(fits.ImageHDU(data=spectrum_Flambda, name='FLUX_FLAM'))
         hdulist_out.append(fits.ImageHDU(data=err_Flambda, name='ERR_FLAM'))
-        hdulist_out.append(fits.ImageHDU(data=speckle_std_Flambda, name='STD_FLAM'))
-        hdulist_out.append(fits.ImageHDU(data=speckles_Flambda, name='SPECKLES_FLAM'))
+        if extract_speckles:
+            hdulist_out.append(fits.ImageHDU(data=speckle_std_Flambda, name='STD_FLAM'))
+            hdulist_out.append(fits.ImageHDU(data=speckles_Flambda, name='SPECKLES_FLAM'))
         if wv_nodes is not None:
             hdulist_out.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
         hdulist_out[0].header['LABEL'] = label
@@ -2334,73 +2345,80 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None):
         hdulist_out.close()
 
         # --- 1D spectrum: add traces for this planet to the shared Plotly figure ---
-        upper = spectrum_Flambda + speckle_std_Flambda
-        lower = spectrum_Flambda - speckle_std_Flambda
-        # Shaded noise band via the 'tonexty' pattern: an invisible upper-bound
-        # trace, followed by a lower-bound trace that fills up to the previous one.
-        # This is more robust to NaN gaps than the 'toself' polygon-concatenation
-        # trick, which can self-intersect and balloon out where speckle_std is NaN.
-        N_speckles = speckles_Flambda.shape[1]
-        speckle_subset = speckles_Flambda[:, ::N_speckles // 5]
-        for i in range(speckle_subset.shape[1]):
-            fig_spec.add_trace(go.Scatter(
-                x=wv_sampling, y=speckle_subset[:, i], mode='lines',
-                name="speckles " + label, legendgroup=label,
-                opacity=0.5, showlegend=(i == 0),
-                line=dict(color="grey", width=1),
-            ), row=1, col=1)
+        if extract_speckles:
+            N_speckles = speckles_Flambda.shape[1]
+            speckle_subset = speckles_Flambda[:, ::max(N_speckles // 5, 1)]
+            for i in range(speckle_subset.shape[1]):
+                fig_spec.add_trace(go.Scatter(
+                    x=wv_sampling, y=speckle_subset[:, i], mode='lines',
+                    name="speckles " + label, legendgroup=label,
+                    opacity=0.5, showlegend=(i == 0),
+                    line=dict(color="grey", width=1),
+                ), row=1, col=1)
         if wv_nodes is not None:
+            # Nodes are drawn above the spectrum, offset by the speckle std if available, else by the error
+            node_offset_Flambda = speckle_std_Flambda if extract_speckles else err_Flambda
             marker = dict(symbol='line-ns', size=12, line=dict(color='black', width=2))
             fig_spec.add_trace(go.Scatter(
-                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Flambda + 5*speckle_std_Flambda), mode='markers',
+                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Flambda + 5*node_offset_Flambda), mode='markers',
                 marker=marker,
                 showlegend=False, hoverinfo='skip', legendgroup=label,
             ), row=1, col=1)
-        fig_spec.add_trace(go.Scatter(
-            x=wv_sampling, y=upper, mode='lines', line=dict(width=0),
-            connectgaps=True,
-            showlegend=False, hoverinfo='skip', legendgroup=label,
-        ), row=1, col=1)
-        fig_spec.add_trace(go.Scatter(
-            x=wv_sampling, y=lower, mode='lines', line=dict(width=0),
-            fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
-            connectgaps=True,
-            showlegend=False, hoverinfo='skip', legendgroup=label,
-        ), row=1, col=1)
+        if extract_speckles:
+            upper = spectrum_Flambda + speckle_std_Flambda
+            lower = spectrum_Flambda - speckle_std_Flambda
+            # Shaded noise band via the 'tonexty' pattern: an invisible upper-bound
+            # trace, followed by a lower-bound trace that fills up to the previous one.
+            # This is more robust to NaN gaps than the 'toself' polygon-concatenation
+            # trick, which can self-intersect and balloon out where speckle_std is NaN.
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=upper, mode='lines', line=dict(width=0),
+                connectgaps=True,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=1, col=1)
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=lower, mode='lines', line=dict(width=0),
+                fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
+                connectgaps=True,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=1, col=1)
         fig_spec.add_trace(go.Scatter(
             x=wv_sampling, y=spectrum_Flambda, mode='lines', name=label,
             legendgroup=label, line=dict(color=color, width=2),
         ), row=1, col=1)
 
         # --- Same panel, in Jansky, added below the Flambda panel ---
-        upper_Jy = spectrum_Jy + speckle_std_Jy
-        lower_Jy = spectrum_Jy - speckle_std_Jy
-        speckle_subset_Jy = speckles_Jy[:, ::N_speckles // 5]
-        for i in range(speckle_subset_Jy.shape[1]):
-            fig_spec.add_trace(go.Scatter(
-                x=wv_sampling, y=speckle_subset_Jy[:, i], mode='lines',
-                name="speckles " + label, legendgroup=label,
-                opacity=0.5, showlegend=False,
-                line=dict(color="grey", width=1),
-            ), row=2, col=1)
+        if extract_speckles:
+            speckle_subset_Jy = speckles_Jy[:, ::max(N_speckles // 5, 1)]
+            for i in range(speckle_subset_Jy.shape[1]):
+                fig_spec.add_trace(go.Scatter(
+                    x=wv_sampling, y=speckle_subset_Jy[:, i], mode='lines',
+                    name="speckles " + label, legendgroup=label,
+                    opacity=0.5, showlegend=False,
+                    line=dict(color="grey", width=1),
+                ), row=2, col=1)
         if wv_nodes is not None:
+            node_offset_Jy = speckle_std_Jy if extract_speckles else (err * u.MJy).to(u.Jy).value
             marker = dict(symbol='line-ns', size=12, line=dict(color='black', width=2))
             fig_spec.add_trace(go.Scatter(
-                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Jy + 5*speckle_std_Jy), mode='markers',
+                x=wv_nodes, y=np.zeros(wv_nodes.shape)+np.nanmean(spectrum_Jy + 5*node_offset_Jy), mode='markers',
                 marker=marker,
                 showlegend=False, hoverinfo='skip', legendgroup=label,
             ), row=2, col=1)
-        fig_spec.add_trace(go.Scatter(
-            x=wv_sampling, y=upper_Jy, mode='lines', line=dict(width=0),
-            connectgaps=True,
-            showlegend=False, hoverinfo='skip', legendgroup=label,
-        ), row=2, col=1)
-        fig_spec.add_trace(go.Scatter(
-            x=wv_sampling, y=lower_Jy, mode='lines', line=dict(width=0),
-            fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
-            connectgaps=True,
-            showlegend=False, hoverinfo='skip', legendgroup=label,
-        ), row=2, col=1)
+        if extract_speckles:
+            upper_Jy = spectrum_Jy + speckle_std_Jy
+            lower_Jy = spectrum_Jy - speckle_std_Jy
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=upper_Jy, mode='lines', line=dict(width=0),
+                connectgaps=True,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=2, col=1)
+            fig_spec.add_trace(go.Scatter(
+                x=wv_sampling, y=lower_Jy, mode='lines', line=dict(width=0),
+                fill='tonexty', fillcolor=hex_to_rgba(color, 0.15),
+                connectgaps=True,
+                showlegend=False, hoverinfo='skip', legendgroup=label,
+            ), row=2, col=1)
         fig_spec.add_trace(go.Scatter(
             x=wv_sampling, y=spectrum_Jy, mode='lines', name=label,
             legendgroup=label, showlegend=False, line=dict(color=color, width=2),
@@ -2613,8 +2631,8 @@ def compute_breads_flatfield(cal_files, utils_dir,combined_contnorm_spec_filenam
 def compute_snr_grid(cal_files, utils_dir, out_dir,
                     combined_contnorm_spec_filename,
                      photfilter_filename,
-                    coords_filename=None,coords_filename_filter=None,centroid_per_frame=False,
-                    model_dict=None,model_grid_h5py=None,grid_paras=None,
+                    coords_filename=None,coords_filename_filter=None,
+                    model_dict=None,model_grid_h5py=None,grid_paras=None,grid_para_names=("temps","loggs"),
                      N_KL=3,
                     suffix=None,contnorm_suffix=None,
                     x_vec=None,y_vec=None,rv_vec=None,
@@ -2733,7 +2751,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
 
         if coords_filename is not None:
             dataobj.apply_coords_offset(coords_filename = coords_filename)
-        elif coords_filename_filter is not None and not centroid_per_frame:
+        elif coords_filename_filter is not None:
             _coords_filename = glob(os.path.join(utils_dir,os.path.basename(dataobj.filename).replace(".fits", coords_filename_filter)))[0]
             dataobj.apply_coords_offset(coords_filename = _coords_filename)
         # coords_filename = glob(os.path.join(utils_dir, os.path.basename(filename).replace(".fits", coords_filename_filter)))[0]
@@ -2884,28 +2902,23 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
 
                 # plt.plot(grid_wvs, grid_specs[1, 5, 1, :])
                 # plt.show()
-                # Number of extensions that are neither "wvs" nor "spec"
-                n_other = sum(1 for name in hf.keys() if name not in ("wvs", "spec"))
-                # print("Number of other extensions:", n_other)
-
+                # grid_para_names lists the hdf5 extensions of the grid parameters in the same order as the axes of
+                # the spec array (and as grid_paras). hdf5 keys cannot be used for this because they are sorted alphabetically.
+                n_other = len(grid_para_names)
                 if len(grid_specs.shape) != n_other+1:
-                    raise ValueError("Shape of spec array does not match number of extensions in hdf5 files")
+                    raise ValueError("Shape {0} of spec array does not match the number of grid parameters {1}".format(
+                        grid_specs.shape, grid_para_names))
 
                 para_vec_list = []
-                para_id = 0
                 print("Model grid parameters:")
-                for name in hf.keys():
-                    if name not in ("wvs", "spec"):
-                        # print(name)
-                        para_vec = np.array(hf.get(name))
-                        # print(grid_specs_Flambda.shape[para_id], np.size(para_vec),para_vec)
-                        if grid_specs.shape[para_id] != np.size(para_vec):
-                            err_msg = "Shape {0} of spec array do not match the size of the vector for extension (expecting {1}, finding {2}): {3}".format(
-                                grid_specs.shape,np.size(para_vec),grid_specs.shape[para_id],name)
-                            raise ValueError(err_msg)
-                        print(name,para_vec)
-                        para_vec_list.append(para_vec)
-                        para_id +=1
+                for para_id, name in enumerate(grid_para_names):
+                    para_vec = np.array(hf.get(name))
+                    if grid_specs.shape[para_id] != np.size(para_vec):
+                        err_msg = "Shape {0} of spec array do not match the size of the vector for extension (expecting {1}, finding {2}): {3}".format(
+                            grid_specs.shape,np.size(para_vec),grid_specs.shape[para_id],name)
+                        raise ValueError(err_msg)
+                    print(name,para_vec)
+                    para_vec_list.append(para_vec)
 
             grid_dwvs = grid_wvs[1::] - grid_wvs[0:np.size(grid_wvs) - 1]
             grid_dwvs = np.insert(grid_dwvs, 0, grid_dwvs[0])
@@ -2929,7 +2942,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
                                                    bounds_error=False, fill_value=np.nan)
             #example:  teff, logg, vsini = grid_paras
             rv, dra_comp, ddec_comp = None, None, None
-            fix_parameters = grid_paras+[rv, dra_comp, ddec_comp]
+            fix_parameters = list(grid_paras)+[rv, dra_comp, ddec_comp]
         elif model_dict is not None:
             raise Exception("model_dict not yet implemented")
             # atm_model_func = interp1d(atm_wvs,atm_model)
@@ -3619,15 +3632,6 @@ def run_complete_stage1_2_nirspec(uncal_files, output_root_dir, utils_dir, overw
 ###########################################################################
 # Functions for invoking the MIRI/MRS pipeline
 
-def mkdir_miri_files(path):
-    """Short function to create directories for MIRI files"""
-    if type(path) != str:
-        raise TypeError("'path' must be a string")
-
-    if not os.path.exists(path):
-        os.makedirs(path)
-    return path
-
 def sort_by_target_name(input_dir, filetype='uncal.fits'):
     files = find_files_to_process(input_dir, filetype)
     targname_groups = defaultdict(list)
@@ -3647,17 +3651,48 @@ def retrieve_mrs_data(uncaldir, target_name, combined_channel_band):
     return filelist
 
 
-def select_miri_output_directory(uncal_path, target_name, combined_channel, sub_band_name):
+def select_miri_output_directory(output_dir, target_name, combined_channel, sub_band_name):
     """Short function to select the right MIRI output directory"""
-    return os.path.join(uncal_path, target_name, combined_channel + sub_band_from_name(sub_band_name), 'stage1')
+    return os.path.join(output_dir, target_name, combined_channel + sub_band_from_name(sub_band_name), 'stage1')
 
 
-def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores="1", skip_dark=False, save_rateints=False,
-                    verbose=False):
-    """Run pipeline stage 1, with some customizations for reductions
+def run_stage1_miri(uncal_path, output_dir=None, list_bands=None, overwrite=False, maximum_cores="1", skip_dark=False,
+                    save_rateints=False, verbose=False):
+    """Run pipeline stage 1, with some customizations for MIRI MRS reductions
 
-    If verbose is False, the INFO log of the JWST pipeline is not printed (warnings and errors still are).
+    Input uncal files are discovered by scanning uncal_path and are grouped by
+    target name. Outputs are organized into subdirectories
+    ``output_dir/<target_name>/<combined_channel_band>/stage1``.
+
+    For each input file, before doing any reduction, the expected output filename
+    is inferred, and it checks whether that output file already exists.
+    If so, then it is NOT reduced again by default.
+    Set the overwrite flag to True to re-reduce files
+
+    Parameters
+    ----------
+    uncal_path : string
+        Directory path to scan for uncal files to reduce
+    output_dir : string
+        Root directory path for where to put the output files. Outputs are written
+        to ``output_dir/<target_name>/<combined_channel_band>/stage1``. Defaults to uncal_path.
+    list_bands : list of strings
+        MIRI MRS bands to process. Defaults to all bands.
+    overwrite : bool
+        Re-reduce and overwrite outputs, if these data were already reduced before?
+        Default is to SKIP re-reducing anything already reduced.
+    maximum_cores : string
+        Passed to JWST pipeline functions that use multiprocessing, such as ramp fit
+    skip_dark : bool
+        Skip the dark current subtraction step?
+    save_rateints : bool
+        Keep the rateints files written by the pipeline? Default is to remove them.
+    verbose : bool
+        If False, the INFO log of the JWST pipeline is not printed (warnings and errors still are).
     """
+
+    if output_dir is None:
+        output_dir = uncal_path
 
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
@@ -3666,7 +3701,6 @@ def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores=
     target_names = list(dict_files_by_target_names.keys())
 
     time0 = time.perf_counter()
-    print(time0)
     rate_files = []
 
     for target_name in target_names:
@@ -3674,19 +3708,17 @@ def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores=
         uncal_files = dict_files_by_target_names[target_name]
 
         for combined_channel_band in list_bands:
-            mkdir_miri_files(os.path.join(uncal_path, target_name, combined_channel_band, 'stage1'))
-
-        rate_files = []
+            os.makedirs(os.path.join(output_dir, target_name, combined_channel_band, 'stage1'), exist_ok=True)
 
         for i, file in enumerate(uncal_files):
             print(f"Processing file {i + 1} of {len(uncal_files)}.")
             hdu_uncal = fits.open(file)
             sub_band_name = hdu_uncal[0].header['BAND']
             combined_channel = hdu_uncal[0].header['CHANNEL']
-            output_dir = select_miri_output_directory(uncal_path, target_name, combined_channel, sub_band_name)
+            band_output_dir = select_miri_output_directory(output_dir, target_name, combined_channel, sub_band_name)
 
             new_name = os.path.basename(file).replace('uncal.fits', 'rate.fits')
-            out_name = os.path.join(output_dir, new_name)
+            out_name = os.path.join(band_output_dir, new_name)
 
             rate_files.append(out_name)
 
@@ -3713,12 +3745,12 @@ def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores=
                     # gain_scale : run with defaults
                 }
 
-                det1.call(file, save_results=True, output_dir=output_dir,
+                det1.call(file, save_results=True, output_dir=band_output_dir,
                           steps=step_parameters, configure_log=verbose)
 
                 if save_rateints is False:
                     # Remove the rateints file that det1 just saved for this exposure
-                    rateints_file = os.path.join(output_dir,
+                    rateints_file = os.path.join(band_output_dir,
                                                  os.path.basename(file).replace('uncal.fits', 'rateints.fits'))
                     if os.path.exists(rateints_file):
                         os.remove(rateints_file)
@@ -3731,16 +3763,25 @@ def run_stage1_miri(uncal_path, list_bands=None, overwrite=False, maximum_cores=
 
     return rate_files, target_names
 
-def run_bkg_subtraction(uncal_path, target_name, list_bands=None, overwrite=False):
+def run_bkg_subtraction(uncal_path, target_name, output_dir=None, list_bands=None, overwrite=False):
+    """Custom background subtraction for MIRI MRS rate files.
+
+    Reads rate files from ``output_dir/<target_name>/<combined_channel_band>/stage1`` and writes
+    background-subtracted rate files to ``output_dir/<target_name>/<combined_channel_band>/stage1_sub_bkg``.
+    output_dir defaults to uncal_path.
+    """
+    if output_dir is None:
+        output_dir = uncal_path
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
     for combined_channel_band in list_bands:
-        output_dir = os.path.join(uncal_path, target_name, combined_channel_band, 'stage1_sub_bkg')
-        mkdir_miri_files(output_dir)
-        background_outputdir = os.path.join(uncal_path, target_name, combined_channel_band, 'master_bkg')
-        mkdir_miri_files(background_outputdir)
-        rate_files_all = find_files_to_process(os.path.join(uncal_path, target_name, combined_channel_band, 'stage1'), filetype='rate.fits')
+        band_output_dir = os.path.join(output_dir, target_name, combined_channel_band, 'stage1_sub_bkg')
+        os.makedirs(band_output_dir, exist_ok=True)
+        background_outputdir = os.path.join(output_dir, target_name, combined_channel_band, 'master_bkg')
+        os.makedirs(background_outputdir, exist_ok=True)
+        rate_files_all = find_files_to_process(os.path.join(output_dir, target_name, combined_channel_band, 'stage1'), filetype='rate.fits')
 
         bkg_files = [f for f in rate_files_all if 'BACKGROUND' in fits.getheader(f)['OBSLABEL']
                      or 'BKG' in fits.getheader(f)['OBSLABEL']]
@@ -3755,7 +3796,7 @@ def run_bkg_subtraction(uncal_path, target_name, list_bands=None, overwrite=Fals
         fits.writeto(os.path.join(background_outputdir,f"background_master_{combined_channel_band}.fits"), bkg_master, overwrite=overwrite)
 
         for fid, rate_file in enumerate(rate_files):
-            out_name = os.path.join(output_dir, os.path.basename(rate_file))
+            out_name = os.path.join(band_output_dir, os.path.basename(rate_file))
             rate = fits.getdata(rate_file)
             with fits.open(rate_file, mode="readonly") as hdu:
                 hdu_copy = fits.HDUList([hd.copy() for hd in hdu])
@@ -3764,13 +3805,22 @@ def run_bkg_subtraction(uncal_path, target_name, list_bands=None, overwrite=Fals
                 hdu_copy.writeto(out_name, overwrite=overwrite)
 
 
-def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=None, flat_extended=False, bkg_sub=False,
+def flat_fringing_stage1(uncal_path, target_name, output_dir=None, list_bands=None, flat_path=None, flat_extended=False, bkg_sub=False,
                          overwrite=False):
+    """Apply custom fringe flats to MIRI MRS rate files.
+
+    Reads rate files from ``output_dir/<target_name>/<combined_channel_band>/stage1`` (or
+    ``stage1_sub_bkg`` if bkg_sub is True) and writes fringe-corrected rate files
+    to ``output_dir/<target_name>/<combined_channel_band>/stage1_flat``. output_dir defaults to uncal_path.
+    """
+    if output_dir is None:
+        output_dir = uncal_path
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
     for combined_channel_band in list_bands:
-        mkdir_miri_files(os.path.join(uncal_path, target_name, combined_channel_band, 'stage1_flat'))
+        os.makedirs(os.path.join(output_dir, target_name, combined_channel_band, 'stage1_flat'), exist_ok=True)
 
     # Start a timer to keep track of runtime
     time0 = time.perf_counter()
@@ -3778,15 +3828,15 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
 
     for combined_channel_band in list_bands:
         if bkg_sub:
-            rate_files = find_files_to_process(os.path.join(uncal_path, target_name, combined_channel_band, 'stage1_sub_bkg'), filetype='rate.fits')
+            rate_files = find_files_to_process(os.path.join(output_dir, target_name, combined_channel_band, 'stage1_sub_bkg'), filetype='rate.fits')
         else:
-            rate_files = find_files_to_process(os.path.join(uncal_path, target_name, combined_channel_band, 'stage1'), filetype='rate.fits')
-        output_dir = os.path.join(uncal_path, target_name, combined_channel_band, 'stage1_flat')
+            rate_files = find_files_to_process(os.path.join(output_dir, target_name, combined_channel_band, 'stage1'), filetype='rate.fits')
+        band_output_dir = os.path.join(output_dir, target_name, combined_channel_band, 'stage1_flat')
         rate_filtered_files = []
         for fid, rate_file in enumerate(rate_files):
             print(fid, rate_file)
 
-            out_name = os.path.join(output_dir, os.path.basename(rate_file))
+            out_name = os.path.join(band_output_dir, os.path.basename(rate_file))
             rate_filtered_files.append(out_name)
 
             if os.path.exists(out_name) and not overwrite:
@@ -3799,7 +3849,7 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
 
             if flat_path is None:
                 flat_path_rate = os.getenv("FLAT_PATH")
-                if output_dir is None:
+                if flat_path_rate is None:
                     raise ValueError("No FLAT_PATH specified to apply the fringe flat")
             else:
                 flat_path_rate = flat_path
@@ -3829,7 +3879,13 @@ def flat_fringing_stage1(uncal_path, target_name, list_bands=None, flat_path=Non
                 hdu_copy.writeto(out_name, overwrite=overwrite)
                 print(f"==> Wrote fringe-corrected file to {out_name}")
 
-def flat_pixel_stage1(uncal_path, target_name, list_bands=None, pixel_flat_path=None):
+def flat_pixel_stage1(uncal_path, target_name, output_dir=None, list_bands=None, pixel_flat_path=None):
+    """Apply a pixel flat to the fringe-corrected MIRI MRS rate files of
+    ``output_dir/<target_name>/<combined_channel_band>/stage1_flat``, in place. output_dir defaults to uncal_path.
+    """
+    if output_dir is None:
+        output_dir = uncal_path
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
@@ -3841,7 +3897,7 @@ def flat_pixel_stage1(uncal_path, target_name, list_bands=None, pixel_flat_path=
         pixel_flat_path = os.getenv("PIXEL_FLAT_PATH")
 
     for combined_channel_band in list_bands:
-        filedir = os.path.join(uncal_path, target_name, combined_channel_band, 'stage1_flat')
+        filedir = os.path.join(output_dir, target_name, combined_channel_band, 'stage1_flat')
         rate_files = find_files_to_process(filedir, filetype='rate.fits')
 
         for fid, rate_file in enumerate(rate_files):
@@ -3873,33 +3929,54 @@ def flat_pixel_stage1(uncal_path, target_name, list_bands=None, pixel_flat_path=
                 hdu_copy.writeto(out_name, overwrite=True)
                 print(f"==> Wrote pixel flat-corrected file to {out_name}")
 
-def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=True, custom_bkg_sub=False, skip_cubes=True, skip_fringe=False,
+def run_stage2_miri(uncal_path, target_name, output_dir=None, list_bands=None, custom_flatted=True, custom_bkg_sub=False, skip_cubes=True, skip_fringe=False,
                     skip_residual_fringes=False,
                     skip_flatfield=False, skip_straylight=True, overwrite=False, verbose=False):
-    """Run pipeline stage 2 on the MIRI/MRS rate files.
+    """Run pipeline stage 2, with some customizations for MIRI MRS reductions
 
-    If verbose is False, the INFO log of the JWST pipeline is not printed (warnings and errors still are).
+    Input rate files are discovered under ``output_dir/<target_name>/<combined_channel_band>/stage1*``
+    (as written by run_stage1_miri). Outputs are written to
+    ``output_dir/<target_name>/<combined_channel_band>/stage2``.
+
+    Parameters
+    ----------
+    uncal_path : string
+        Root directory path of the reduction (where the uncal files were found)
+    target_name : string
+        Target name used to select the subdirectory of files to process
+    output_dir : string
+        Root directory path for where to find stage1 outputs and put the stage2
+        output files. Defaults to uncal_path.
+    list_bands : list of strings
+        MIRI MRS bands to process. Defaults to all bands.
+    overwrite : bool
+        Re-reduce and overwrite outputs, if these data were already reduced before?
+        Default is to SKIP re-reducing anything already reduced.
+    verbose : bool
+        If False, the INFO log of the JWST pipeline is not printed (warnings and errors still are).
     """
+    if output_dir is None:
+        output_dir = uncal_path
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
     for combined_channel_band in list_bands:
-        mkdir_miri_files(os.path.join(uncal_path, target_name, combined_channel_band, 'stage2'))
+        os.makedirs(os.path.join(output_dir, target_name, combined_channel_band, 'stage2'), exist_ok=True)
 
     time0 = time.perf_counter()
-    print(time0)
 
     cal_files = []
     for combined_channel_band in list_bands:
         if custom_flatted:
-            rate_file_band_path = os.path.join(uncal_path, target_name, combined_channel_band, 'stage1_flat')
+            rate_file_band_path = os.path.join(output_dir, target_name, combined_channel_band, 'stage1_flat')
             print(f"Processing the custom flatted rate files in {rate_file_band_path} for stage 2.")
         else:
             if custom_bkg_sub:
-                rate_file_band_path = os.path.join(uncal_path, target_name, combined_channel_band, 'stage1_sub_bkg')
+                rate_file_band_path = os.path.join(output_dir, target_name, combined_channel_band, 'stage1_sub_bkg')
                 print(f"Processing the background subtracted rate files in {rate_file_band_path} for stage 2.")
             else:
-                rate_file_band_path = os.path.join(uncal_path, target_name, combined_channel_band, 'stage1')
+                rate_file_band_path = os.path.join(output_dir, target_name, combined_channel_band, 'stage1')
                 print(f"Processing the rate files in {rate_file_band_path} for stage 2.")
 
         rate_files = find_files_to_process(rate_file_band_path, filetype='rate.fits')
@@ -3908,8 +3985,8 @@ def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=Tru
             print(fid, rate_file)
 
             # Setting up steps and running the Spec2 portion of the pipeline.
-            outputdir = os.path.join(uncal_path, target_name, combined_channel_band, 'stage2')
-            out_name = os.path.join(outputdir, os.path.basename(rate_file).replace('rate.fits', 'cal.fits'))
+            band_output_dir = os.path.join(output_dir, target_name, combined_channel_band, 'stage2')
+            out_name = os.path.join(band_output_dir, os.path.basename(rate_file).replace('rate.fits', 'cal.fits'))
             cal_files.append(out_name)
             if os.path.exists(out_name) and not overwrite:
                 print(f"Output file {out_name} already exists;\n\tskipping {rate_file}.")
@@ -3934,7 +4011,7 @@ def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=Tru
             }
             spec2.save_bsub = True
 
-            spec2.call(rate_file, save_results=True, output_dir=outputdir,
+            spec2.call(rate_file, save_results=True, output_dir=band_output_dir,
                        steps=step_parameters, configure_log=verbose)
 
         # Print out the time benchmark
@@ -3946,20 +4023,27 @@ def run_stage2_miri(uncal_path, target_name, list_bands=None, custom_flatted=Tru
     return cal_files
 
 
-def run_stage3_miri(uncal_path, target_name, list_bands=None, overwrite=False, verbose=False):
-    """Run pipeline stage 3 on the MIRI/MRS cal files.
+def run_stage3_miri(uncal_path, target_name, output_dir=None, list_bands=None, overwrite=False, verbose=False):
+    """Run pipeline stage 3 for MIRI MRS reductions.
 
+    Reads cal files from ``output_dir/<target_name>/<combined_channel_band>/stage2`` and writes
+    stage 3 outputs to ``output_dir/<target_name>/<combined_channel_band>/stage3``.
+    output_dir defaults to uncal_path.
     If verbose is False, the INFO log of the JWST pipeline is not printed (warnings and errors still are).
     """
+    if output_dir is None:
+        output_dir = uncal_path
+
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
     for combined_channel_band in list_bands:
-        outputdir = mkdir_miri_files(os.path.join(uncal_path, target_name, combined_channel_band, 'stage3'))
+        outputdir = os.path.join(output_dir, target_name, combined_channel_band, 'stage3')
+        os.makedirs(outputdir, exist_ok=True)
         if os.path.exists(os.path.join(outputdir, f'Level3_ch{combined_channel_band[0]}-short_s3d.fits')) and overwrite is False:
             print(f"Output file Level3_ch{combined_channel_band[0]}-short_s3d.fits already exists;\n\tskipping.")
             continue
 
-        inputdir = os.path.join(uncal_path, target_name, combined_channel_band, 'stage2')
+        inputdir = os.path.join(output_dir, target_name, combined_channel_band, 'stage2')
 
         # Start a timer to keep track of runtime
         time0 = time.perf_counter()
@@ -3986,13 +4070,15 @@ def run_stage3_miri(uncal_path, target_name, list_bands=None, overwrite=False, v
         runspec3(asnlist[0], outputdir, verbose=verbose)
 
 
-def run_full_miri_default_pipeline(uncal_path, target_name, list_bands=None, overwrite=False, verbose=False):
-    run_stage1_miri(uncal_path, list_bands=list_bands, overwrite=overwrite, maximum_cores="1", skip_dark=False,
-                    verbose=verbose)
-    run_stage2_miri(uncal_path, target_name, list_bands=list_bands, custom_flatted=False, skip_cubes=False,
+def run_full_miri_default_pipeline(uncal_path, target_name, output_dir=None, list_bands=None, overwrite=False,
+                                   verbose=False):
+    run_stage1_miri(uncal_path, output_dir=output_dir, list_bands=list_bands, overwrite=overwrite, maximum_cores="1",
+                    skip_dark=False, verbose=verbose)
+    run_stage2_miri(uncal_path, target_name, output_dir=output_dir, list_bands=list_bands, custom_flatted=False, skip_cubes=False,
                     skip_fringe=False, skip_residual_fringes=True, skip_flatfield=False, skip_straylight=False,
                     overwrite=overwrite, verbose=verbose)
-    run_stage3_miri(uncal_path, target_name, list_bands=list_bands, overwrite=overwrite, verbose=verbose)
+    run_stage3_miri(uncal_path, target_name, output_dir=output_dir, list_bands=list_bands, overwrite=overwrite,
+                    verbose=verbose)
 
     return 1
 
@@ -4039,14 +4125,14 @@ def sort_calfiles(files):
     return files12A, files12B, files12C, files34A, files34B, files34C
 
 
-def runspec3(filename, outputdir, verbose=False):
+def runspec3(filename, output_dir, verbose=False):
     # This initial setup is just to make sure that we get the latest parameter reference files
     # pulled in for our files.  This is a temporary workaround to get around an issue with
     # how this pipeline calling method works.
     crds_config = Spec3Pipeline.get_config_from_reference('l3asn-12A.json')  # The exact asn file used doesn't matter
     spec3 = Spec3Pipeline.from_config_section(crds_config)
 
-    spec3.output_dir = outputdir
+    spec3.output_dir = output_dir
     spec3.save_results = True
 
     spec3.master_background.skip = True  # Computes and subtracts a master background signal

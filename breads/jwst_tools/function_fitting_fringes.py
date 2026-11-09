@@ -26,7 +26,6 @@ except ImportError:
     # non-JWST BREADS usage
     pass
 
-
 # Heavy imports (jwst, matplotlib, reduction_utils) are done on demand:
 # every worker imports this module and shouldn't pay for them.
 class _LazyPyplot:
