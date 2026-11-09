@@ -162,6 +162,8 @@ def build_cube(dataobj,
     elif use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
         BREADS_DATA_ENV = os.getenv('BREADS_DATA')
         if isinstance(use_breadspsf, bool) and use_breadspsf:
+            if dataobj.priheader['INSTRUME'].strip() != 'NIRSPEC':
+                raise ValueError("use_breadspsf=True only selects a default BreadsPSF for NIRSpec: give the BreadsPSF file name instead.")
             grating = dataobj.priheader['GRATING'].strip()
             detector = dataobj.priheader['DETECTOR'].strip().lower()
             if os.path.exists(os.path.join(BREADS_DATA_ENV, "BreadsPSF",f"HD163466_J1757132_{grating}_{detector}.fits")):
