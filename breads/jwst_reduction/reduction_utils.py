@@ -1125,7 +1125,7 @@ def recenter_coordinates_of_sequence_nirspec(cal_files, utils_dir,combined_contn
     poly_fluxcal_filename = fitpsf_filename.replace(".fits", "_poly_fluxcal_IWA{0:.2f}_OWA{1:.2f}.txt".format(IWA,OWA))
     if overwrite or len(glob(poly_centroid_filename)) == 0:
 
-        if use_breadspsf is not None:
+        if use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
             use_stpsf = False
 
         if IWA_init is None:
@@ -1870,7 +1870,7 @@ def cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filena
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
 
-    if use_breadspsf is not None:
+    if use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
         use_stpsf = False
 
     grating = fits.getheader(cal_files[0])['GRATING'].strip()
@@ -2067,7 +2067,7 @@ def cube_extraction_miri(cal_files, channel, sub_band, utils_dir, out_dir, combi
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
 
-    if use_breadspsf is not None:
+    if use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
         use_stpsf = False
 
     if x_vec is None:
@@ -4525,7 +4525,7 @@ def recenter_coordinates_of_sequence_miri(cal_files, channel, utils_dir,combined
     poly_fluxcal_filename = fitpsf_filename.replace(".fits", "_poly_fluxcal_IWA{0:.2f}_OWA{1:.2f}.txt".format(IWA,OWA))
     if overwrite or len(glob(poly_centroid_filename)) == 0:
 
-        if use_breadspsf is not None:
+        if use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
             use_stpsf = False
 
         if not os.path.exists(utils_dir):
@@ -4650,7 +4650,7 @@ def recenter_coordinates_per_frame_miri(cal_files, channel, utils_dir,combined_c
     if not os.path.exists(utils_dir):
         os.makedirs(utils_dir)
 
-    if use_breadspsf is not None:
+    if use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
         use_stpsf = False
 
     if init_centroid is None:
