@@ -922,12 +922,13 @@ class _FileJob:
     and writes the *_fit_flat.fits file once everything has been received."""
 
     def __init__(self, save_filename, prim_header, shape, channel_band_left, channel_band_right,
-                 channel_band_left_fitted):
+                 channel_band_left_fitted, channel_band_right_fitted=True):
         self.save_filename = save_filename
         self.prim_header = prim_header
         self.channel_band_left = channel_band_left
         self.channel_band_right = channel_band_right
         self.channel_band_left_fitted = channel_band_left_fitted
+        self.channel_band_right_fitted = channel_band_right_fitted
 
         self.flat = np.ones(shape)
         self.continuum = np.full(shape, np.nan)
@@ -940,8 +941,9 @@ class _FileJob:
         if self.channel_band_left_fitted:
             for col_id in LEFT_COLUMNS:
                 yield self.channel_band_left, col_id
-        for col_id in RIGHT_COLUMNS:
-            yield self.channel_band_right, col_id
+        if self.channel_band_right_fitted:
+            for col_id in RIGHT_COLUMNS:
+                yield self.channel_band_right, col_id
 
     def add(self, col_id, f, c, bp_col, fit_info):
         if f is not None:
@@ -966,9 +968,13 @@ class _FileJob:
             hdr['BAND1MDL'] = (get_fit_model_label(self.channel_band_left), 'Fabry-Perot model used for BAND1')
         else:
             hdr['BAND1'] = (self.channel_band_left, 'Channel band for columns 5-499 (not fitted)')
-            hdr['BAND1MDL'] = ('skipped', 'Channel 4 fringe estimation skipped')
-        hdr['BAND2'] = (self.channel_band_right, 'Channel band fit for columns 500-1009')
-        hdr['BAND2MDL'] = (get_fit_model_label(self.channel_band_right), 'Fabry-Perot model used for BAND2')
+            hdr['BAND1MDL'] = ('skipped', 'Fringe estimation skipped for BAND1')
+        if self.channel_band_right_fitted:
+            hdr['BAND2'] = (self.channel_band_right, 'Channel band fit for columns 500-1009')
+            hdr['BAND2MDL'] = (get_fit_model_label(self.channel_band_right), 'Fabry-Perot model used for BAND2')
+        else:
+            hdr['BAND2'] = (self.channel_band_right, 'Channel band for columns 500-1009 (not fitted)')
+            hdr['BAND2MDL'] = ('skipped', 'Fringe estimation skipped for BAND2')
 
         hdul_list = [
             primary_hdu,
@@ -1102,13 +1108,16 @@ def get_flat_parallelized(uncaldir, targetname, list_bands=None, bkg_sub=False,
                            snr_thresh=20, spectrum=None, N_continuum=None,
                            N_D=None, N_finesse=None, mask_star_lines=True,
                            fast=False, skip_4=True, overwrite=True,
-                           n_procs=None, chunksize=None, start_method='spawn'):
+                           n_procs=None, chunksize=None, start_method='spawn', channel_bands=None):
     """Estimates the fringe flat of each *rate.fits file by fitting a
     Fabry-Perot model column by column, in parallel, and writes it to
     $FLAT_PATH/<combined_channel_band>/<...>_fit_flat.fits.
 
     Parameters
     ----------
+    channel_bands : list of str or None
+        If not None, only fit the columns of these channel bands (e.g. ['1A']); the flat is left to 1 in the
+        columns of the other half of the detector. None (default) fits both halves (except channel 4 if skip_4).
     n_procs : int or None
         Number of processes. None = number of CPUs actually available to this
         process (affinity / cgroups honored). 1 = sequential execution without
@@ -1160,7 +1169,9 @@ def get_flat_parallelized(uncaldir, targetname, list_bands=None, bkg_sub=False,
                 data, DQ, err, _, beta, wave, prim_header = _load_rate_file(rate_file)
                 channel_band_left, channel_band_right = _split_band(combined_channel_band)
                 job = _FileJob(save_filename, prim_header, data.shape,
-                               channel_band_left, channel_band_right, channel_band_left_fitted)
+                               channel_band_left, channel_band_right,
+                               channel_band_left_fitted and (channel_bands is None or channel_band_left in channel_bands),
+                               channel_bands is None or channel_band_right in channel_bands)
                 active_jobs.append(job)
 
                 tasks = list(job.tasks())
