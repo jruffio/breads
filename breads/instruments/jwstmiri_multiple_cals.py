@@ -1,8 +1,9 @@
 from breads.instruments.jwstmiri_cal import JWSTMiri_cal
-from breads.instruments.jwst_IFUs_test import _fit_wpsf_task
+from breads.jwst_tools.fitpsf import _fit_wpsf_task
 from warnings import warn
 import numpy as np
 from copy import copy
+import os
 
 
 
@@ -34,10 +35,12 @@ class JWSTMiri_multiple_cals(JWSTMiri_cal):
 
         This concatenates the values from many attributes into a single overall combined dataset
         """
-        self.coords = dataobj_list[0].coords
+        self.breads_header = dataobj_list[0].breads_header
+        #self.coords = dataobj_list[0].coords
+        self.combined_channel = dataobj_list[0].combined_channel
         self.R = dataobj_list[0].R
-        self.pixelscale = dataobj_list[0].pixelscale
-        self.data_unit = dataobj_list[0].data_unit
+        #self.pixelscale = dataobj_list[0].pixelscale
+        #self.data_unit = dataobj_list[0].data_unit
         self.opmode = dataobj_list[0].opmode
         if hasattr(self, "wv_ref"):
             self.wv_ref = dataobj_list[0].wv_ref
@@ -47,17 +50,23 @@ class JWSTMiri_multiple_cals(JWSTMiri_cal):
             self.webbpsf_X = dataobj_list[0].webbpsf_X
             self.webbpsf_Y = dataobj_list[0].webbpsf_Y
             self.east2V2_deg = dataobj_list[0].east2V2_deg
+
+        self.pixelscale = dataobj_list[0].pixelscale
         self.east2V2_deg = dataobj_list[0].east2V2_deg
+
         self.default_filenames = {}
         for key,val in zip(dataobj_list[0].default_filenames.keys(),dataobj_list[0].default_filenames.values()):
             if key == "compute_quick_webbpsf_model" or key == "compute_webbpsf_model":
                 self.default_filenames[key] = val
             else:
                 self.default_filenames[key] = val.replace(".fits","_combined.fits")
+
         self.utils_dir = dataobj_list[0].utils_dir
         self.crds_dir = dataobj_list[0].crds_dir
         if hasattr(dataobj_list[0], "wv_sampling"):
             self.wv_sampling = dataobj_list[0].wv_sampling
+        if hasattr(dataobj_list[0], "wv_nodes"):
+            self.wv_nodes = dataobj_list[0].wv_nodes
         if hasattr(dataobj_list[0], "wvs_ori"):
             self.wvs_ori = dataobj_list[0].wvs_ori
 
@@ -74,13 +83,13 @@ class JWSTMiri_multiple_cals(JWSTMiri_cal):
             self.priheader_list.append(dataobj.priheader)
             self.extheader_list.append(dataobj.extheader)
 
-        self.data = np.concatenate([copy(dataobj.data) for dataobj in dataobj_list], axis=1)
-        self.noise = np.concatenate([copy(dataobj.noise) for dataobj in dataobj_list], axis=1)
-        self.bad_pixels = np.concatenate([copy(dataobj.bad_pixels) for dataobj in dataobj_list], axis=1)
-        self.wavelengths = np.concatenate([copy(dataobj.wavelengths) for dataobj in dataobj_list], axis=1)
-        self.dra_as_array = np.concatenate([copy(dataobj.dra_as_array) for dataobj in dataobj_list], axis=1)
-        self.ddec_as_array = np.concatenate([copy(dataobj.ddec_as_array) for dataobj in dataobj_list], axis=1)
-        self.area2d = np.concatenate([copy(dataobj.area2d) for dataobj in dataobj_list], axis=1)
+        self.data = np.concatenate([copy(dataobj.data) for dataobj in dataobj_list], axis=0)
+        self.noise = np.concatenate([copy(dataobj.noise) for dataobj in dataobj_list], axis=0)
+        self.bad_pixels = np.concatenate([copy(dataobj.bad_pixels) for dataobj in dataobj_list], axis=0)
+        self.wavelengths = np.concatenate([copy(dataobj.wavelengths) for dataobj in dataobj_list], axis=0)
+        self.x = np.concatenate([copy(dataobj.x) for dataobj in dataobj_list], axis=0)
+        self.y = np.concatenate([copy(dataobj.y) for dataobj in dataobj_list], axis=0)
+        self.area2d = np.concatenate([copy(dataobj.area2d) for dataobj in dataobj_list], axis=0)
 
     def compute_new_coords_from_webbPSFfit(self, save_utils=False, IWA=None, OWA=None):
         """ Update coordinates after fitting a webbPSF at the median wavelength of the data.

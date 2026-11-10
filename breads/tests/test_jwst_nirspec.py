@@ -56,6 +56,8 @@ RA_VEC = np.arange(-0.2, 0.2, 0.1) + RA_PLANET / 1000.
 DEC_VEC = np.arange(-0.2, 0.2, 0.1) + DEC_PLANET / 1000.
 SNR_SUFFIX = "snr_map_quick"
 CUBE_SUFFIX = "1dspline_quick"
+CUBE_SUFFIX_STPSF = "1dspline_quick_stpsf"
+MAX_FLUX_DIFFERENCE_PSF = 0.25  # relative difference allowed between the BreadsPSF and STPSF extractions
 MIN_PEAK_SNR = 10
 
 
@@ -248,3 +250,53 @@ def test_cube_and_spectrum_extraction(test_output_dir, utils_dir, out_dir, bread
         err = hdulist_in['ERR_MJy'].data
     assert np.any(np.isfinite(spectrum))
     assert np.any(np.isfinite(err))
+
+
+@pytest.mark.slow   # by default do not run this
+def test_breadspsf_stpsf_extraction_consistency(test_output_dir, utils_dir, out_dir, breads_data, mypool):
+    """ Test that the 1dspline cube extractions with the default BreadsPSF and with STPSF give consistent planet fluxes
+    (both in MJy), within MAX_FLUX_DIFFERENCE_PSF. Uses the BreadsPSF cube of test_cube_and_spectrum_extraction."""
+    cal_files = get_cal_files(test_output_dir)
+    combined_contnorm_spec_filename = get_combined_contnorm_spec_filename(cal_files, utils_dir)
+    splitbasename = os.path.basename(cal_files[0]).split("_")
+    cube_prefix = splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3] + "_" + GRATING + "_"
+
+    cube_filename_breadspsf = os.path.join(out_dir, cube_prefix + CUBE_SUFFIX + "_cube.fits")
+    assert os.path.exists(cube_filename_breadspsf), "Run test_cube_and_spectrum_extraction first"
+
+    # Same extraction as test_cube_and_spectrum_extraction, but with STPSF
+    cube_extraction(cal_files, utils_dir, out_dir, combined_contnorm_spec_filename,
+                    coords_filename_filter=None,  # no centroid recalibration
+                    mode="1dspline", suffix=CUBE_SUFFIX_STPSF, contnorm_suffix=None,
+                    x_vec=RA_VEC, y_vec=DEC_VEC, wv_sampling=None,
+                    mask_charge_transfer_radius=None, ra_dec_point_sources=None,
+                    aper_radius=0.15,
+                    mppool=mypool,
+                    overwrite=False,
+                    targetname=SIMBAD_NAME,
+                    use_stpsf=True,
+                    use_breadspsf=False,
+                    load_pickle=True,
+                    save_pickle=True,
+                    ifucoords=False)
+    cube_filename_stpsf = os.path.join(out_dir, cube_prefix + CUBE_SUFFIX_STPSF + "_cube.fits")
+    assert os.path.exists(cube_filename_stpsf)
+
+    # Planet spectrum at the S/N peak in both cubes
+    _, x_peak, y_peak = get_snr_peak(cal_files, out_dir)
+    spectra = []
+    for suffix, cube_filename in [(CUBE_SUFFIX, cube_filename_breadspsf), (CUBE_SUFFIX_STPSF, cube_filename_stpsf)]:
+        out_filename = os.path.join(out_dir, f"{TARGETNAME}_{DETECTOR}_{suffix}_1dspectrum.fits")
+        extract_spectrum(cube_filename, out_filename, (x_peak, y_peak))
+        with fits.open(out_filename) as hdulist_in:
+            spectra.append(hdulist_in['FLUX_MJy'].data)
+    spectrum_breadspsf, spectrum_stpsf = spectra
+
+    # Compare the fluxes integrated over the channels valid in both spectra (the S/N per channel is too low to compare
+    # them channel by channel)
+    valid = np.isfinite(spectrum_breadspsf) & np.isfinite(spectrum_stpsf)
+    assert np.sum(valid) > 0.5 * np.size(valid)
+    flux_ratio = np.sum(spectrum_stpsf[valid]) / np.sum(spectrum_breadspsf[valid])
+    print(f"STPSF / BreadsPSF integrated flux ratio at ({x_peak:.3f}, {y_peak:.3f}) arcsec: {flux_ratio:.3f}")
+    assert abs(flux_ratio - 1) < MAX_FLUX_DIFFERENCE_PSF, \
+        f"BreadsPSF and STPSF extractions differ by {100 * (flux_ratio - 1):.1f}% (> {100 * MAX_FLUX_DIFFERENCE_PSF:.0f}%)"

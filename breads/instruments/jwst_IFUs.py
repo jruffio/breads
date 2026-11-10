@@ -734,12 +734,12 @@ class JWST_IFUs(ABC):
         y = np.linspace(-halffov_y, halffov_y, wpsfs.shape[1], endpoint=True)
         webbpsf_X, webbpsf_Y = np.meshgrid(x, y)
 
-        wpsfs_additional_header = {'PIXELSCL': pixelscale, 'im_mask': image_mask,
+        wpsfs_additional_header = {'PIXELSCL': IFU.pixelscale, 'im_mask': image_mask,
                         'oversamp': oversample, 'DATE-BEG': self.priheader['DATE-BEG']}
         self.breads_header.update(wpsfs_additional_header)
 
 
-        self.breads_header['WPSFAREA'] = pixelscale ** 2
+        self.breads_header['WPSFAREA'] = IFU.pixelscale ** 2
         psf_wv0_id = np.argmin(np.abs(wv_sampling-np.nanmedian(self.wavelengths)))
         self.webbpsf_im = wepsfs[psf_wv0_id]
         self.webbpsf_X = webbpsf_X
@@ -1169,7 +1169,7 @@ class JWST_IFUs(ABC):
 
         if save_utils:
             self._save_starspectrum_contnorm(save_utils, new_wavelengths, combined_fluxes, combined_errors,
-                                             spline_cont0, spline_paras0, wv_nodes, normalized_im,stellar_features)
+                                             spline_cont0, spline_paras0, wv_nodes, normalized_im, stellar_features)
 
         return new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, wv_nodes
 
@@ -2090,6 +2090,8 @@ class JWST_IFUs(ABC):
 
         for trace_id in range(Ntraces):
             wvs_finite, where_finite = self._get_where_finite(trace_id)
+            if np.size(wvs_finite[0]) == 0 or np.size(where_finite[0]) == 0:
+                continue
 
             # interpolates everything row by row. Different behavior between NIRSpec and MIRI
             self._interpdata_regwvs_trace(regwvs_tmpobj, wv_sampling, wvs_finite, where_finite, trace_id)

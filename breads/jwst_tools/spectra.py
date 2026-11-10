@@ -1,5 +1,6 @@
 import numpy as np
 from astropy.stats import sigma_clip
+from scipy.interpolate import interp1d, splrep, splev
 
 def combine_spectrum(wavelengths, fluxes, errors, bin_size):
     """ Combines the spectrum by combining the flux values in each bin using a weighted mean.

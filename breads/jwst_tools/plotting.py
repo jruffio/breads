@@ -1,4 +1,5 @@
 import os
+import warnings
 import numpy as np
 import matplotlib, matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
@@ -193,15 +194,21 @@ def point_cloud_interpolator_2d(x,y,wv_sampling, data,bad_pixels, wv0):
         if wv0 is None:
             wv0 = np.nanmedian(wv_sampling)
 
-        wv0_index = np.argmin(np.abs(wv_sampling - wv0))
-
+        wv0_index = np.nanargmin(np.abs(wv_sampling - wv0))
         where_good = np.where(np.isfinite(bad_pixels[:, wv0_index])*np.isfinite(x[:, wv0_index])*np.isfinite(y[:, wv0_index])*np.isfinite(data[:, wv0_index]))
+
         if np.size(where_good[0]) <3:
+            warnings.warn("Not enough data points in the point cloud to compute the 2d interpolator.")
             return None
+
         x = x[where_good[0], wv0_index]
         y = y[where_good[0], wv0_index]
         z = data[where_good[0], wv0_index]
-        filtered_triangles = filter_big_triangles(x, y, 0.2)
+        # Maximum edge length: 0.2 arcsec, or twice the median edge length for sparser point clouds (e.g. a single
+        # MIRI frame, whose ~0.2 arcsec pixels would otherwise leave no triangle)
+        full_tri = tri.Triangulation(x, y)
+        edges = np.hypot(np.diff(x[full_tri.edges], axis=1), np.diff(y[full_tri.edges], axis=1))
+        filtered_triangles = filter_big_triangles(x, y, max(0.2, 2 * np.median(edges)))
         # Create filtered triangulation
         filtered_tri = tri.Triangulation(x, y, triangles=filtered_triangles)
         # Perform LinearTriInterpolator for filtered triangulation

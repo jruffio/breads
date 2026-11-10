@@ -12,6 +12,8 @@ import math
 import matplotlib
 from scipy.signal import find_peaks
 
+from breads.jwst_tools.default_miri import sub_band_from_name
+
 try:
     import jwst
     _HAS_OPTIONAL_DEPENDENCY_JWST = True
@@ -31,18 +33,10 @@ def use_find_files_to_process(input_dir, filetype='uncal.fits'):
     return find_files_to_process(input_dir, filetype=filetype)
 
 def get_band_miri_header(prim_hdr):
-    band = prim_hdr['BAND']
-    channel = prim_hdr['CHANNEL']
-    if band=='SHORT':
-        band='A'
-    elif band=='MEDIUM':
-        band='B'
-    elif band=='LONG':
-        band='C'
-    else:
-        raise ValueError('band must be SHORT, MEDIUM, LONG')
-    band = channel + band
-    return band
+    """Return the combined channel+band of a MIRI/MRS file (e.g. '12A') from its primary header."""
+    combined_channel = prim_hdr['CHANNEL']
+    sub_band = sub_band_from_name(prim_hdr['BAND'])
+    return combined_channel + sub_band
 
 def column_median_max(mat):
     medianes = np.nanmedian(mat, axis=0)
@@ -98,7 +92,7 @@ def replace_nan_with_median(image, dq, size=3):
     image[mask] = filtered[mask]
     return image
 
-def miri_flat_running_mean(data_rate_path, output_dir, band, overwrite=False):
+def miri_flat_running_mean(data_rate_path, output_dir, combined_channel_band, overwrite=False):
 
     filenames = os.listdir(data_rate_path)
 
@@ -111,8 +105,8 @@ def miri_flat_running_mean(data_rate_path, output_dir, band, overwrite=False):
             DQ = hdu_f['DQ'].data
             prim_header = hdu_f[0].header
             hdu_f.close()
-            if get_band_miri_header(prim_header) != band:
-                print("wrong band", prim_header['BAND'], band)
+            if get_band_miri_header(prim_header) != combined_channel_band:
+                print("wrong band", prim_header['BAND'], combined_channel_band)
                 continue
 
             im_flat = np.zeros_like(img, dtype=np.float64) + np.nan
@@ -177,24 +171,24 @@ def run_miri_flat_running_mean(flat_path, targetname, output_dir=None, list_band
 
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
-    for band in list_bands:
-        print(f"Computing flat for band {band}")
-        data_rate_path_band = os.path.join(flat_path, targetname, band, 'stage1')
-        output_dir_band = os.path.join(output_dir, band)
+    for combined_channel_band in list_bands:
+        print(f"Computing flat for band {combined_channel_band}")
+        data_rate_path_band = os.path.join(flat_path, targetname, combined_channel_band, 'stage1')
+        output_dir_band = os.path.join(output_dir, combined_channel_band)
         print("Writing flat image to {}".format(output_dir_band))
         if not os.path.exists(output_dir_band):
             os.makedirs(output_dir_band)
 
-        miri_flat_running_mean(data_rate_path_band, output_dir_band, band, overwrite=overwrite)
+        miri_flat_running_mean(data_rate_path_band, output_dir_band, combined_channel_band, overwrite=overwrite)
 
 
 def plot_flat(uncal_dir, target_name, list_bands=None):
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
-    for band in list_bands:
-        inputdir_stage1 = os.path.join(uncal_dir, target_name, band, 'stage1')
+    for combined_channel_band in list_bands:
+        inputdir_stage1 = os.path.join(uncal_dir, target_name, combined_channel_band, 'stage1')
         print(inputdir_stage1)
-        inputdir_stage1_flat = os.path.join(uncal_dir, target_name, band, 'stage1_flat')
+        inputdir_stage1_flat = os.path.join(uncal_dir, target_name, combined_channel_band, 'stage1_flat')
 
         files_stage1 = use_find_files_to_process(inputdir_stage1, filetype='rate.fits')
         files_stage1_flat = use_find_files_to_process(inputdir_stage1_flat, filetype='rate.fits')
@@ -214,7 +208,7 @@ def plot_starsub_fit(uncal_dir, utils_dir, target_name, list_bands=None):
     if list_bands is None:
         list_bands = ['12A', '12B', '12C', '34A', '34B', '34C']
 
-    for band in list_bands:
+    for combined_channel_band in list_bands:
         inputdir_starsub = os.path.join(uncal_dir, target_name, utils_dir)
         print(inputdir_starsub)
 
@@ -242,7 +236,7 @@ def plot_starsub_fit(uncal_dir, utils_dir, target_name, list_bands=None):
 def beta_slice_ID(beta, channel):
     beta_c = np.copy(beta)
 
-    if channel == 1 or channel == 4:
+    if channel == '1' or channel == '4':
         col_min, col_max = 10, 500
         beta_c[:, 500:] = np.nan
 
@@ -256,7 +250,7 @@ def beta_slice_ID(beta, channel):
     beta_slice_num = np.zeros_like(beta) + np.nan
 
     for i, value in enumerate(beta_values):
-        beta_slice_num[beta_c == value] = channel * 100 + i
+        beta_slice_num[beta_c == value] = int(channel) * 100 + i
 
     beta_slice_num[:10, :] = np.nan
     beta_slice_num[-10:, :] = np.nan
@@ -288,7 +282,7 @@ def beta_masking_slice_col(beta, channel, liste_col_ID):
 
 def find_brightest_slices(data, channel, plot=False):
     data_copy = data.copy()
-    if channel == 1 or channel == 4:
+    if channel == '1' or channel == '4':
         data_copy[:, 500:] = np.nan
     else:
         data_copy[:, :500] = np.nan
@@ -322,9 +316,9 @@ def beta_masking_inverse_slice(data, beta, channel, N_slices=4):
     list_col_ID = find_brightest_slices(data, channel)
 
     mask = np.zeros_like(beta_slice_num)
-    if channel == 1 or channel == 4:
+    if channel == '1' or channel == '4':
         mask[:, 500:] = 1
-    elif channel == 2 or channel == 3:
+    elif channel == '2' or channel == '3':
         mask[:, :500] = 1
 
     list_ID =[]
@@ -345,7 +339,7 @@ def beta_masking_inverse_slice(data, beta, channel, N_slices=4):
     return mask
 
 
-def miri_flat_splines(data_rate_path, output_dir, band, overwrite=False):
+def miri_flat_splines(data_rate_path, output_dir, combined_channel_band, overwrite=False):
     filenames = os.listdir(data_rate_path)
 
     for filename in filenames:
@@ -358,8 +352,8 @@ def miri_flat_splines(data_rate_path, output_dir, band, overwrite=False):
             err = hdu_f['ERR'].data
             prim_header = hdu_f[0].header
             hdu_f.close()
-            if get_band_miri_header(prim_header) != band:
-                print("wrong band", prim_header['BAND'], band)
+            if get_band_miri_header(prim_header) != combined_channel_band:
+                print("wrong band", prim_header['BAND'], combined_channel_band)
                 continue
 
             col_min, col_max = 10, 1020  # 572, 1020

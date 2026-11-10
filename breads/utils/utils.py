@@ -7,8 +7,10 @@ import astropy.io.fits as fits
 import astropy.units as u
 import numpy as np
 import pandas as pd
+import requests
 from astropy.time import Time
 from astroquery.simbad import Simbad
+from astroquery.simbad import conf as simbad_conf
 from py.path import local
 from scipy.interpolate import InterpolatedUnivariateSpline
 from scipy.interpolate import interp1d
@@ -742,6 +744,41 @@ def rotate_coordinates(x, y, angle, flipx=False):
     return np.reshape(rotated_x,x_shape), np.reshape(rotated_y,x_shape)
 
 
+def select_simbad_server(timeout=10, verbose=True):
+    """Point astroquery's Simbad to the first SIMBAD mirror that is available.
+
+    The mirrors are tried in the order of astroquery.simbad.conf.servers_list
+    (CDS Strasbourg, then Harvard). An unresponsive server can make a query hang
+    indefinitely, so each mirror is first probed with a short timeout on its TAP
+    availability endpoint.
+
+    Parameters
+    ----------
+    timeout : float
+        Timeout in seconds for probing each mirror.
+    verbose : bool
+        Print which mirror is used when falling back to a non-default one.
+
+    Returns
+    -------
+    server : str
+        Hostname of the selected SIMBAD mirror.
+    """
+    for server in simbad_conf.servers_list:
+        try:
+            response = requests.get(f"https://{server}/simbad/sim-tap/availability", timeout=timeout)
+            response.raise_for_status()
+        except requests.RequestException:
+            continue
+        if "<available>true</available>" not in response.text.replace(" ", "").lower():
+            continue
+        if verbose and server != simbad_conf.servers_list[0]:
+            print(f"SIMBAD server {simbad_conf.servers_list[0]} is unavailable, using mirror {server}")
+        Simbad.server = server
+        return server
+    raise ConnectionError(f"None of the SIMBAD mirrors {simbad_conf.servers_list} is available.")
+
+
 def propagate_coordinates_at_epoch(targetname, date, verbose=True):
     """Get coordinates at an epoch for some target, taking into account proper motions.
 
@@ -762,6 +799,9 @@ def propagate_coordinates_at_epoch(targetname, date, verbose=True):
     an astropy.coordinates.SkyCoord for the computed position
 
     """
+
+    # Adding votable fields already queries SIMBAD, so the mirror is selected first
+    select_simbad_server(verbose=verbose)
 
     # Configure Simbad query to retrieve some extra fields
     Simbad.add_votable_fields("ra")  # Retrieve proper motion in RA

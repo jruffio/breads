@@ -693,10 +693,12 @@ def calc_mock_ifu_slice(instrument='NIRSpec',
             horizontalalignment='right')
 
     if estimate_local_contrast:
-        ax.text(0.97, 0.97, f"Comp peak pixel is $\\sim${10.**(deltamag/-2.5) / (local_cont/peak_norm/9):.1f}x\nthe local PSF halo",
-                color='yellow',
-                transform=ax.transAxes,
-                horizontalalignment='right', verticalalignment='top')
+        print("estimate_local_contrast not yet implemented")
+        #TODO bug to fix: deltamag not defined
+        #ax.text(0.97, 0.97, f"Comp peak pixel is $\\sim${10.**(deltamag/-2.5) / (local_cont/peak_norm/9):.1f}x\nthe local PSF halo",
+        #        color='yellow',
+        #        transform=ax.transAxes,
+        #        horizontalalignment='right', verticalalignment='top')
 
 
     scene[1].header['APER_PA'] = inst_pa

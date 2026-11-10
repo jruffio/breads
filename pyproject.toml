@@ -33,6 +33,7 @@ dependencies = [
     "astroquery>=0.4.9",
     "multiprocess",
     "tqdm",
+    "threadpoolctl",
     "h5py",
     "species",
     "py",

@@ -1,7 +1,8 @@
 import multiprocessing as mp
+import signal
+import warnings
 from tqdm import tqdm
 import numpy as np
-import itertools
 
 from scipy.optimize import lsq_linear
 from scipy.special import loggamma
@@ -10,13 +11,47 @@ from astropy import constants as const
 
 from breads.fit import fitfm
 
-__all__ = ('grid_search', 'process_chunk')
+__all__ = ('grid_search', 'process_chunk', 'limit_blas_threads')
 
 try:
     import mkl
     mkl_exists = True
 except ImportError:
     mkl_exists = False
+
+
+def limit_blas_threads(n_threads=1):
+    """
+    Limit the number of BLAS/OpenMP threads of the current process.
+
+    Meant to be used as the initializer of a multiprocessing pool, e.g. mp.Pool(numthreads, initializer=limit_blas_threads).
+    Otherwise each worker starts as many BLAS threads as there are cores and the workers oversubscribe the CPU.
+    Environment variables such as OPENBLAS_NUM_THREADS have no effect here: they are only read when numpy is loaded,
+    which happened in the parent process before the fork.
+    """
+    try:
+        from threadpoolctl import threadpool_limits
+    except ImportError:
+        warnings.warn("threadpoolctl is not installed: BLAS threads are not limited in the workers, "
+                      "which may oversubscribe the CPU. Install it with `pip install threadpoolctl`.")
+        return
+    threadpool_limits(n_threads)
+
+
+# Arguments shared by all the chunks of a grid_search() call, set once per worker by the initializer
+_WORKER_ARGS = None
+
+
+def _init_grid_search_worker(dataobj, fm_func, fm_paras, bounds, scale_noise, marginalize_noise_scaling):
+    global _WORKER_ARGS
+    _WORKER_ARGS = (dataobj, fm_func, fm_paras, bounds, scale_noise, marginalize_noise_scaling)
+    # Ctrl-C is handled by the parent, which terminates the pool
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    limit_blas_threads()
+
+
+def _process_chunk_worker(nonlin_paras_list):
+    return process_chunk((nonlin_paras_list,) + _WORKER_ARGS)
 
 
 
@@ -120,7 +155,6 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,s
         out_shape = [np.size(v) for v in para_vecs]+[_out.shape[-1],]
         out = np.reshape(_out,out_shape)
     else:
-        mypool = mp.Pool(processes=numthreads)
         chunk_size = np.max([1,np.size(para_grids[0])//(5*numthreads)])
         N_chunks = np.size(para_grids[0])//chunk_size
         nonlin_paras_lists = []
@@ -131,21 +165,11 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,s
         nonlin_paras_lists.append([pgrid[((N_chunks-1)*chunk_size):np.size(para_grids[0])] for pgrid in para_grids])
         indices_lists.append(np.arange(((N_chunks-1)*chunk_size),np.size(para_grids[0])))
 
-        output_lists = list(tqdm(mypool.imap(process_chunk, zip(nonlin_paras_lists,
-                                                                itertools.repeat(dataobj),
-                                                                itertools.repeat(fm_func),
-                                                                itertools.repeat(fm_paras),
-                                                                itertools.repeat(bounds),
-                                                                itertools.repeat(scale_noise),
-                                                                itertools.repeat(marginalize_noise_scaling))),
-                                 total=N_chunks))
-        # output_lists = mypool.map(process_chunk, zip(nonlin_paras_lists,
-        #                                              itertools.repeat(dataobj),
-        #                                              itertools.repeat(fm_func),
-        #                                              itertools.repeat(fm_paras),
-        #                                              itertools.repeat(bounds),
-        #                                              itertools.repeat(scale_noise),
-        #                                              itertools.repeat(marginalize_noise_scaling)))
+        # The shared arguments are sent once per worker through the initializer instead of once per chunk.
+        # The context manager terminates the workers on exit, including on error or KeyboardInterrupt.
+        with mp.Pool(processes=numthreads, initializer=_init_grid_search_worker,
+                     initargs=(dataobj, fm_func, fm_paras, bounds, scale_noise, marginalize_noise_scaling)) as mypool:
+            output_lists = list(tqdm(mypool.imap(_process_chunk_worker, nonlin_paras_lists), total=N_chunks))
 
         outarr_not_created = True
         for k,(indices, output_list) in enumerate(zip(indices_lists,output_lists)):
@@ -175,9 +199,6 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,s
                     out = np.concatenate(list2concatenate,axis=0)
                     out = out.T
                     out[np.unravel_index(l, out_shape[0:len(para_vecs)])] = outvec
-
-        mypool.close()
-        mypool.join()
 
         if outarr_not_created:
             raise RuntimeError("All process_chunk calls returned None. Check for errors in fitfm or the input data.")

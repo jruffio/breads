@@ -24,7 +24,9 @@ def _build_cube_task(inputs):
     Parameters
     ----------
     inputs : tuple containing many parameters
-        X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min
+        X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min,
+        ifu_name, pix_area. pix_area is the pixel area (steradian) of the data, used to convert the amplitude fitted with
+        STPSF from MJy/sr to MJy as in fitpsf, or None (no conversion).
 
     Returns
     -------
@@ -32,7 +34,7 @@ def _build_cube_task(inputs):
         Complex nested bunch of stuff... TODO figure out and document
 
     """
-    X, Y, Z, Zerr, Zbp, wv_sampling, psf_interp_paras, wv_id, wv,  ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name = inputs
+    X, Y, Z, Zerr, Zbp, wv_sampling, psf_interp_paras, wv_id, wv,  ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name, pix_area = inputs
 
 
     ny,nx = ifux_grid.shape
@@ -42,6 +44,7 @@ def _build_cube_task(inputs):
     psf_interp = _interp_psf(psf_interp_paras)
 
     if psf_interp is None:
+        print("WARNING psf_interp_paras is None")
         return mfflux_arr,mffluxerr_arr
 
     for k in range(ny):
@@ -56,7 +59,7 @@ def _build_cube_task(inputs):
             # else:
             #     raise ValueError('ifu_name must be either nirspec or miri')
 
-            where_finite = np.where(np.isfinite(Zbp) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
+            where_finite = np.where(np.isfinite(Zbp) * np.isfinite(Z) * np.isfinite(Zerr) * np.isfinite(X) * np.isfinite(Y) * (R < aper_radius))
 
             if np.size(where_finite[0]) < N_pix_min:
                 mfflux_arr[k,l] = np.nan
@@ -75,6 +78,11 @@ def _build_cube_task(inputs):
 
                 res = Z_fin - mfflux * M
                 noise_factor = np.nanstd(res / Zerr_fin)
+                if pix_area is not None:
+                    # convert from MJy/sr to MJy with the pixel area weighted by the model, as in fitpsf
+                    rescale_flux = np.nansum(pix_area[where_finite] * M) / np.nansum(M)
+                    mfflux *= rescale_flux
+                    mffluxerr *= rescale_flux
                 mfflux_arr[k,l] = mfflux
                 mffluxerr_arr[k,l] = mffluxerr * noise_factor
 
@@ -161,6 +169,8 @@ def build_cube(dataobj,
     elif use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
         BREADS_DATA_ENV = os.getenv('BREADS_DATA')
         if isinstance(use_breadspsf, bool) and use_breadspsf:
+            if dataobj.priheader['INSTRUME'].strip() != 'NIRSPEC':
+                raise ValueError("use_breadspsf=True only selects a default BreadsPSF for NIRSpec: give the BreadsPSF file name instead.")
             grating = dataobj.priheader['GRATING'].strip()
             detector = dataobj.priheader['DETECTOR'].strip().lower()
             if os.path.exists(os.path.join(BREADS_DATA_ENV, "BreadsPSF",f"HD163466_J1757132_{grating}_{detector}.fits")):
@@ -177,8 +187,8 @@ def build_cube(dataobj,
         psf_X = hdulist['X'].data
         psf_Y = hdulist['Y'].data
         _wv_sampling = hdulist['WAVE'].data
-        if not hasattr(dataobj, "wv_sampling"):
-            if not np.allclose(dataobj.wv_sampling, _wv_sampling):
+        if getattr(dataobj, "wv_sampling", None) is not None:
+            if np.size(dataobj.wv_sampling) != np.size(_wv_sampling) or not np.allclose(dataobj.wv_sampling, _wv_sampling):
                 raise Exception("BreadsPSF wavelength sampling is different from the one in the data object.")
         psfX = np.tile(psf_X[None, :, :], (psfs.shape[0], 1, 1))
         psfY = np.tile(psf_Y[None, :, :], (psfs.shape[0], 1, 1))
@@ -207,15 +217,10 @@ def build_cube(dataobj,
     _d = dataobj.data
     _e = dataobj.noise
     _bp = dataobj.bad_pixels
+    _area = dataobj.area2d if use_stpsf else None
+
 
     ifu_name = dataobj.ifu_name
-    if ifu_name == 'miri':
-        raise Exception("Not yet implemented.")
-        # all_interp_ra = all_interp_ra.transpose()
-        # all_interp_dec = all_interp_dec.transpose()
-        # all_interp_flux = all_interp_flux.transpose()
-        # all_interp_err = all_interp_err.transpose()
-        # all_interp_badpix = all_interp_badpix.transpose()
 
     if hasattr(dataobj, "filelist"):
         N_dithers = len(dataobj.filelist)
@@ -247,7 +252,8 @@ def build_cube(dataobj,
         inputs.append([_x[:, wv_id], _y[:, wv_id], _d[:, wv_id], _e[:, wv_id], _bp[:, wv_id],
                        dataobj.wv_sampling,
                        psf_interp_paras,
-                       wv_id, wv, ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name])
+                       wv_id, wv, ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name,
+                       None if _area is None else _area[:, wv_id]])
 
     #step 2 map _build_cube_task over input list
     if mppool is None:
@@ -277,6 +283,8 @@ def build_cube(dataobj,
         print("saving",out_filename)
 
         _hdr_flux = pyfits.Header({'BUNIT': out_units})
+        if use_stpsf:
+            _hdr_flux['FLUXCONV'] = ('area2d', 'STPSF amplitude x pixel area weighted by the model')
 
         if "sky" in dataobj.breads_header['COORDS']:
             _x_out = ra_grid

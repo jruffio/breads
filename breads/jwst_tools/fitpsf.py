@@ -135,6 +135,8 @@ def fitpsf(dataobj, ref_dataobj = None,
     elif use_breadspsf is not None and not (isinstance(use_breadspsf, bool) and not use_breadspsf):
         BREADS_DATA_ENV = os.getenv('BREADS_DATA')
         if isinstance(use_breadspsf, bool) and use_breadspsf:
+            if dataobj.priheader['INSTRUME'].strip() != 'NIRSPEC':
+                raise ValueError("use_breadspsf=True only selects a default BreadsPSF for NIRSpec: give the BreadsPSF file name instead.")
             grating = dataobj.priheader['GRATING'].strip()
             detector = dataobj.priheader['DETECTOR'].strip().lower()
             if os.path.exists(os.path.join(BREADS_DATA_ENV, "BreadsPSF", f"HD163466_J1757132_{grating}_{detector}.fits")):
@@ -149,8 +151,8 @@ def fitpsf(dataobj, ref_dataobj = None,
         psf_X = hdulist['X'].data
         psf_Y = hdulist['Y'].data
         _wv_sampling = hdulist['WAVE'].data
-        if not hasattr(dataobj, "wv_sampling"):
-            if not np.allclose(dataobj.wv_sampling, _wv_sampling):
+        if getattr(dataobj, "wv_sampling", None) is not None:
+            if np.size(dataobj.wv_sampling) != np.size(_wv_sampling) or not np.allclose(dataobj.wv_sampling, _wv_sampling):
                 raise Exception("BreadsPSF wavelength sampling is different from the one in the data object.")
         stpsfX = np.tile(psf_X[None, :, :], (stpsfs.shape[0], 1, 1))
         stpsfY = np.tile(psf_Y[None, :, :], (stpsfs.shape[0], 1, 1))
@@ -268,7 +270,7 @@ def fitpsf(dataobj, ref_dataobj = None,
                                 "COORUNIT": dataobj.breads_header['COORUNIT']}
         wpsfsfit_header = {"INIT_ANG": rotate_psf, "INIT_X": init_paras[0], "INIT_Y": init_paras[1]}
         _breads_header = dataobj.breads_header
-        _breads_header.update(wpsfsfit_header)
+        _breads_header.update(_handle_nan_header_dict(wpsfsfit_header))
         hdulist = pyfits.HDUList()
         hdulist.append(pyfits.PrimaryHDU(header=dataobj.priheader))
         hdulist.append(pyfits.ImageHDU(data=bestfit_paras, name = "BESTPARA",header=pyfits.Header(cards=bestfit_paras_header)))
@@ -297,6 +299,17 @@ def fitpsf(dataobj, ref_dataobj = None,
 
 
     return bestfit_paras, _d, bestfit_model, residuals
+
+def _handle_nan_header_dict(d):
+    """Replace non-finite floats with a FITS-safe placeholder before writing to header."""
+    import math
+    clean = {}
+    for k, v in d.items():
+        if isinstance(v, float) and not math.isfinite(v):
+            clean[k] = 'NaN'
+        else:
+            clean[k] = v
+    return clean
 
 
 def _fit_wpsf_task(paras):
@@ -884,6 +897,8 @@ def project_psf_model(dataobj, save_utils=False,centroid = None,OWA=None,spectru
     elif mode == "breadspsf" and interpgrid is None:
         BREADS_DATA_ENV = os.getenv('BREADS_DATA')
         if use_breadspsf is None or (isinstance(use_breadspsf, bool) and use_breadspsf):
+            if dataobj.priheader['INSTRUME'].strip() != 'NIRSPEC':
+                raise ValueError("use_breadspsf=True only selects a default BreadsPSF for NIRSpec: give the BreadsPSF file name instead.")
             grating = dataobj.priheader['GRATING'].strip()
             detector = dataobj.priheader['DETECTOR'].strip().lower()
             if os.path.exists(
@@ -905,8 +920,8 @@ def project_psf_model(dataobj, save_utils=False,centroid = None,OWA=None,spectru
 
     if mode == "webbpsf" or mode == "breadspsf":
         if interpgrid is None:
-            if not hasattr(dataobj, "wv_sampling"):
-                if not np.allclose(dataobj.wv_sampling, _wv_sampling):
+            if getattr(dataobj, "wv_sampling", None) is not None:
+                if np.size(dataobj.wv_sampling) != np.size(_wv_sampling) or not np.allclose(dataobj.wv_sampling, _wv_sampling):
                     raise Exception("BreadsPSF wavelength sampling is different from the one in the data object.")
             # print(_wv_sampling)
             # print(psf_Y_vec)

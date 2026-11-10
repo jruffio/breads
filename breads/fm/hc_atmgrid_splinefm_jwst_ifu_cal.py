@@ -95,26 +95,15 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
     pixarea_steradians = cubeobj.area2d
 
     if ifu_name == 'miri':
-        raise Exception('Miri model not yet implemented.')
-        # if cubeobj.channel_reduction == '1' or cubeobj.channel_reduction == '4':
-        #     ra_array[:, 500:] = np.nan
-        #     dec_array[:, 500:] = np.nan
-        #     wvs[:, 500:] = np.nan
-        # else:
-        #     ra_array[:, :500] = np.nan
-        #     dec_array[:, :500] = np.nan
-        #     wvs[:, :500] = np.nan
-        #
-        # #Transpose the arrays for miri
-        # data = data.transpose()
-        # ny, nx = data.shape
-        # bad_pixels = bad_pixels.transpose()
-        # noise = noise.transpose()
-        # wvs = wvs.transpose()
-        # dec_array = dec_array.transpose()
-        # ra_array = ra_array.transpose()
-        # pixarea_steradians = pixarea_steradians.transpose()
 
+        if cubeobj.channel_reduction == '1' or cubeobj.channel_reduction == '4':
+             ra_array[500:] = np.nan
+             dec_array[500:] = np.nan
+             wvs[500:] = np.nan
+        else:
+             ra_array[:500] = np.nan
+             dec_array[:500] = np.nan
+             wvs[:500] = np.nan
 
     vsini, rv = other_nonlin_paras[0:2]
 
