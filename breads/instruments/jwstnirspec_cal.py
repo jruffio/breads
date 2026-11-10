@@ -15,11 +15,11 @@ from scipy.optimize import lsq_linear
 from scipy.stats import median_abs_deviation
 from tqdm import tqdm
 
-
 from breads.utils import get_spline_model
 from breads.instruments.jwst_IFUs import JWST_IFUs
-from breads.instruments.jwst_IFUs import crop_trace_edges, set_nans, filter_big_triangles, combine_spectrum
-
+from breads.jwst_tools.plotting import filter_big_triangles
+from breads.jwst_tools.spectra import combine_spectrum
+from breads.jwst_tools.default_nirspec import wv_ref_dict
 
 
 class JWSTNirspec_cal(JWST_IFUs):
@@ -62,7 +62,8 @@ class JWSTNirspec_cal(JWST_IFUs):
         super().__init__(filename, utils_dir, verbose)
         self._init_additional_default_filenames()
         self.R = 2700 #TODO change
-        super()._init_pipeline(save_utils=save_utils, load_utils=load_utils, preproc_task_list=preproc_task_list)
+        self.breads_header['WV_REF'] = wv_ref_dict[self.priheader['GRATING'].strip()]
+        super().run_preproc_list(save_utils=save_utils, load_utils=load_utils, preproc_task_list=preproc_task_list)
 
 
     def _init_wave_wcs(self, filename):
@@ -121,6 +122,7 @@ class JWSTNirspec_cal(JWST_IFUs):
             dec_array = np.zeros(self.data.shape) + np.nan
             wavelen_array = np.zeros(self.data.shape) + np.nan
 
+            new_badpix = np.ones(self.data.shape)
             print(f"Computing coords for {len(wcses)} slices...")
             for i in tqdm(range(len(wcses)), total=len(wcses), ncols=100):
                 # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
@@ -136,7 +138,6 @@ class JWSTNirspec_cal(JWST_IFUs):
 
                 # Transform all those pixels to RA, Dec, wavelength
                 skycoords, speccoord = wcses[i].pixel_to_world(x, y)
-
                 ra_array[ymin:ymax, xmin:xmax] = skycoords.ra
                 dec_array[ymin:ymax, xmin:xmax] = skycoords.dec
                 wavelen_array[ymin:ymax, xmin:xmax] = speccoord
@@ -145,8 +146,8 @@ class JWSTNirspec_cal(JWST_IFUs):
 
         arcsec2_to_steradians = (2.*np.pi/(360.*3600.))**2
 
-        self.ra_array = ra_array
-        self.dec_array = dec_array
+        self.ra_array = ra_array*new_badpix
+        self.dec_array = dec_array*new_badpix
         self.area2d = area2d * arcsec2_to_steradians #convert area2d in steradians
 
         return ra_array, dec_array, wavelen_array, area2d
@@ -161,7 +162,7 @@ class JWSTNirspec_cal(JWST_IFUs):
         self.default_filenames["compute_starsubtraction_2dspline"] = \
                 os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_2dstarsub.fits"))
 
-    def compute_med_filt_badpix(self, save_utils=False, window_size=50, mad_threshold=50, crop_Npix_from_trace_edges=0):
+    def compute_med_filt_badpix(self, save_utils=False, window_size=50, mad_threshold=50):
         """ Quick bad pixel identification.
 
         The data is first high-pass filtered row by row with a median filter with a window size of 50 (window_size)
@@ -174,20 +175,23 @@ class JWSTNirspec_cal(JWST_IFUs):
 
         Parameters
         ----------
-        crop_Npix_from_trace_edges
-        mad_threshold
-        window_size
         save_utils : bool or string
             Save the computed bad pixel map (nans=bad) into the utils directory
             Default filename (set save_utils as a string instead of bool to override filename):
             os.path.join(self.utils_dir, os.path.basename(self.filename).replace(".fits", "_med_filt_badpix.fits"))
+        window_size : int
+            Window size for the median filter. Default is 50 pixels.
+        mad_threshold : float
+            Threshold in units of the median absolute deviation (MAD) to identify bad pixels. Default is 50.
 
         Returns
         -------
         new_badpix : np.array
-            nans = bad.
+            Values that are nans mean "bad pixel".
 
         """
+        self.breads_header["QKBADWIN"] = window_size
+        self.breads_header["QKBADTHR"] = mad_threshold
 
         if self.verbose:
             print("Initializing row_err and bad_pixels for nirspec")
@@ -199,17 +203,25 @@ class JWSTNirspec_cal(JWST_IFUs):
             new_badpix[rowid,np.where((row_err_masking>mad_threshold))[0]] = np.nan
         self.bad_pixels *= new_badpix
 
-        if crop_Npix_from_trace_edges != 0:
-            if hasattr(self, "trace_id_map"):
-                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges,trace_id_map=self.trace_id_map)
-            else:
-                self.bad_pixels = crop_trace_edges(self.bad_pixels, N_pix=crop_Npix_from_trace_edges)
 
         if save_utils:
             self._save_med_filt_badpix(save_utils, new_badpix)
 
         return new_badpix
 
+    def reload_med_filt_badpix(self, load_filename=None):
+        new_badpix = super().reload_med_filt_badpix()
+
+        if load_filename is None:
+            load_filename = self.default_filenames["compute_med_filt_badpix"]
+        if len(glob(load_filename)) == 0:
+            return None
+
+        with pyfits.open(load_filename) as hdulist:
+            self.breads_header["QKBADWIN"] = hdulist['BREADS'].header["QKBADWIN"]
+            self.breads_header["QKBADTHR"] = hdulist['BREADS'].header["QKBADTHR"]
+
+        return new_badpix
 
     def _get_webbpsf_model_inputs(self, image_mask, pixel_scale):
         """Hook for nirspec subclass, returns webbpsf parameters for nirspec simulation"""
@@ -404,7 +416,6 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                          wv_nodes = wv_nodes,
                                                                                          ifuy_nodes=ifuy_nodes,
                                                                                          threshold=threshold_badpix,
-                                                                                         use_set_nans=False,
                                                                                          reg_mean_map=reg_mean_map0,
                                                                                          reg_std_map=reg_std_map0,
                                                                                          wv_ref=self.wv_ref,
@@ -423,7 +434,6 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                              wv_nodes = wv_nodes,
                                                                                              ifuy_nodes=ifuy_nodes,
                                                                                              threshold=threshold_badpix,
-                                                                                             use_set_nans=False,
                                                                                              reg_mean_map=reg_mean_map1,
                                                                                              reg_std_map=reg_std_map1,
                                                                                              wv_ref=self.wv_ref,
@@ -605,12 +615,11 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                          im_ifuy,
                                                                                          noise=err,
                                                                                          badpixs=self.bad_pixels,
-                                                                                         star_model=self.star_func(im_wvs),
+                                                                                         stellar_features=self.star_func(im_wvs),
                                                                                          trace_id_map = _trace_id_map,
                                                                                          wv_nodes = self.wv_nodes,
                                                                                          ifuy_nodes=self.ifuy_nodes,
                                                                                          threshold=threshold_badpix,
-                                                                                         use_set_nans=False,
                                                                                          reg_mean_map=reg_mean_map0,
                                                                                          reg_std_map=reg_std_map0,
                                                                                          wv_ref=self.wv_ref,
@@ -627,12 +636,11 @@ class JWSTNirspec_cal(JWST_IFUs):
                                                                                              im_ifuy,
                                                                                              noise=err,
                                                                                              badpixs=self.bad_pixels*new_badpixs,
-                                                                                             star_model=self.star_func(im_wvs),
+                                                                                             stellar_features=self.star_func(im_wvs),
                                                                                              trace_id_map = _trace_id_map,
                                                                                              wv_nodes = self.wv_nodes,
                                                                                              ifuy_nodes=self.ifuy_nodes,
                                                                                              threshold=threshold_badpix,
-                                                                                             use_set_nans=False,
                                                                                              reg_mean_map=reg_mean_map1,
                                                                                              reg_std_map=reg_std_map1,
                                                                                              wv_ref=self.wv_ref,
@@ -662,7 +670,7 @@ class JWSTNirspec_cal(JWST_IFUs):
                 if not os.path.exists(os.path.join(self.utils_dir,starsub_dir)):
                     os.makedirs(os.path.join(self.utils_dir,starsub_dir))
                 hdulist_sc = pyfits.open(self.filename)
-                du = self.data_unit
+                du = self.breads_header["DATAUNIT"]
                 bu = self.extheader["BUNIT"].strip()
 
                 if du == 'MJy'    and bu == 'MJy':
@@ -741,20 +749,20 @@ def _task_normslice_2dspline(paras):
     Parameters
     ----------
     paras : tuple containing many values
-        im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map
+        im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map
 
     Returns
     -------
 
     """
-    im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, star_model, threshold, reg_mean_map, reg_std_map = paras
+    im, im_wvs, im_ifuy, noise, badpix, wv_nodes,ifuy_nodes, wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map = paras
 
     new_im = np.zeros(im.shape)+np.nan#np.array(copy(im), '<f4')  # .byteswap().newbyteorder()
     new_noise = copy(noise)
     new_badpix = copy(badpix)
     res = np.zeros(im.shape) + np.nan
 
-    bool_map = np.isfinite(new_badpix) * np.isfinite(im) * np.isfinite(noise) * (noise != 0) * np.isfinite(star_model) * np.isfinite(im_ifuy)
+    bool_map = np.isfinite(new_badpix) * np.isfinite(im) * np.isfinite(noise) * (noise != 0) * np.isfinite(stellar_features) * np.isfinite(im_ifuy)
     where_data_finite = np.where(bool_map)
     if np.size(where_data_finite[0]) != 0:
         ravel_im_ifuy = im_ifuy[where_data_finite]
@@ -769,7 +777,7 @@ def _task_normslice_2dspline(paras):
     d = im[where_data_finite]
     d_err = noise[where_data_finite]
 
-    M = M_2dspline * star_model[where_data_finite][:, None]
+    M = M_2dspline * stellar_features[where_data_finite][:, None]
 
     validpara = np.where(np.nansum(M > np.nanmax(M) * 0.005, axis=0) != 0)
     M = M[:, validpara[0]]
@@ -808,8 +816,8 @@ def _task_normslice_2dspline(paras):
 
 
 def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,trace_id_map=None,
-                              star_model=None,  mypool=None,
-                              threshold=10, use_set_nans=False,
+                              stellar_features=None,  mypool=None,
+                              threshold=10,
                               N_wvs_nodes=20, wv_nodes=None, delta_ifuy=0.05, ifuy_nodes=None,
                               reg_mean_map=None, reg_std_map=None, wv_ref = None):
     """ Normalize sliaces using a 2D spline
@@ -822,10 +830,9 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
     noise
     badpixs
     trace_id_map
-    star_model
+    stellar_features
     mypool
     threshold
-    use_set_nans
     N_wvs_nodes
     wv_nodes
     delta_ifuy
@@ -844,8 +851,8 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
         noise = np.ones(image.shape)
     if badpixs is None:
         badpixs = np.ones(image.shape)
-    if star_model is None:
-        star_model = np.ones(image.shape)
+    if stellar_features is None:
+        stellar_features = np.ones(image.shape)
     if trace_id_map is None:
         trace_id_map = np.zeros(image.shape)
 
@@ -866,8 +873,6 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
     unique_trace_ids = np.unique(trace_id_map[np.where(np.isfinite(trace_id_map))])
 
     new_image = copy(image)
-    if use_set_nans:
-        new_image = set_nans(image, 40)
     new_noise = copy(noise)
     new_res = np.zeros(image.shape) + np.nan
     new_badpixs = np.zeros(image.shape) + np.nan
@@ -891,7 +896,7 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
 
             paras = new_image[row_id_min:row_id_max,:], im_wvs[row_id_min:row_id_max,:], im_ifuy[row_id_min:row_id_max,:], \
                 new_noise[row_id_min:row_id_max,:], tmp_badpixs[row_id_min:row_id_max,:], wv_nodes,ifuy_nodes,wv_ref, \
-                star_model[row_id_min:row_id_max,:], threshold, reg_mean_map[id], reg_std_map[id]
+                stellar_features[row_id_min:row_id_max,:], threshold, reg_mean_map[id], reg_std_map[id]
 
             outputs = _task_normslice_2dspline(paras)
             partial_new_image, partial_new_noise, partial_new_badpixs, partial_new_res, partial_new_spline_paras = outputs
@@ -909,7 +914,7 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
         im_ifuy_list = []
         noise_list = []
         badpixs_list = []
-        star_model_list = []
+        stellar_features_list = []
         for id, trace_id in enumerate(unique_trace_ids):
             trace_mask = (trace_id_map == trace_id)
             where_in_trace = np.where(trace_mask)
@@ -923,13 +928,13 @@ def normalize_slices_2dspline(image, im_wvs,im_ifuy, noise=None, badpixs=None,tr
             im_ifuy_list.append(im_ifuy[row_id_min:row_id_max, :])
             noise_list.append(new_noise[row_id_min:row_id_max, :])
             badpixs_list.append(tmp_badpixs[row_id_min:row_id_max, :])
-            star_model_list.append(star_model[row_id_min:row_id_max, :])
+            stellar_features_list.append(stellar_features[row_id_min:row_id_max, :])
 
         outputs_list = mypool.map(_task_normslice_2dspline, zip(image_list, wvs_list, im_ifuy_list, noise_list, badpixs_list,
                                                       itertools.repeat(wv_nodes),
                                                       itertools.repeat(ifuy_nodes),
                                                       itertools.repeat(wv_ref),
-                                                      star_model_list,
+                                                      stellar_features_list,
                                                       itertools.repeat(threshold),
                                                       reg_mean_map,reg_std_map))
         for id,((row_id_min,row_id_max), outputs) in enumerate(zip(row_indices_list, outputs_list)):

@@ -10,11 +10,8 @@ breads, the Broad Repository for Exoplanet Analysis, Discovery, and Spectroscopy
 ``breads`` is a toolkit for data analyses in astronomical spectroscopy of
 exoplanets, in particular frameworks for rigorous forward modeling of
 observational data to achieve physical inferences with reduced systematic biases.
-``breads`` currently has specific functionality for modeling data from JWST NIRSpec, Keck OSIRIS, and Keck KPIC, but the
-underlying mathematical framework is more general.
 
 Breads has been developed by Jean-Baptiste Ruffio (UC San Diego) and collaborators.
-
 
 .. warning::
 
