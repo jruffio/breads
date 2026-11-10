@@ -24,7 +24,9 @@ def _build_cube_task(inputs):
     Parameters
     ----------
     inputs : tuple containing many parameters
-        X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min
+        X, Y, Z, Zerr, Zbp, wv_sampling, east2V2_deg, psf_interp_paras, wv_id, wv, ra_vec, dec_vec, aper_radius, N_pix_min,
+        ifu_name, pix_area. pix_area is the pixel area (steradian) of the data, used to convert the amplitude fitted with
+        STPSF from MJy/sr to MJy as in fitpsf, or None (no conversion).
 
     Returns
     -------
@@ -32,7 +34,7 @@ def _build_cube_task(inputs):
         Complex nested bunch of stuff... TODO figure out and document
 
     """
-    X, Y, Z, Zerr, Zbp, wv_sampling, psf_interp_paras, wv_id, wv,  ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name = inputs
+    X, Y, Z, Zerr, Zbp, wv_sampling, psf_interp_paras, wv_id, wv,  ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name, pix_area = inputs
 
 
     ny,nx = ifux_grid.shape
@@ -76,6 +78,11 @@ def _build_cube_task(inputs):
 
                 res = Z_fin - mfflux * M
                 noise_factor = np.nanstd(res / Zerr_fin)
+                if pix_area is not None:
+                    # convert from MJy/sr to MJy with the pixel area weighted by the model, as in fitpsf
+                    rescale_flux = np.nansum(pix_area[where_finite] * M) / np.nansum(M)
+                    mfflux *= rescale_flux
+                    mffluxerr *= rescale_flux
                 mfflux_arr[k,l] = mfflux
                 mffluxerr_arr[k,l] = mffluxerr * noise_factor
 
@@ -210,6 +217,7 @@ def build_cube(dataobj,
     _d = dataobj.data
     _e = dataobj.noise
     _bp = dataobj.bad_pixels
+    _area = dataobj.area2d if use_stpsf else None
 
 
     ifu_name = dataobj.ifu_name
@@ -244,7 +252,8 @@ def build_cube(dataobj,
         inputs.append([_x[:, wv_id], _y[:, wv_id], _d[:, wv_id], _e[:, wv_id], _bp[:, wv_id],
                        dataobj.wv_sampling,
                        psf_interp_paras,
-                       wv_id, wv, ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name])
+                       wv_id, wv, ifux_grid, ifuy_grid, aper_radius, N_pix_min, ifu_name,
+                       None if _area is None else _area[:, wv_id]])
 
     #step 2 map _build_cube_task over input list
     if mppool is None:
@@ -274,6 +283,8 @@ def build_cube(dataobj,
         print("saving",out_filename)
 
         _hdr_flux = pyfits.Header({'BUNIT': out_units})
+        if use_stpsf:
+            _hdr_flux['FLUXCONV'] = ('area2d', 'STPSF amplitude x pixel area weighted by the model')
 
         if "sky" in dataobj.breads_header['COORDS']:
             _x_out = ra_grid
