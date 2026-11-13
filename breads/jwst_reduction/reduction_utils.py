@@ -232,7 +232,8 @@ def run_stage2(uncal_files, output_dir, skip_cubes=True, overwrite=False, TA=Fal
     return run_stage2_nirspec(uncal_files, output_dir, skip_cubes=skip_cubes, overwrite=overwrite, TA=TA,
                               cleanflicker_skip=nsclean_skip, save_plots=save_plots)
 
-def run_stage2_nirspec(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False, cleanflicker_skip=True, save_plots=True):
+def run_stage2_nirspec(rate_files, output_dir, skip_cubes=True, overwrite=False, TA=False, cleanflicker_skip=True, save_plots=True,
+                       sflat_nrs1=None, sflat_nrs2=None):
     """
     Run pipeline stage 2 for JWST/NIRSpec, with some customizations for reductions
     intended to be used with breads for IFU high contrast
@@ -257,6 +258,13 @@ def run_stage2_nirspec(rate_files, output_dir, skip_cubes=True, overwrite=False,
         Default is True.
     save_plots : bool
             Whether to save plots of the stage 2 results. Default is True.
+    sflat_nrs1 : str or None
+        Path to a custom NIRSpec S-flat reference file (same format as the CRDS one) to use instead of the CRDS
+        S-flat in the flat_field step, for NRS1 files. The F-flat and D-flat still come from CRDS.
+        Default is None (use the CRDS S-flat).
+        Note that existing cal files are not re-reduced unless overwrite=True or a new output_dir is used.
+    sflat_nrs2 : str or None
+        Same as sflat_nrs1, for NRS2 files.
 
     Returns
     -------
@@ -305,6 +313,13 @@ def run_stage2_nirspec(rate_files, output_dir, skip_cubes=True, overwrite=False,
             # spec3.cube_build.coord_system = 'skyalign'
             # spec2.cube_build.coord_system='ifualign'
         }
+        detector = fits.getheader(rate_file)['DETECTOR'].strip().upper()
+        sflat = {"NRS1": sflat_nrs1, "NRS2": sflat_nrs2}.get(detector)
+        if sflat is not None:
+            if not os.path.exists(sflat):
+                raise FileNotFoundError(f"Custom S-flat not found: {sflat}")
+            print(f"\tUsing custom S-flat for {detector}: {sflat}")
+            step_parameters['flat_field'] = {'override_sflat': sflat}
         spec2.save_bsub = True
 
         # choose what results to save and from what steps
@@ -3582,7 +3597,7 @@ def compute_snr_grid_miri(cal_files, channel, utils_dir, out_dir,
 
 def run_complete_stage1_2_nirspec(uncal_files, output_root_dir, utils_dir, overwrite=False,numthreads=1,
                           clean_1f_noise = True, model_charge_transfer=False,mppool=None,targetname=None,
-                                  extend_sat=2):
+                                  extend_sat=2, sflat_nrs1=None, sflat_nrs2=None):
     """
     Overarching top-level function to invoke stage1, stage2, 1/f noise cleaning code on rate maps, and stage2 again with cleaned rate maps.
 
@@ -3592,6 +3607,10 @@ def run_complete_stage1_2_nirspec(uncal_files, output_root_dir, utils_dir, overw
 
     Parameters
     ----------
+    sflat_nrs1 : str or None
+        Path to a custom S-flat for NRS1, passed to both run_stage2_nirspec calls. Default is None (CRDS S-flat).
+    sflat_nrs2 : str or None
+        Same as sflat_nrs1, for NRS2.
 
     Returns
     -------
@@ -3616,7 +3635,8 @@ def run_complete_stage1_2_nirspec(uncal_files, output_root_dir, utils_dir, overw
 
         _rate_files = run_stage1_nirspec(uncal_files_dict[grating], stage1_outdir, overwrite=overwrite,maximum_cores=f"{numthreads}")
         cal_files[grating] = run_stage2_nirspec(_rate_files, stage2_outdir, skip_cubes=True, overwrite=overwrite, TA=False,
-                                       cleanflicker_skip=True, save_plots=True)
+                                       cleanflicker_skip=True, save_plots=True,
+                                       sflat_nrs1=sflat_nrs1, sflat_nrs2=sflat_nrs2)
         if model_charge_transfer or clean_1f_noise:
             # Subtract charge transfer
             _rate_files = clean_rate_nirspec(_rate_files, stage2_outdir, stage1_clean_outdir, N_nodes=40,utils_dir=utils_dir,
@@ -3625,7 +3645,8 @@ def run_complete_stage1_2_nirspec(uncal_files, output_root_dir, utils_dir, overw
                                              extend_sat=extend_sat)
 
             cal_files[grating] = run_stage2_nirspec(_rate_files, stage2_clean_outdir, skip_cubes=True,
-                                                   overwrite=overwrite, TA=False, cleanflicker_skip=False, save_plots=True)
+                                                   overwrite=overwrite, TA=False, cleanflicker_skip=False, save_plots=True,
+                                                   sflat_nrs1=sflat_nrs1, sflat_nrs2=sflat_nrs2)
 
     return cal_files
 
