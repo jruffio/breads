@@ -699,3 +699,45 @@ def test_regularization():
     assert np.abs(np.std(gauss_center_samples)- max(left_err2, right_err2)) < 0.25*max(left_err2, right_err2), "EMCEE gauss_center uncertainty is not similar enough to BREADS gauss_center uncertainty (case 4)"
 
     assert (max(left_err1, right_err1) - np.std(gauss_center_samples)) > 0.25*max(left_err1, right_err1), "The prior should make the uncertainty smaller, so EMCEE gauss_center uncertainty should be more similar to BREADS gauss_center uncertainty with prior (left_err2, right_err2) than without prior (left_err1, right_err1)"
+
+def _toy_linear_fm(nonlin_paras, data_obj, d=None, M=None, s=None, d_reg=None, s_reg=None):
+    """Forward model returning fixed matrices (used to test fitfm() itself)."""
+    if d_reg is None:
+        return d, M, s
+    return d, M, s, {"regularization": (d_reg, s_reg)}
+
+
+def _toy_problem(seed, scales, reg_frac):
+    rng = np.random.default_rng(seed)
+    N, P = 400, 12
+    x = np.linspace(0, 1, N)
+    M = np.stack([np.cos(np.pi * k * x + rng.uniform()) for k in range(P)], axis=1) + 0.1 * rng.normal(size=(N, P))
+    M = M * scales[None, :]
+    s = rng.uniform(0.5, 2, N)
+    phi = rng.normal(size=P) / scales
+    d = M @ phi + 1.3 * s * rng.normal(size=N)
+    d_reg, s_reg = np.full(P, np.nan), np.full(P, np.nan)
+    idx = rng.choice(P, int(reg_frac * P), replace=False)
+    d_reg[idx] = phi[idx] + rng.normal(size=idx.size) / scales[idx]
+    s_reg[idx] = rng.uniform(0.3, 3, idx.size) / scales[idx]
+    return dict(d=d, M=M, s=s, d_reg=d_reg if reg_frac > 0 else None, s_reg=s_reg if reg_frac > 0 else None), idx
+
+
+def test_fitfm_units_of_linear_parameters():
+    """fitfm() must give exactly transformed results when the linear parameters change units (phi -> phi / S, the
+    columns of M -> M * S, the priors -> prior / S), even for extreme scales: linparas and linparas_err scale by 1/S,
+    rchi2 is unchanged and log_prob shifts by the analytic Jacobian term -sum(log S) + sum_{regularized}(log S).
+    This guards the internal rescaling of the linear parameters (columns of unit norm) in fitfm()."""
+    wild = 10.0 ** np.random.default_rng(0).uniform(-12, 8, 12)
+    for reg_frac in [0.0, 0.5, 1.0]:
+        for scale_noise in [True, False]:
+            for seed in range(5):
+                base, reg_idx = _toy_problem(seed, np.ones(12), reg_frac)
+                scaled, _ = _toy_problem(seed, wild, reg_frac)
+                lp0, rchi20, lin0, err0 = fitfm(None, None, _toy_linear_fm, base, scale_noise=scale_noise)
+                lp1, rchi21, lin1, err1 = fitfm(None, None, _toy_linear_fm, scaled, scale_noise=scale_noise)
+                expected_lp1 = lp0 - np.sum(np.log(wild)) + np.sum(np.log(wild[reg_idx]))
+                assert np.abs(lp1 - expected_lp1) < 1e-8 * np.abs(lp0)
+                np.testing.assert_allclose(rchi21, rchi20, rtol=1e-10)
+                np.testing.assert_allclose(lin1 * wild, lin0, rtol=1e-8, atol=1e-10 * np.max(np.abs(lin0)))
+                np.testing.assert_allclose(err1 * wild, err0, rtol=1e-8)

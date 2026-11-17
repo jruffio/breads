@@ -63,10 +63,6 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     else:
         raise ValueError(f"Unrecognized number of matrices for forward model, the number of outputs for {fm_func.__name__} is expected to be 3 or 4 but {len(fm_out)} were given.")
 
-    # _para_renormalization = np.nanmax(np.abs(M_no_reg),axis=0)
-    _para_renormalization = np.ones(M_no_reg.shape[1])
-    M_no_reg = M_no_reg / _para_renormalization[None,:]
-
     N_linpara = M_no_reg.shape[1]
     N_data = np.size(d_no_reg)
 
@@ -78,7 +74,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     if bounds is None:
         _bounds = ([-np.inf]*N_linpara, [np.inf]*N_linpara)
     else:
-        _bounds = (copy(bounds[0])/_para_renormalization, copy(bounds[1])/_para_renormalization)
+        _bounds = (copy(bounds[0]), copy(bounds[1]))
         if any(np.any(np.isfinite(arr)) for arr in _bounds): #check if there is finite boundaries
             warning_text = "The calculation of log prob is only theoretically accurate if no finite bounds are used..."
             warn(warning_text)
@@ -116,6 +112,30 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     else:
         is_regularized = False
 
+    # Rescaling of the linear parameters (purely numerical, the maths is unchanged).
+    # The columns of the model matrix can have very different scales (different units for the planet flux, the
+    # spline and the KL coefficients, or barely sampled basis functions), which makes the matrices below badly
+    # conditioned. Each linear parameter phi_j is therefore replaced by phi'_j = c_j * phi_j, where c_j is the norm of
+    # the j-th column of the full (whitened) least-squares matrix, i.e. data rows plus its regularization row if any:
+    #     c_j^2 = ||M_j / s||^2 + 1 / s_reg_j^2
+    # (c_j^-1 is the uncertainty of phi_j if it were fitted alone). The rescaled columns then all have unit norm.
+    # Any positive c gives the same results; everything that depends on the linear parameters is transformed:
+    #   - bounds and regularization priors (mean and width) on phi are multiplied by c,
+    #   - the best fit values and uncertainties are divided by c at the end,
+    #   - the log-determinants are corrected so that log_prob is the same as without rescaling:
+    #     covphi' = C covphi C with C = diag(c), so log|covphi| = log|covphi'| - 2 sum(log c);
+    #     and the regularization widths enter logdet_Sigma, so it is corrected by -2 sum(log c) over regularized paras.
+    _para_scale2 = np.nansum(M_no_reg ** 2, axis=0)
+    if is_regularized:
+        _s_reg_valid = np.asarray(extra_outputs["regularization"][1], dtype=float)[validpara]
+        _has_prior = np.isfinite(_s_reg_valid) & (_s_reg_valid != 0)
+        _para_scale2[_has_prior] += 1.0 / _s_reg_valid[_has_prior] ** 2
+    _para_scale = np.sqrt(_para_scale2)
+    _para_scale[~(np.isfinite(_para_scale) & (_para_scale > 0))] = 1.0
+    M_no_reg = M_no_reg / _para_scale[None, :]
+    _bounds = (_bounds[0] * _para_scale, _bounds[1] * _para_scale)
+    logdet_para_scale = 2 * np.sum(np.log(_para_scale))  # = log|C|^2, correction of the log-determinants
+
     if not is_regularized: # No regularization used in this case
         M = M_no_reg
         d = d_no_reg
@@ -133,7 +153,8 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
         try:
             covphi0 = np.linalg.inv(MTM)
             slogdet_icovphi0 = np.linalg.slogdet(MTM)
-            logdet_icovphi0 = slogdet_icovphi0[1]
+            # MTM = C^-1 MTM_orig C^-1, so log|MTM_orig| = log|MTM| + 2 sum(log c)
+            logdet_icovphi0 = slogdet_icovphi0[1] + logdet_para_scale
         except Exception as e:
             # only printing the error message, but will not stop because of it
             # Will simply return the outputs corresponding to invalid data.
@@ -148,14 +169,16 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
         #Retrieve the regularization priors
         d_reg, s_reg = extra_outputs["regularization"]
 
-        #Filtering the bad columns
-        s_reg = s_reg[validpara] / _para_renormalization[validpara]
-        d_reg = d_reg[validpara] / _para_renormalization[validpara]
+        #Filtering the bad columns, and rescaling the priors to the rescaled parameters phi' = c * phi
+        s_reg = s_reg[validpara] * _para_scale
+        d_reg = d_reg[validpara] * _para_scale
 
         #Filtering the finite values to match with the M_no_reg matrix
         where_finite_reg = np.where(np.isfinite(s_reg))
         s_reg = s_reg[where_finite_reg]
         d_reg = d_reg[where_finite_reg]
+        # The rescaled prior widths enter logdet_Sigma below: log(c * s_reg) = log(s_reg) + log(c)
+        logdet_reg_scale = 2 * np.sum(np.log(_para_scale[where_finite_reg]))
 
         #Creating the matrix for regularization
         M_reg = np.zeros((np.size(where_finite_reg[0]), M_no_reg.shape[1]))
@@ -182,7 +205,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             # noise scaling is done, set to unity for later as no more scaling is necessary
             noise_scaling = 1
 
-        logdet_Sigma = np.sum(2 * np.log(s))
+        logdet_Sigma = np.sum(2 * np.log(s)) - logdet_reg_scale  # same value as without the rescaling
 
 
         # Section to compute error bars of linear parameters
@@ -197,7 +220,9 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             X = cho_solve(c_and_lower, MTM_no_reg)  # X = MTM^{-1} @ MTM_no_reg
             covphi = cho_solve(c_and_lower, X.T).T  # covphi = MTM^{-1} @ MTM_no_reg @ MTM^{-1}
 
-            eigvals = np.linalg.eigvalsh(covphi)  # covphi should be symmetric PSD
+            # The condition number is computed on covphi in the original units of the linear parameters
+            # (C^-1 covphi' C^-1), so that this warning is triggered exactly as before the rescaling.
+            eigvals = np.linalg.eigvalsh(covphi / np.outer(_para_scale, _para_scale))  # covphi should be symmetric PSD
             cond = np.abs(eigvals.max() / eigvals.min())
             # print("condition number:", cond, nonlin_paras)
             # print("min/max eigenvalue:", eigvals.min(), eigvals.max())
@@ -207,8 +232,16 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
                 # raise Exception(warning_text)
             # The formula below assumes that we are using the determinant of the inverse covariance
             # That's why we are adding the minus sign
-            slogdet_icovphi0 = np.linalg.slogdet(covphi)
-            logdet_icovphi0 = -slogdet_icovphi0[1]
+            # log|covphi| = log|MTM_no_reg| - 2 log|MTM| (covphi = MTM^-1 MTM_no_reg MTM^-1). It is computed this way
+            # rather than with slogdet(covphi), because covphi itself can be very badly conditioned (parameters
+            # constrained almost only by their prior have a tiny variance), while MTM is well conditioned after the
+            # rescaling, and MTM_no_reg is well conditioned once normalized by its own diagonal.
+            logdet_MTM = 2 * np.sum(np.log(np.diag(c_and_lower[0])))  # from the Cholesky factor
+            _diag_no_reg = np.sqrt(np.diag(MTM_no_reg))
+            slogdet_MTM_no_reg = np.linalg.slogdet(MTM_no_reg / np.outer(_diag_no_reg, _diag_no_reg))
+            logdet_MTM_no_reg = slogdet_MTM_no_reg[1] + 2 * np.sum(np.log(_diag_no_reg))
+            # covphi = C covphi_orig C, so -log|covphi_orig| = -log|covphi| + 2 sum(log c)
+            logdet_icovphi0 = 2 * logdet_MTM - logdet_MTM_no_reg + logdet_para_scale
             # print(logdet_icovphi0)
             # logdet_icovphi0 = -np.sum(np.log(np.diag(covphi)))
             # print(logdet_icovphi0,"3")
@@ -240,9 +273,9 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     linparas = np.full(N_linpara, np.nan)
     linparas_err = np.full(N_linpara, np.nan)
 
-    # Bookeeping the valid best fit linear parameters
-    linparas[validpara] = paras * _para_renormalization[validpara]
-    linparas_err[validpara] = paras_err * _para_renormalization[validpara]
+    # Bookeeping the valid best fit linear parameters, back to their original units (phi = phi' / c)
+    linparas[validpara] = paras / _para_scale
+    linparas_err[validpara] = paras_err / _para_scale
 
     return log_prob, rchi2, linparas, linparas_err
 
