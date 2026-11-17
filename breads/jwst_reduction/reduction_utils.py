@@ -63,6 +63,7 @@ from breads.jwst_tools.default_miri import sub_band_from_name
 
 from breads.jwst_tools.build_cube import build_cube
 from breads.jwst_tools.splines import evaluate_3dspline_pointcloud
+from breads.jwst_tools.spline1d import Spline1D
 from breads.fm.hc_atmgrid_splinefm_jwst_ifu_cal import hc_atmgrid_splinefm_jwst_ifu_cal
 from breads.instruments.jwstnirspec_cal import PCA_wvs_axis
 from breads.grid_search import grid_search
@@ -1479,7 +1480,7 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_
         normalized_im_list = []
         normalized_err_list = []
 
-        x_nodes_to_compare = None
+        spline_to_compare = None
         for dataobj in dataobj_list:
 
             # Reload the individual continuum normalized spectra from the utils folder
@@ -1487,13 +1488,15 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_
             if reload_outputs is None:
                 raise Exception("Need to run compute_starspectrum_contnorm first. Could not reload continuum normalized data.")
             new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, wv_nodes = reload_outputs
+            spline = dataobj.get_spline1d()
 
-            # Checking that all spline nodes are identical
-            if x_nodes_to_compare is None:
-                x_nodes_to_compare = wv_nodes
+            # Checking that all spline nodes (and spline bases) are identical
+            if spline_to_compare is None:
+                spline_to_compare = spline
             else:
-                if not np.allclose(wv_nodes, x_nodes_to_compare):
-                    raise Exception("The wv_nodes of the spline continuum fit are different for different data objects. This should not happen. Please check the compute_starspectrum_contnorm outputs for each data object.")
+                if (spline.basis != spline_to_compare.basis or spline.n_params != spline_to_compare.n_params
+                        or not np.allclose(np.concatenate(spline.nodes_list), np.concatenate(spline_to_compare.nodes_list))):
+                    raise Exception("The wv_nodes (or spline basis) of the spline continuum fit are different for different data objects. This should not happen. Please check the compute_starspectrum_contnorm outputs for each data object.")
 
             # Mask pixels we don't want to use: eg pixels too noisy or pixels below median flux
             spline_cont0[np.where(spline_cont0 / dataobj.noise < 5)] = np.nan
@@ -1542,7 +1545,7 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_
             hdulist.append(fits.ImageHDU(data=new_wavelengths, header=dataobj_list[0].extheader, name="WAVE"))
             hdulist.append(fits.ImageHDU(data=combined_fluxes, name='COM_FLUXES'))
             hdulist.append(fits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
-            hdulist.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+            hdulist.append(spline_to_compare.to_hdu(name='wv_nodes'))
             hdulist.append(fits.ImageHDU(header=_breads_header, name='BREADS'))
             hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
@@ -1585,17 +1588,40 @@ def get_contnorm_spec(dataobj_list, out_filename=None, load_utils=False, spec_R_
     combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False,fill_value=1)
     return new_wavelengths, combined_fluxes, combined_errors, combined_star_func
 
+def _check_requested_spline_basis(saved_spline, wv_nodes, spline_basis, filename):
+    """Raise an error if an existing (cached) product was computed with a different 1d spline basis than requested."""
+    if saved_spline is None:
+        return
+    if isinstance(wv_nodes, Spline1D):
+        requested_basis = wv_nodes.basis
+    elif spline_basis is not None:
+        requested_basis = Spline1D([0., 1.], basis=spline_basis).basis
+    else:
+        requested_basis = "cardinal"
+    if saved_spline.basis != requested_basis:
+        raise ValueError(f"{filename} already exists and was computed with {saved_spline}, but the '{requested_basis}' "
+                         f"basis was requested. Use a different output/utils directory for each spline basis, "
+                         f"or set overwrite=True.")
+
+
 def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_spec_filename,
                                         wv_nodes=None, suffix = None,
                                         coords_offset = None,coords_filename=None,coords_filename_filter=None,centroid_per_frame=False,
                                         mask_charge_transfer_radius=None, mppool=None,
                                         ra_dec_point_sources=None,aper_rad=None,
                                         overwrite=False,targetname=None,
-                                        spline3d_prior_filename=None):
+                                        spline3d_prior_filename=None, spline_basis=None):
     """
 
     Parameters
     ----------
+    wv_nodes : 1d array, Spline1D, or None
+        Nodes of the 1d spline continuum model. If None, default.nodes_dict[grating][detector] is used.
+        It can be a breads.jwst_tools.spline1d.Spline1D, which defines both the nodes and the spline basis.
+    spline_basis : str or None
+        "cardinal" (default) or "bspline". Basis of the 1d spline continuum model.
+        The basis is saved in the combined_contnorm_spec_filename file, and later steps (compute_snr_grid,
+        cube_extraction, extract_spectrum) read it from there.
 
     Returns
     -------
@@ -1605,6 +1631,8 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
         with fits.open(combined_contnorm_spec_filename) as hdulist:
             new_wavelengths = hdulist["WAVE"].data
             combined_fluxes = hdulist["COM_FLUXES"].data
+            saved_spline = Spline1D.from_hdulist(hdulist)
+        _check_requested_spline_basis(saved_spline, wv_nodes, spline_basis, combined_contnorm_spec_filename)
 
         combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
         return combined_star_func
@@ -1617,6 +1645,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
 
         if wv_nodes is None:
             wv_nodes = default.nodes_dict[grating][detector]
+        wv_nodes = Spline1D.coerce(wv_nodes, basis=spline_basis)
         if coords_offset is None and coords_filename_filter is None and coords_filename is None:
             coords_offset = (0,0)
 
@@ -2246,10 +2275,10 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None, extrac
         x_grid = hdulist['X'].data
         y_grid = hdulist['Y'].data
         wv_sampling = hdulist['WAVE'].data
-        if 'wv_nodes' in hdulist:
-            wv_nodes = hdulist['wv_nodes'].data
-        else:
-            wv_nodes = None
+        # 1d spline (nodes + basis) used for the starlight continuum. Cubes made before the B-spline option existed
+        # have no SPLBASIS keyword and are cardinal.
+        spline1d = Spline1D.from_hdulist(hdulist)
+        wv_nodes = None if spline1d is None else np.concatenate(spline1d.nodes_list)
 
     r2star_grid = np.sqrt(x_grid ** 2 + y_grid ** 2)
 
@@ -2348,11 +2377,17 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None, extrac
         if extract_speckles:
             hdulist_out.append(fits.ImageHDU(data=speckle_std_Flambda, name='STD_FLAM'))
             hdulist_out.append(fits.ImageHDU(data=speckles_Flambda, name='SPECKLES_FLAM'))
-        if wv_nodes is not None:
-            hdulist_out.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+        if spline1d is not None:
+            hdulist_out.append(spline1d.to_hdu(name='wv_nodes'))
         hdulist_out[0].header['LABEL'] = label
         hdulist_out[0].header['XCOORD'] = x
         hdulist_out[0].header['YCOORD'] = y
+        if spline1d is not None:
+            # Provenance: spline basis used to model the starlight continuum (SPLBASIS, SPLDEG, SPLNNODE, SPLNPAR, ...)
+            spline1d.update_header(hdulist_out[0].header)
+            _basis_str = "B-spline" if spline1d.is_bspline else "cardinal spline"
+            hdulist_out[0].header['COMMENT'] = (f"Starlight continuum modeled with a degree {spline1d.degree} "
+                                                f"{_basis_str} basis on the wv_nodes extension.")
         try:
             hdulist_out.writeto(planet_out_filename, overwrite=True)
         except TypeError:
@@ -2514,7 +2549,7 @@ def compute_breads_flatfield(cal_files, utils_dir,combined_contnorm_spec_filenam
             total_flux_map = hdulist['flux'].data
             med_res_map = hdulist['res'].data
             std_res_map = hdulist['res_std'].data
-            wv_nodes = hdulist['wv_nodes'].data
+            wv_nodes = Spline1D.from_hdulist(hdulist) # nodes and spline basis
             _breads_header = hdulist['BREADS'].data
 
         return breads_flatfield,breads_flatfield_err,total_flux_map,med_res_map,std_res_map
@@ -2538,7 +2573,7 @@ def compute_breads_flatfield(cal_files, utils_dir,combined_contnorm_spec_filenam
             else:
                 stellar_features0 = None
                 with_3dspline_prior = False
-            wv_nodes = hdulist['wv_nodes'].data
+            wv_nodes = Spline1D.from_hdulist(hdulist) # nodes and spline basis
             hdulist.close()
 
             # Define a series of processing tasks to be performed on each input file.
@@ -2636,7 +2671,7 @@ def compute_breads_flatfield(cal_files, utils_dir,combined_contnorm_spec_filenam
         hdulist.append(fits.ImageHDU(data=total_flux_map, name='flux'))
         hdulist.append(fits.ImageHDU(data=med_res_map, name='res'))
         hdulist.append(fits.ImageHDU(data=std_res_map, name='res_std'))
-        hdulist.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+        hdulist.append(wv_nodes.to_hdu(name='wv_nodes'))
         hdulist.append(fits.ImageHDU(header=dataobj.breads_header, name='BREADS'))
         hdulist.writeto(flatfield_output_filename, overwrite=True)
         hdulist.close()
@@ -2701,7 +2736,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
                 x_vec = hdulist['x_vec'].data
                 y_vec = hdulist['y_vec'].data
                 rv_vec = hdulist['rv_vec'].data
-                wv_nodes = hdulist['wv_nodes'].data
+                wv_nodes = Spline1D.from_hdulist(hdulist) # nodes and spline basis
                 _breads_header = hdulist['BREADS'].data
 
                 # from scipy.ndimage import generic_filter
@@ -2732,7 +2767,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         else:
             stellar_features0 = None
             with_3dspline_prior = False
-        wv_nodes = hdulist['wv_nodes'].data
+        wv_nodes = Spline1D.from_hdulist(hdulist) # nodes and spline basis
         hdulist.close()
 
 
@@ -2808,7 +2843,13 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         if stellar_features0 is None:
             hdulist = fits.open(dataobj.default_filenames["compute_starsubtraction"])
             spline_paras0 = hdulist['SPLINE_PARAS0'].data
+            starsub_spline = Spline1D.from_hdulist(hdulist)
             hdulist.close()
+            # The spline parameters are used as priors in the forward model, so they must use the same spline
+            if starsub_spline != wv_nodes or spline_paras0.shape[1] != wv_nodes.n_params:
+                raise ValueError(f"{dataobj.default_filenames['compute_starsubtraction']} was computed with "
+                                 f"{starsub_spline}, which is inconsistent with the continuum normalization "
+                                 f"spline {wv_nodes}.")
             wherenan = np.where(np.isnan(spline_paras0))
             reg_mean_map = copy(spline_paras0)
             reg_mean_map[wherenan] = np.tile(np.nanmedian(spline_paras0, axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
@@ -3153,7 +3194,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         fluxerr_arr = linparas_err[:, :, :, 0]
         snr_arr = flux_arr/fluxerr_arr
         hdulist = fits.HDUList()
-        hdulist.append(fits.PrimaryHDU(header=_priheader))
+        hdulist.append(fits.PrimaryHDU(header=wv_nodes.update_header(copy(_priheader)))) # with the spline basis keywords
         hdulist.append(fits.ImageHDU(data=flux_arr,header=_extheader,name="flux_arr"))
         hdulist.append(fits.ImageHDU(data=fluxerr_arr, name='fluxerr_arr'))
         hdulist.append(fits.ImageHDU(data=log_prob, name='log_prob'))
@@ -3161,7 +3202,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
         hdulist.append(fits.ImageHDU(data=rv_vec, name='rv_vec'))
         hdulist.append(fits.ImageHDU(data=x_vec, name='x_vec'))
         hdulist.append(fits.ImageHDU(data=y_vec, name='y_vec'))
-        hdulist.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+        hdulist.append(wv_nodes.to_hdu(name='wv_nodes'))
         hdulist.append(fits.ImageHDU(header=_breads_header, name='BREADS'))
         hdulist.writeto(grid_search_output_filename, overwrite=True)
         hdulist.close()
@@ -3228,7 +3269,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
     grid_search_combined_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1]+ "_" + detector+ "_" + grating+"_"+suffix + "_combined.fits")
 
     hdulist = fits.HDUList()
-    hdulist.append(fits.PrimaryHDU(header=_priheader))
+    hdulist.append(fits.PrimaryHDU(header=wv_nodes.update_header(copy(_priheader)))) # with the spline basis keywords
     hdulist.append(fits.ImageHDU(data=fluxmap_combined, header=_extheader, name="flux_arr"))
     hdulist.append(fits.ImageHDU(data=fluxerrmap_combined, name='fluxerr_arr'))
     hdulist.append(fits.ImageHDU(data=log_prob_combined, name='log_prob'))
@@ -3236,7 +3277,7 @@ def compute_snr_grid(cal_files, utils_dir, out_dir,
     hdulist.append(fits.ImageHDU(data=rv_vec, name='rv_vec'))
     hdulist.append(fits.ImageHDU(data=x_vec, name='x_vec'))
     hdulist.append(fits.ImageHDU(data=y_vec, name='y_vec'))
-    hdulist.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+    hdulist.append(wv_nodes.to_hdu(name='wv_nodes'))
     hdulist.append(fits.ImageHDU(header=_breads_header, name='BREADS'))
     hdulist.writeto(grid_search_combined_filename, overwrite=True)
     hdulist.close()
@@ -3330,7 +3371,7 @@ def compute_snr_grid_miri(cal_files, channel, utils_dir, out_dir,
                 x_vec = hdulist['x_vec'].data
                 y_vec = hdulist['y_vec'].data
                 rv_vec = hdulist['rv_vec'].data
-                wv_nodes = hdulist['wv_nodes'].data
+                wv_nodes = Spline1D.from_hdulist(hdulist) # nodes and spline basis
                 _breads_header = hdulist['BREADS'].data
 
 
@@ -3355,7 +3396,7 @@ def compute_snr_grid_miri(cal_files, channel, utils_dir, out_dir,
         else:
             stellar_features0 = None
             with_3dspline_prior = False
-        wv_nodes = hdulist['wv_nodes'].data
+        wv_nodes = Spline1D.from_hdulist(hdulist) # nodes and spline basis
         hdulist.close()
 
 
@@ -3404,7 +3445,13 @@ def compute_snr_grid_miri(cal_files, channel, utils_dir, out_dir,
         if stellar_features0 is None:
             hdulist = fits.open(dataobj.default_filenames["compute_starsubtraction"])
             spline_paras0 = hdulist['SPLINE_PARAS0'].data
+            starsub_spline = Spline1D.from_hdulist(hdulist)
             hdulist.close()
+            # The spline parameters are used as priors in the forward model, so they must use the same spline
+            if starsub_spline != wv_nodes or spline_paras0.shape[1] != wv_nodes.n_params:
+                raise ValueError(f"{dataobj.default_filenames['compute_starsubtraction']} was computed with "
+                                 f"{starsub_spline}, which is inconsistent with the continuum normalization "
+                                 f"spline {wv_nodes}.")
             wherenan = np.where(np.isnan(spline_paras0))
             reg_mean_map = copy(spline_paras0)
             reg_mean_map[wherenan] = np.tile(np.nanmedian(spline_paras0, axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
@@ -3479,7 +3526,7 @@ def compute_snr_grid_miri(cal_files, channel, utils_dir, out_dir,
         fluxerr_arr = linparas_err[:, :, :, 0]
         snr_arr = flux_arr/fluxerr_arr
         hdulist = fits.HDUList()
-        hdulist.append(fits.PrimaryHDU(header=_priheader))
+        hdulist.append(fits.PrimaryHDU(header=wv_nodes.update_header(copy(_priheader)))) # with the spline basis keywords
         hdulist.append(fits.ImageHDU(data=flux_arr,header=_extheader,name="flux_arr"))
         hdulist.append(fits.ImageHDU(data=fluxerr_arr, name='fluxerr_arr'))
         hdulist.append(fits.ImageHDU(data=log_prob, name='log_prob'))
@@ -3487,7 +3534,7 @@ def compute_snr_grid_miri(cal_files, channel, utils_dir, out_dir,
         hdulist.append(fits.ImageHDU(data=rv_vec, name='rv_vec'))
         hdulist.append(fits.ImageHDU(data=x_vec, name='x_vec'))
         hdulist.append(fits.ImageHDU(data=y_vec, name='y_vec'))
-        hdulist.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+        hdulist.append(wv_nodes.to_hdu(name='wv_nodes'))
         hdulist.append(fits.ImageHDU(header=_breads_header, name='BREADS'))
         hdulist.writeto(grid_search_output_filename, overwrite=True)
         hdulist.close()
@@ -3545,14 +3592,14 @@ def compute_snr_grid_miri(cal_files, channel, utils_dir, out_dir,
     grid_search_combined_filename = os.path.join(out_dir,splitbasename[0] + "_" + splitbasename[1]+ "_" + channel_band +"_"+suffix + "_combined.fits")
 
     hdulist = fits.HDUList()
-    hdulist.append(fits.PrimaryHDU(header=_priheader))
+    hdulist.append(fits.PrimaryHDU(header=wv_nodes.update_header(copy(_priheader)))) # with the spline basis keywords
     hdulist.append(fits.ImageHDU(data=fluxmap_combined, header=_extheader, name="flux_arr"))
     hdulist.append(fits.ImageHDU(data=fluxerrmap_combined, name='fluxerr_arr'))
     hdulist.append(fits.ImageHDU(data=log_prob_combined, name='log_prob'))
     hdulist.append(fits.ImageHDU(data=rv_vec, name='rv_vec'))
     hdulist.append(fits.ImageHDU(data=x_vec, name='x_vec'))
     hdulist.append(fits.ImageHDU(data=y_vec, name='y_vec'))
-    hdulist.append(fits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+    hdulist.append(wv_nodes.to_hdu(name='wv_nodes'))
     hdulist.append(fits.ImageHDU(header=_breads_header, name='BREADS'))
     hdulist.writeto(grid_search_combined_filename, overwrite=True)
     hdulist.close()
@@ -4354,11 +4401,15 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, comb
                                         mppool=None,
                                         ra_dec_point_sources=None, aper_rad=None,
                                         overwrite=False, targetname=None,
-                                        spline3d_prior_filename=None):
+                                        spline3d_prior_filename=None, spline_basis=None):
     """
 
     Parameters
     ----------
+    wv_nodes : 1d array, Spline1D, or None
+        Nodes of the 1d spline continuum model. If None, default_miri.nodes_dict[channel_band] is used.
+    spline_basis : str or None
+        "cardinal" (default) or "bspline". Basis of the 1d spline continuum model.
 
     Returns
     -------
@@ -4368,6 +4419,8 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, comb
         with fits.open(combined_contnorm_spec_filename) as hdulist:
             new_wavelengths = hdulist["WAVE"].data
             combined_fluxes = hdulist["COM_FLUXES"].data
+            saved_spline = Spline1D.from_hdulist(hdulist)
+        _check_requested_spline_basis(saved_spline, wv_nodes, spline_basis, combined_contnorm_spec_filename)
 
         combined_star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False,
                                       fill_value=1)
@@ -4381,6 +4434,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, comb
 
         if wv_nodes is None:
             wv_nodes = default_miri.nodes_dict[channel_band]
+        wv_nodes = Spline1D.coerce(wv_nodes, basis=spline_basis)
         if coords_offset is None:
             coords_offset = (0, 0)
 

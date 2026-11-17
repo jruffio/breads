@@ -5,6 +5,7 @@ from astropy import constants as const
 from scipy.interpolate import interp1d
 
 from breads.utils import get_spline_model
+from breads.jwst_tools.spline1d import Spline1D
 
 
 # pos: (x,y) or fiber, position of the companion
@@ -56,6 +57,22 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal_FixedSlit(nonlin_paras, cubeobj, atm_gr
         min_spline_ampl = 0.02
     else:
         min_spline_ampl = 0.00001
+
+    # manage all the different cases to define the spline (int, list of nodes, list of lists, or Spline1D)
+    if not isinstance(nodes, (Spline1D, int, np.integer, list, np.ndarray)):
+        raise ValueError("Unknown format for nodes.")
+    spline = Spline1D.coerce(nodes, wavelengths=cubeobj.wavelengths)
+    N_nodes = spline.n_params # number of linear spline parameters per row (= number of nodes for the cardinal basis)
+
+    # Number of linear parameters
+    N_linpara = Nrows_max * N_nodes + 1
+    fitback = False
+    if fitback:
+        N_linpara += 3*Nrows_max
+    if wvs_KLs_f is not None:
+        N_linpara += Nrows_max*len(wvs_KLs_f)
+    if detec_KLs is not None:
+        N_linpara += Nrows_max*detec_KLs.shape[1]
 
 
     Natmparas = len(atm_grid.values.shape)-1
@@ -151,29 +168,6 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal_FixedSlit(nonlin_paras, cubeobj, atm_gr
     # A = pixarea[where_trace_finite]
     comp_spec = comp_spec[where_trace_finite]
 
-    # manage all the different cases to define the position of the spline nodes
-    if type(nodes) is int:
-        N_nodes = nodes
-        min_wv, max_wv = np.nanmin(cubeobj.wavelengths),np.nanmax(cubeobj.wavelengths)
-        x_nodes = np.linspace(min_wv, max_wv, N_nodes, endpoint=True).tolist()
-    elif type(nodes) is list  or type(nodes) is np.ndarray :
-        x_nodes = nodes
-        if type(nodes[0]) is list or type(nodes[0]) is np.ndarray :
-            N_nodes = np.sum([np.size(n) for n in nodes])
-        else:
-            N_nodes = np.size(nodes)
-    else:
-        raise ValueError("Unknown format for nodes.")
-
-    # Number of linear parameters
-    N_linpara = Nrows_max * N_nodes + 1
-    fitback = False
-    if fitback:
-        N_linpara += 3*Nrows_max
-    if wvs_KLs_f is not None:
-        N_linpara += Nrows_max*len(wvs_KLs_f)
-    if detec_KLs is not None:
-        N_linpara += Nrows_max*detec_KLs.shape[1]
 
     # print("coucou")
     # print(np.size(where_trace_finite[0]), (1-badpixfraction) * np.sum(new_mask), vsini < 0)
@@ -200,9 +194,14 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal_FixedSlit(nonlin_paras, cubeobj, atm_gr
             where_finite_and_in_row = np.where(where_trace_finite[0]==rows_ids[_k])
             if np.size(where_finite_and_in_row[0]) == 0:
                 continue
-            M_spline = get_spline_model(x_nodes, wvs[rows_ids[_k], :], spline_degree=3)
+            M_spline = spline.get_spline_model(wvs[rows_ids[_k], :])
             selec_M_spline = M_spline[where_trace_finite[1][where_finite_and_in_row],:]
-            where_del_col = np.where(np.nanmax(np.abs(selec_M_spline),axis=0)<min_spline_ampl)#0.01#0.00001
+            if spline.is_bspline:
+                # Remove the B-spline modes truncated by the sampling (see Spline1D.prune_modes)
+                _, removed_modes = spline.prune_modes(np.copy(selec_M_spline), return_mask=True)
+                where_del_col = np.where(removed_modes)
+            else:
+                where_del_col = np.where(np.nanmax(np.abs(selec_M_spline),axis=0)<min_spline_ampl)#0.01#0.00001
             if np.size(where_del_col[0]) == selec_M_spline.shape[1]:
                 continue
             selec_M_spline[:,where_del_col[0]] = 0
@@ -213,7 +212,7 @@ def hc_atmgrid_splinefm_jwst_nirspec_cal_FixedSlit(nonlin_paras, cubeobj, atm_gr
                 d_reg_speckles[_k,where_del_col[0]] = np.nan
                 s_reg_speckles[_k,:] = reg_std_map[rows_ids[_k],:]
                 s_reg_speckles[_k,where_del_col[0]] = np.nan
-                wvs_reg_speckles[_k,:] = x_nodes
+                wvs_reg_speckles[_k,:] = spline.param_positions # wavelength associated with each spline parameter
                 wvs_reg_speckles[_k,where_del_col[0]] = np.nan
 
 

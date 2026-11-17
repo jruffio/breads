@@ -60,6 +60,8 @@ class JWSTNirspec_multiple_cals(JWSTNirspec_cal):
             self.wv_sampling = dataobj_list[0].wv_sampling
         if hasattr(dataobj_list[0], "wv_nodes"):
             self.wv_nodes = dataobj_list[0].wv_nodes
+        if getattr(dataobj_list[0], "spline1d", None) is not None:
+            self.spline1d = dataobj_list[0].spline1d
 
         self.default_filenames = {}
         basename = os.path.basename(self.filename)

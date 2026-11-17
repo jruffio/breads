@@ -35,6 +35,7 @@ from breads.utils import get_spline_model
 from breads.utils import get_breads_commit
 from breads.jwst_tools.plotting import save_cube_as_gif,point_cloud_interpolator_2d
 from breads.jwst_tools.splines import fit_3dspline,normalize_rows,evaluate_3dspline_pointcloud
+from breads.jwst_tools.spline1d import Spline1D
 from breads.jwst_tools.spectra import combine_spectrum
 from breads.jwst_tools.build_cube import rprint
 
@@ -247,6 +248,8 @@ class JWST_IFUs(ABC):
                         if self.verbose:
                             print(f"Loaded data for {task_name} cached in {task_out_filename}")
                         _run_task = False
+                        # The cached product must have been computed with the requested 1d spline basis
+                        self._check_cached_spline1d(task_name, dict_paras, task_out_filename)
 
                 if _run_task:
                     # Run task
@@ -1044,7 +1047,8 @@ class JWST_IFUs(ABC):
 
 
     def compute_starspectrum_contnorm(self,  save_utils=False, mppool=None,spec_R_sampling=None, threshold_badpix=10,
-                                      wv_nodes=None, N_nodes=40, iterative=True,spline3d_prior_filename=None):
+                                      wv_nodes=None, N_nodes=40, iterative=True,spline3d_prior_filename=None,
+                                      spline_basis=None):
         """ Compute star spectrum normalized by the continuum.
         See Figure 4 in Ruffio+2024 (https://ui.adsabs.harvard.edu/abs/2024AJ....168...73R/abstract).
 
@@ -1059,13 +1063,17 @@ class JWST_IFUs(ABC):
             If None, the spectral resolution will be set to 4 times the instrumental spectral resolution of the IFU.
         threshold_badpix : float (optional)
             Hard threshold for bad pixel flagging. Thresholding is done by comparing the continuum normalized row with its median absolute deviation.
-        wv_nodes : 1d array or None (optional)
+        wv_nodes : 1d array, Spline1D, or None (optional)
             If wv_nodes is specified, this wavelength spacing (in micron) will be used to do the splines fitting.
+            It can also be a breads.jwst_tools.spline1d.Spline1D object, which defines both the nodes and the spline basis.
             If None, N_nodes will set an evenly nodes spacing.
         N_nodes : int or None (optional, default is 40)
             If wv_nodes is None, Number of nodes to use for fitting splines for the continuum star spectrum estimation.
         iterative : Boolean (optional)
             If True, the fitting procedure is iteratively applied. It helps identifies potential additional bad pixels flagging and to have a better regularization.
+        spline_basis : str or None (optional)
+            "cardinal" (default) or "bspline". Basis of the 1d spline continuum model (see Spline1D).
+            Must be None or consistent with wv_nodes if wv_nodes is already a Spline1D.
 
         Returns
         -------
@@ -1077,10 +1085,11 @@ class JWST_IFUs(ABC):
             Combined flux errors (MJy or MJy/sr)
         spline_cont0 : 2d numpy array (N_detector_rows, N_detector_cols)
             Star continuum fitted by splines for each spectral trace of the detector.
-        spline_paras0 : 2d numpy array (N_nodes, N_traces)
+        spline_paras0 : 2d numpy array (N_traces, N_params)
             Linear parameters returned by the continuum spline fitting routine for each spectral trace of the detector.
+            N_params = self.spline1d.n_params, which is the number of nodes for the cardinal basis, but not for b-splines.
         wv_nodes : 1d numpy array (N_nodes)
-            Nodes spacing in the wavelength dimension (in micron).
+            Nodes spacing in the wavelength dimension (in micron). The full spline description is in self.spline1d.
 
         """
         if self.breads_header["DATA_HPF"]:
@@ -1088,6 +1097,7 @@ class JWST_IFUs(ABC):
 
         # _get_starspectrum_input() takes care of transposing the images for MIRI compared to NIRSpec
         im, im_wvs, err, bad_pixels, spec_R_sampling, wv_nodes = self._get_starspectrum_input(spec_R_sampling, wv_nodes, N_nodes)
+        spline = Spline1D.coerce(wv_nodes, basis=spline_basis)
 
         if self.verbose:
             print(f"Computing stellar spectrum (continuum normalized)")
@@ -1106,9 +1116,11 @@ class JWST_IFUs(ABC):
         else:
             stellar_features = None
 
-            # Define the regularization in the form of priors on the value of the flux at the position of the spline nodes
-            reg_mean_map0 = np.zeros((im.shape[0], np.size(wv_nodes))) # The flux values at each position of the nodes
-            reg_std_map0 = np.zeros((im.shape[0], np.size(wv_nodes))) # The corresponding width of the Gaussian prior at each nodes
+            # Define the regularization in the form of priors on the linear spline parameters
+            # (cardinal basis: value of the flux at the position of the spline nodes; bspline basis: control points).
+            # The B-splines sum to one, so a constant prior on the control points is also a constant prior on the flux.
+            reg_mean_map0 = np.zeros((im.shape[0], spline.n_params)) # The prior mean of each spline parameter
+            reg_std_map0 = np.zeros((im.shape[0], spline.n_params)) # The corresponding width of the Gaussian prior
             for rowid, row in enumerate(im):
                 row_bp = bad_pixels[rowid, :]
                 if np.nansum(np.isfinite(row * row_bp)) == 0:
@@ -1126,7 +1138,7 @@ class JWST_IFUs(ABC):
             regularization = True
         spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
                                                                               badpixs=bad_pixels,
-                                                                              wv_nodes=wv_nodes, mppool=mppool,
+                                                                              wv_nodes=spline, mppool=mppool,
                                                                               threshold=threshold_badpix,
                                                                               stellar_features = stellar_features,
                                                                               regularization=regularization,
@@ -1142,7 +1154,7 @@ class JWST_IFUs(ABC):
                 reg_mean_map1 = None
                 reg_std_map1 = None
             spline_cont0, _, new_badpixs, new_res, spline_paras0 = normalize_rows(im, im_wvs, noise=err, badpixs=new_badpixs,
-                                                                                  wv_nodes=wv_nodes, mppool=mppool,
+                                                                                  wv_nodes=spline, mppool=mppool,
                                                                                   threshold=threshold_badpix,
                                                                                   stellar_features = stellar_features,
                                                                                   regularization=regularization,
@@ -1159,7 +1171,8 @@ class JWST_IFUs(ABC):
                                                                              np.nanmedian(im_wvs) / spec_R_sampling)
 
 
-        self.wv_nodes = wv_nodes
+        self.set_spline1d(spline)
+        wv_nodes = self.wv_nodes
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
         self.breads_header['STCONTRS'] = spec_R_sampling
         self.breads_header['STCONTTH'] = threshold_badpix
@@ -1169,7 +1182,7 @@ class JWST_IFUs(ABC):
 
         if save_utils:
             self._save_starspectrum_contnorm(save_utils, new_wavelengths, combined_fluxes, combined_errors,
-                                             spline_cont0, spline_paras0, wv_nodes, normalized_im, stellar_features)
+                                             spline_cont0, spline_paras0, spline, normalized_im, stellar_features)
 
         return new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline_paras0, wv_nodes
 
@@ -1201,10 +1214,10 @@ class JWST_IFUs(ABC):
             Flux errors array of the continuum normalized star spectrum. (without unit)
         spline_cont0 : 2d array (Nrows x Ncols)
             Continuum fitted by splines for each trace.
-        spline_paras0 : 2d array (Nrows x N_nodes)
+        spline_paras0 : 2d array (Nrows x N_params)
             Splines best fit parameters for each trace.
-        wv_nodes : 1d array
-            Nodes spacing in the wavelength dimension (in micron).
+        wv_nodes : 1d array or Spline1D
+            Nodes spacing in the wavelength dimension (in micron). The spline basis is saved in the wv_nodes header.
 
         """
         if isinstance(save_utils, str):
@@ -1220,7 +1233,7 @@ class JWST_IFUs(ABC):
         hdulist.append(pyfits.ImageHDU(data=combined_errors, name='COM_ERRORS'))
         hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
         hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
-        hdulist.append(pyfits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+        hdulist.append(Spline1D.coerce(wv_nodes).to_hdu(name='wv_nodes'))
         hdulist.append(pyfits.ImageHDU(data=normalized_im, name='CONT_NORM_IM'))
         if stellar_features is not None:
             hdulist.append(pyfits.ImageHDU(data=stellar_features, name='STELLAR_FEATURES'))
@@ -1316,16 +1329,14 @@ class JWST_IFUs(ABC):
         combined_errors = hdulist["COM_ERRORS"].data
         spline_cont0 = hdulist["SPLINE_CONT0"].data
         spline_paras0 = hdulist["SPLINE_PARAS0"].data
-        try:
-            wv_nodes = hdulist['wv_nodes'].data
-        except:
-            wv_nodes = hdulist['x_nodes'].data
+        spline = Spline1D.from_hdulist(hdulist) # reads wv_nodes (or legacy x_nodes) and the spline basis
         self.breads_header['STCONTRS'] = hdulist['BREADS'].header['STCONTRS']
         self.breads_header['STCONTTH'] = hdulist['BREADS'].header['STCONTTH']
         self.breads_header["STCONTFN"] = load_filename
         hdulist.close()
 
-        self.check_and_update_nodes(wv_nodes)
+        self.check_and_update_nodes(spline)
+        wv_nodes = self.wv_nodes
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
         return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,wv_nodes
 
@@ -1369,10 +1380,10 @@ class JWST_IFUs(ABC):
             Star subtracted image.
         star_model : ndarray
             Image of the best fit model of the star
-        spline_paras0 : ndarray (N_nodes x N_traces)
+        spline_paras0 : ndarray (N_traces x N_params)
             Linear parameters returned by the spline fitting routine for each spectral trace of the detector.
         self.wv_nodes : 1d numpy array (N_nodes)
-            Splines nodes spacing in the wavelengths dimension (micron).
+            Splines nodes spacing in the wavelengths dimension (micron). The full spline description is in self.spline1d.
         """
         if self.verbose:
             print(f"Computing star subtraction.")
@@ -1382,13 +1393,13 @@ class JWST_IFUs(ABC):
             hdulist = pyfits.open(combined_contnorm_filename)
             new_wavelengths = hdulist["WAVE"].data
             combined_fluxes = hdulist["COM_FLUXES"].data
-            wv_nodes = hdulist['wv_nodes'].data
+            spline = Spline1D.from_hdulist(hdulist) # reads wv_nodes and the spline basis
             self.breads_header['STCONTRS'] = hdulist['BREADS'].header['STCONTRS']
             self.breads_header['STCONTTH'] = hdulist['BREADS'].header['STCONTTH']
             self.breads_header["STCONTFN"] = combined_contnorm_filename
             hdulist.close()
 
-            self.check_and_update_nodes(wv_nodes)
+            self.check_and_update_nodes(spline)
             self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
 
         # _get_starsub_inputs() takes care of transposing the images for MIRI compared to NIRSpec
@@ -1413,7 +1424,7 @@ class JWST_IFUs(ABC):
         for i in range(Nit):
             star_model, _, new_badpixs, subtracted_im, spline_paras0 = normalize_rows(im, im_wvs, noise=err,
                                                                                   badpixs=bad_pixels,
-                                                                                  wv_nodes=self.wv_nodes,
+                                                                                  wv_nodes=self.get_spline1d(),
                                                                                   stellar_features=stellar_features,
                                                                                   threshold=threshold_badpix,
                                                                                   mppool=mppool,
@@ -1467,7 +1478,7 @@ class JWST_IFUs(ABC):
         hdulist.append(pyfits.ImageHDU(data=star_model, name='STARMODEL'))
         hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='BADPIX'))
         hdulist.append(pyfits.ImageHDU(data=spline_paras0, name='SPLINE_PARAS0'))
-        hdulist.append(pyfits.ImageHDU(data=self.wv_nodes, name='wv_nodes'))
+        hdulist.append(self.get_spline1d().to_hdu(name='wv_nodes'))
         hdulist.append(pyfits.ImageHDU(header=_breads_header, name='BREADS'))
         hdulist.writeto(out_filename, overwrite=True)
 
@@ -1501,6 +1512,7 @@ class JWST_IFUs(ABC):
 
         hdulist = pyfits.open(load_starspectrum_contnorm)
         spline_paras0 = hdulist['SPLINE_PARAS0'].data
+        prior_spline = Spline1D.from_hdulist(hdulist)
         if 'STELLAR_FEATURES' in hdulist:
             stellar_features0 = hdulist['STELLAR_FEATURES'].data
         else:
@@ -1508,6 +1520,8 @@ class JWST_IFUs(ABC):
         hdulist.close()
 
         if stellar_features0 is None:
+            # The spline parameters from the file are used as priors, so they must come from the same spline basis
+            self._check_prior_spline(prior_spline, spline_paras0, load_starspectrum_contnorm)
             wherenan = np.where(np.isnan(spline_paras0))
             reg_mean_map = copy(spline_paras0)
             reg_mean_map[wherenan] = np.tile(np.nanmedian(spline_paras0, axis=1)[:, None], (1, spline_paras0.shape[1]))[wherenan]
@@ -1553,7 +1567,7 @@ class JWST_IFUs(ABC):
         star_model = hdulist["STARMODEL"].data
         fmderived_bad_pixels = hdulist['BADPIX'].data
         spline_paras0 = hdulist["SPLINE_PARAS0"].data
-        wv_nodes = hdulist['wv_nodes'].data
+        spline = Spline1D.from_hdulist(hdulist)
         self.breads_header["DATA_HPF"] = hdulist["BREADS"].header["DATA_HPF"]
         self.breads_header["HPF_TYPE"] = hdulist["BREADS"].header["HPF_TYPE"]
         self.breads_header['STSUBTH'] = hdulist["BREADS"].header["STSUBTH"]
@@ -1562,7 +1576,8 @@ class JWST_IFUs(ABC):
         self.breads_header["STCONTFN"] = hdulist['BREADS'].header['STCONTFN']
         hdulist.close()
 
-        self.check_and_update_nodes(wv_nodes)
+        self.check_and_update_nodes(spline)
+        wv_nodes = self.wv_nodes
 
         self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
         self.data = subtracted_im
@@ -1988,12 +2003,94 @@ class JWST_IFUs(ABC):
         self.data = subtracted_im
         return subtracted_im, spline_cont0, spline3d_paras_np,spline3d_paras_err_np, self.wv_nodes,self.x_nodes,self.y_nodes
 
+    def set_spline1d(self, spline):
+        """
+        Define the 1d spline (nodes and basis) used to model the starlight continuum.
+        Sets self.spline1d (Spline1D), self.wv_nodes (the nodes in their original format, i.e. a 1d array or a list
+        of 1d arrays for discontinuous splines, for backward compatibility),
+        and the SPL* keywords of self.breads_header (spline basis provenance).
+        """
+        spline = Spline1D.coerce(spline)
+        self.spline1d = spline
+        self.wv_nodes = spline.nodes
+        spline.update_header(self.breads_header)
+
+    def get_spline1d(self):
+        """
+        Return the Spline1D object describing the 1d spline continuum model.
+        Objects that only have self.wv_nodes (e.g. older code paths) are interpreted as a cardinal spline.
+        """
+        if getattr(self, "spline1d", None) is not None:
+            return self.spline1d
+        if hasattr(self, "wv_nodes"):
+            return Spline1D.coerce(self.wv_nodes)
+        return None
+
+    def _check_prior_spline(self, prior_spline, spline_paras, filename):
+        """Make sure that spline parameters read from a file (used as priors) match the current 1d spline."""
+        current = self.get_spline1d()
+        if current is None or prior_spline is None:
+            return
+        if prior_spline != current:
+            raise ValueError(f"The spline parameters in {filename} were computed with {prior_spline}, "
+                             f"which differs from the current spline {current}. "
+                             f"Please recompute the continuum normalization with the same spline (nodes and basis), "
+                             f"e.g. in a different utils_dir.")
+        if spline_paras is not None and np.shape(spline_paras)[-1] != current.n_params:
+            raise ValueError(f"SPLINE_PARAS0 in {filename} has {np.shape(spline_paras)[-1]} parameters per row, "
+                             f"but {current} has {current.n_params}.")
+
+    def _check_cached_spline1d(self, task_name, dict_paras, filename):
+        """
+        When a preprocessing step is reloaded from the utils folder instead of being computed, make sure that the
+        cached product used the 1d spline basis requested in the task parameters (wv_nodes/spline_basis, or the basis
+        saved in combined_contnorm_filename). Otherwise, raise an error rather than silently mixing spline bases.
+        """
+        requested = None
+        if task_name == "compute_starspectrum_contnorm":
+            wv_nodes = dict_paras.get("wv_nodes", None)
+            spline_basis = dict_paras.get("spline_basis", None)
+            if isinstance(wv_nodes, Spline1D):
+                requested = wv_nodes
+            elif spline_basis is not None:
+                if wv_nodes is not None:
+                    requested = Spline1D.coerce(wv_nodes, basis=spline_basis)
+                else:
+                    requested = spline_basis
+        elif dict_paras.get("combined_contnorm_filename", None) is not None:
+            with pyfits.open(dict_paras["combined_contnorm_filename"]) as hdulist:
+                requested = Spline1D.from_hdulist(hdulist)
+        if requested is None:
+            return
+        loaded = self.get_spline1d()
+        if loaded is None:
+            return
+        if isinstance(requested, str):
+            mismatch = Spline1D.coerce(loaded).basis != Spline1D([0., 1.], basis=requested).basis
+        else:
+            mismatch = (loaded.basis != requested.basis) or (loaded.degree != requested.degree)
+        if mismatch:
+            raise ValueError(f"The cached product {filename} was computed with {loaded}, but {task_name} requested "
+                             f"{requested if not isinstance(requested, str) else 'basis ' + requested}. "
+                             f"Use a different utils_dir for each spline basis, or recompute (overwrite) this step.")
+
     def check_and_update_nodes(self,wv_nodes,x_nodes=None,y_nodes=None):
         """
         Make sure that there is no already some spline nodes defined in the class. If not, then update them.
 
+        If wv_nodes is a Spline1D (1d spline continuum), both the nodes and the spline basis are checked, and
+        self.spline1d is updated. A plain array of wv_nodes only checks/sets self.wv_nodes (e.g. 3d splines).
         """
-        if hasattr(self, 'wv_nodes'):
+        if isinstance(wv_nodes, Spline1D):
+            current = self.get_spline1d()
+            if current is not None and current != wv_nodes:
+                raise ValueError(
+                    f"A 1d spline is already defined and does not match the new one. "
+                    f"Existing: {current}, New: {wv_nodes}. Existing nodes: {current.nodes}, New nodes: {wv_nodes.nodes}"
+                )
+            if current is None or getattr(self, "spline1d", None) is None:
+                self.set_spline1d(wv_nodes)
+        elif hasattr(self, 'wv_nodes'):
             if not np.array_equal(self.wv_nodes, wv_nodes):
                 raise ValueError(
                     f"wv_nodes already defined and does not match the new value. "
@@ -2052,7 +2149,12 @@ class JWST_IFUs(ABC):
 
         hdulist = pyfits.open(load_filename)
         fmderived_bad_pixels = hdulist['BADPIX'].data
+        spline = Spline1D.from_hdulist(hdulist) # 1d spline (nodes and basis) used to derive the bad pixels
         hdulist.close()
+
+        # The cached bad pixels must have been derived with the same 1d spline as the current one
+        if spline is not None:
+            self.check_and_update_nodes(spline)
 
         self.bad_pixels = self.bad_pixels * fmderived_bad_pixels
         return self.bad_pixels

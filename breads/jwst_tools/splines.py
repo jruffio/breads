@@ -16,6 +16,7 @@ from tqdm import tqdm
 
 from breads.utils import get_spline_model
 from breads.fit import fitfm
+from breads.jwst_tools.spline1d import Spline1D
 
 def _task_normrows(paras):
     """ Worker function for normalize_rows(), for use in parallelized computations. Perform the task on a single row.
@@ -31,12 +32,13 @@ def _task_normrows(paras):
 
     """
     im_rows, im_wvs_rows, noise_rows, badpix_rows, wv_nodes, stellar_features, threshold,regularization,reg_mean_map,reg_std_map = paras
+    spline = Spline1D.coerce(wv_nodes)
 
     new_im_rows = np.array(copy(im_rows), '<f4')  # .byteswap().newbyteorder()
     new_noise_rows = copy(noise_rows)
     new_badpix_rows = copy(badpix_rows)
     res = np.full(im_rows.shape, np.nan)
-    paras_out = np.full((im_rows.shape[0],np.size(wv_nodes)), np.nan)
+    paras_out = np.full((im_rows.shape[0],spline.n_params), np.nan)
     for k in range(im_rows.shape[0]):
 
         finite_mask = (
@@ -57,24 +59,14 @@ def _task_normrows(paras):
             res[k, :] = np.nan
             continue
 
-        M_spline = get_spline_model(wv_nodes, im_wvs_rows[k, :], spline_degree=3)
-        if 1: # remove redundant spline modes
-            dotprod_M = np.dot(M_spline.transpose(),M_spline)
-            dotprod_M_diag = np.sqrt(np.diag(dotprod_M))
-            dotprod_M = np.abs(dotprod_M/(dotprod_M_diag[np.newaxis,:]*dotprod_M_diag[:,np.newaxis]))
-            # plt.imshow(dotprod_M)
-            # plt.show()
-            d1 = np.diag(dotprod_M, k=1) # First off diagonal
-            is_one = d1 > (1-5e-3)#np.isclose(d1, 1)
-            not_one_idx = np.flatnonzero(~is_one)  # indices where v is NOT ~1
-            if not_one_idx.size == 0:
-                # vector is all ones
-                last_lead, first_trail = len(d1) - 1, 0
-            else:
-                last_lead = not_one_idx[0] - 1 if is_one[0] else -1  # -1 = no leading ones
-                first_trail = not_one_idx[-1] + 1 if is_one[-1] else M_spline.shape[1]-1  # M_spline.shape[1]-1 = no trailing ones
-            M_spline[:,0:last_lead+1] = 0
-            M_spline[:,first_trail+1:M_spline.shape[1]] = 0
+        M_spline = spline.get_spline_model(im_wvs_rows[k, :])
+        # Remove the spline modes that should not be fitted (depends on the basis, see Spline1D.prune_modes):
+        # cardinal: redundant edge modes, evaluated on the full row (historical behavior).
+        # bspline: modes truncated by the sampling, evaluated on the pixels actually being fitted.
+        if spline.is_bspline:
+            spline.prune_modes(M_spline, M_eval=M_spline[where_data_finite[0], :])
+        else:
+            spline.prune_modes(M_spline)
 
         d = im_rows[k, where_data_finite[0]]
         d_err = noise_rows[k, where_data_finite[0]]
@@ -149,16 +141,19 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, stellar_features=Non
         If None, the computation is done without parallelization.
     threshold : float (optional)
         Threshold for flagging bad pixels based on the normalized residuals of the fit.
-    wv_nodes : 1d array or None (optional)
+    wv_nodes : 1d array, Spline1D, or None (optional)
         If wv_nodes is specified, this wavelength spacing (in micron) will be used to do the splines fitting.
-        If None, N_nodes will set an evenly nodes spacing.
+        A plain array means a cardinal spline basis. Use a breads.jwst_tools.spline1d.Spline1D to choose the basis
+        (e.g. Spline1D(nodes, basis="bspline")).
+        If None, N_nodes will set an evenly nodes spacing (cardinal basis).
     regularization : bool (optional)
-        If True, the spline fitting is regularized by providing priors on the value of the continuum at each spline node position.
-        The mean and standard deviation of the continuum shape can be provided by reg_mean_map and reg_std_map, or if these are not provided, they will be computed from the data itself.
+        If True, the spline fitting is regularized by providing Gaussian priors on each linear spline parameter
+        (cardinal basis: value of the continuum at each node; bspline basis: B-spline control points).
     reg_mean_map : 2d array or None (optional)
-        If regularization is True, this 2d array (same shape as image) provides the mean of the prior.
+        If regularization is True, this 2d array (Nrows, n_params) provides the mean of the prior,
+        with n_params = Spline1D.n_params (= number of nodes for the cardinal basis).
     reg_std_map : 2d array or None (optional)
-        If regularization is True, this 2d array (same shape as image) provides the standard deviation of the prior.
+        If regularization is True, this 2d array (Nrows, n_params) provides the standard deviation of the prior.
 
     Returns
     -------
@@ -182,12 +177,13 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, stellar_features=Non
 
     if wv_nodes is None:
         wv_nodes = np.linspace(np.nanmin(im_wvs), np.nanmax(im_wvs), N_nodes, endpoint=True)
+    wv_nodes = Spline1D.coerce(wv_nodes)
 
     new_image = copy(image)
     new_noise = copy(noise)
     new_badpixs = copy(badpixs)
     new_res = np.full(image.shape, np.nan)
-    new_spline_paras = np.zeros((image.shape[0], np.size(wv_nodes)))
+    new_spline_paras = np.zeros((image.shape[0], wv_nodes.n_params))
 
     #if chunk is too small, don't parallelize
     parallel_flag = True

@@ -6,6 +6,7 @@ from matplotlib import pyplot as plt
 from scipy.interpolate import interp1d
 
 from breads.utils import get_spline_model
+from breads.jwst_tools.spline1d import Spline1D
 
 
 
@@ -40,8 +41,11 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
         radius_as: float (default is 0.2 arcsec)
             Each pixel with coordinates that are within radius_as of the assumed companion location will be
             included in the fit. Must be expressed in arcsecond.
-        nodes: int, list of int or list of list
+        nodes: int, list of int, list of list, or Spline1D
             If int, number of nodes equally distributed. If list, custom locations of nodes [x1,x2,..].
+            A plain int/list/array defines a cardinal spline basis. Use a breads.jwst_tools.spline1d.Spline1D to
+            choose the spline basis (e.g. B-splines), in which case the number of linear parameters per row is
+            Spline1D.n_params (not the number of nodes).
             To model discontinous functions, use a list of list [[x1,...],[xn,...]] TODO not sure I get this.
             Expressed in pixel coordinates.
         badpixfraction: float
@@ -64,7 +68,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
     Returns:
         d: Data as a 1d vector with bad pixels removed (no nans)
         M: Linear model as a matrix of shape (Nd,Np) with bad pixels removed (no nans). Nd is the size of the data
-            vector and Np = N_nodes*boxw^2+1 is the number of linear parameters.
+            vector and Np is the number of linear parameters (1 + Nrows*N_spline_params + KLs).
         s: Noise vector (standard deviation) as a 1d vector matching d.
     """
     extra_outputs = {}
@@ -184,7 +188,7 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
     extra_outputs["rows"] = row_ids_im[where_trace_finite]
     comp_spec = comp_spec[where_trace_finite]
 
-    x_nodes, N_nodes = _create_nodes(cubeobj, nodes)
+    spline, N_nodes = _create_nodes(cubeobj, nodes) # N_nodes = number of linear spline parameters per row
 
     # Number of linear parameters
     N_linpara = 1
@@ -212,78 +216,20 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
         where_finite_and_in_row = np.where(where_trace_finite[0] == rows_ids[_k])
         if np.size(where_finite_and_in_row[0]) == 0:
             continue
-        M_spline = get_spline_model(x_nodes, wvs[rows_ids[_k], :], spline_degree=3)
+        M_spline = spline.get_spline_model(wvs[rows_ids[_k], :])
         selec_M_spline = M_spline[where_trace_finite[1][where_finite_and_in_row], :]
+        # Remove the spline modes that should not be fitted (see Spline1D.prune_modes)
+        # cardinal: redundant edge modes; bspline: modes truncated by the sampling.
+        selec_M_spline, removed_modes = spline.prune_modes(selec_M_spline, return_mask=True)
 
-        dotprod_M = np.dot(selec_M_spline.transpose(),selec_M_spline)
-        dotprod_M_diag = np.sqrt(np.diag(dotprod_M))
-        dotprod_M = np.abs(dotprod_M/(dotprod_M_diag[np.newaxis,:]*dotprod_M_diag[:,np.newaxis]))
-        d1 = np.diag(dotprod_M, k=1) # First off diagonal
-        is_one = d1 > (1-5e-3)#np.isclose(d1, 1)
-        not_one_idx = np.flatnonzero(~is_one)  # indices where v is NOT ~1
-        if not_one_idx.size == 0:
-            # vector is all ones
-            last_lead, first_trail = len(d1) - 1, 0
-        else:
-            last_lead = not_one_idx[0] - 1 if is_one[0] else -1  # -1 = no leading ones
-            first_trail = not_one_idx[-1] + 1 if is_one[-1] else selec_M_spline.shape[1]-1  # selec_M_spline.shape[1]-1 = no trailing ones
-        # print(last_lead, first_trail+1)
-        # # valid means val<1-1e-6
-        # # 0:15
-        selec_M_spline[:,0:last_lead+1] = 0
-        selec_M_spline[:,first_trail+1:selec_M_spline.shape[1]] = 0
-
-        # dotprod_M2 = np.dot(selec_M_spline.transpose(),selec_M_spline)
-        # dotprod_M2_diag = np.sqrt(np.diag(dotprod_M2))
-        # dotprod_M2 = np.abs(dotprod_M2/(dotprod_M2_diag[np.newaxis,:]*dotprod_M2_diag[:,np.newaxis]))
-        #
-        # where_del_col = np.where(np.nanmax(np.abs(selec_M_spline), axis=0) < min_spline_ampl)  # 0.01#0.00001
-        # # if np.size(where_del_col[0]) == selec_M_spline.shape[1]:
-        # #     #Nothing usable in this row (rows_ids[_k])
-        # #     continue
-        # #
-        # # plt.figure(figsize=(12,5))
-        # # plt.title("{0} {1} {2}".format(rows_ids[_k],_k,selec_M_spline.shape[1]))
-        # # for l in range(selec_M_spline.shape[1]):
-        # #     if np.nanmax(selec_M_spline[:,l]) >0.5:
-        # #         continue
-        # #     if l in where_del_col[0]:
-        # #         linestyle = "--"
-        # #     else:
-        # #         linestyle= "-"
-        # #     # plt.subplot(2,1,1)
-        # #     argextr_id = np.nanargmax(np.abs(selec_M_spline[:, l]))
-        # #     plt.plot(selec_M_spline[:,l]/selec_M_spline[argextr_id, l],label=f"{l}",linestyle=linestyle)
-        # #     # plt.subplot(2,1,2)
-        # #     # plt.plot(selec_M_spline[:,l]/s[where_finite_and_in_row[0]],label=f"{l}",linestyle=linestyle)
-        # # plt.legend()
-        #
-        # plt.figure()
-        # plt.subplot(1,2,1)
-        # plt.imshow(dotprod_M)
-        # plt.subplot(1,2,2)
-        # plt.imshow(dotprod_M2)
-        #
-        # # plt.figure()
-        # # plt.plot(d1)
-        #
-        # plt.show()
-
-        # selec_M_spline[:, where_del_col[0]] = 0
         M_speckles[where_finite_and_in_row[0], _k, :] = selec_M_spline
         if regularization == "user" and reg_mean_map is not None and reg_std_map is not None:
             d_reg_speckles[_k, :] = reg_mean_map[rows_ids[_k], :]
             s_reg_speckles[_k, :] = reg_std_map[rows_ids[_k], :]
-            wvs_reg_speckles[_k, :] = x_nodes
-            # d_reg_speckles[_k, where_del_col[0]] = np.nan
-            # s_reg_speckles[_k, where_del_col[0]] = np.nan
-            # wvs_reg_speckles[_k, where_del_col[0]] = np.nan
-            d_reg_speckles[_k, 0:last_lead+1] = np.nan
-            s_reg_speckles[_k, 0:last_lead+1] = np.nan
-            wvs_reg_speckles[_k, 0:last_lead+1] = np.nan
-            d_reg_speckles[_k, first_trail+1::] = np.nan
-            s_reg_speckles[_k, first_trail+1::] = np.nan
-            wvs_reg_speckles[_k, first_trail+1::] = np.nan
+            wvs_reg_speckles[_k, :] = spline.param_positions # wavelength associated with each spline parameter
+            d_reg_speckles[_k, removed_modes] = np.nan
+            s_reg_speckles[_k, removed_modes] = np.nan
+            wvs_reg_speckles[_k, removed_modes] = np.nan
 
     if wvs_KLs_f is not None:
         for _k in range(Nrows):
@@ -405,18 +351,11 @@ def hc_atmgrid_splinefm_jwst_ifu_cal(nonlin_paras, cubeobj,
 
 
 def _create_nodes(cubeobj, nodes):
-    """Manage all the different cases to define the position of the spline nodes"""
-    if type(nodes) is int:
-        N_nodes = nodes
-        min_wv, max_wv = np.nanmin(cubeobj.wavelengths), np.nanmax(cubeobj.wavelengths)
-        x_nodes = np.linspace(min_wv, max_wv, N_nodes, endpoint=True).tolist()
-    elif type(nodes) is list or type(nodes) is np.ndarray:
-        x_nodes = nodes
-        if type(nodes[0]) is list or type(nodes[0]) is np.ndarray:
-            N_nodes = np.sum([np.size(n) for n in nodes])
-        else:
-            N_nodes = np.size(nodes)
-    else:
+    """
+    Manage all the different cases to define the spline (int, list of nodes, list of lists, or Spline1D).
+    Returns the Spline1D object and its number of linear parameters (= number of nodes for the cardinal basis only).
+    """
+    if not isinstance(nodes, (Spline1D, int, np.integer, list, np.ndarray)):
         raise ValueError("Unknown format for nodes.")
-
-    return x_nodes, N_nodes
+    spline = Spline1D.coerce(nodes, wavelengths=cubeobj.wavelengths)
+    return spline, spline.n_params

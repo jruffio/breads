@@ -1,4 +1,5 @@
 import itertools
+from copy import copy
 import sys
 import numpy as np
 from glob import glob
@@ -292,14 +293,20 @@ def build_cube(dataobj,
         elif "ifu" in dataobj.breads_header['COORDS']:
             _x_out = ifux_grid
             _y_out = ifuy_grid
+        _spline1d = dataobj.get_spline1d() if hasattr(dataobj, "get_spline1d") else None
+        _pri_header = copy(dataobj.breads_header)
+        if _spline1d is not None:
+            _spline1d.update_header(_pri_header) # spline basis keywords (SPLBASIS, ...)
         hdulist = pyfits.HDUList()
-        hdulist.append(pyfits.PrimaryHDU(header=dataobj.breads_header))
+        hdulist.append(pyfits.PrimaryHDU(header=_pri_header))
         hdulist.append(pyfits.ImageHDU(data=flux_cube, name='FLUX',header=_hdr_flux))
         hdulist.append(pyfits.ImageHDU(data=fluxerr_cube, name='FLUXERR',header=_hdr_flux))
         hdulist.append(pyfits.ImageHDU(data=_x_out, name='X'))
         hdulist.append(pyfits.ImageHDU(data=_y_out, name='Y'))
         hdulist.append(pyfits.ImageHDU(data=dataobj.wv_sampling, name='WAVE'))
-        if hasattr(dataobj, "wv_nodes"):
+        if _spline1d is not None:
+            hdulist.append(_spline1d.to_hdu(name='wv_nodes'))
+        elif hasattr(dataobj, "wv_nodes"):
             hdulist.append(pyfits.ImageHDU(data=dataobj.wv_nodes, name='wv_nodes'))
         hdulist.writeto(out_filename, overwrite=True)
         hdulist.close()
