@@ -6,7 +6,12 @@ It lets the same code use either:
     - the "cardinal" basis (breads.utils.splines.get_spline_model; default and historical behavior): each linear
       parameter is the value of the continuum at the position of a node.
     - the "bspline" basis (breads.utils.splines.get_bspline_model): each linear parameter is a B-spline control point.
-      Clamped knots are used, so there are n_nodes + degree - 1 parameters per segment of nodes (i.e., not one per node).
+      Every node is a knot (with clamped ends), so there are n_nodes + degree - 1 parameters per segment of nodes
+      (i.e., not one per node): compared to the cardinal basis, it has an extra degree of freedom near each end.
+    - the "bspline_nak" basis (get_bspline_model with not_a_knot=True): B-splines with the knots of the cardinal basis
+      (not-a-knot end conditions: for a cubic spline, the second and second-to-last nodes are not knots). It spans
+      exactly the same functions as the cardinal basis (same fitted model), with one parameter per node, but with
+      local basis functions; the parameters are B-spline control points, not the values at the nodes.
 
 Code that needs the number of linear parameters must use Spline1D.n_params (not np.size(nodes)), and code that needs a
 wavelength associated with each linear parameter must use Spline1D.param_positions (not the nodes).
@@ -27,12 +32,15 @@ DEFAULT_BSPLINE_CROP_THRESHOLD = 1e-3
 
 _BASIS_ALIASES = {"cardinal": "cardinal",
                   "bspline": "bspline", "b-spline": "bspline", "b_spline": "bspline", "bsplines": "bspline",
-                  "b-splines": "bspline"}
+                  "b-splines": "bspline",
+                  "bspline_nak": "bspline_nak", "bspline-nak": "bspline_nak", "b-spline-nak": "bspline_nak",
+                  "b_spline_nak": "bspline_nak", "bspline_notaknot": "bspline_nak"}
+_BSPLINE_BASES = ("bspline", "bspline_nak")
 
 # FITS header keywords, used both in the wv_nodes HDU and in the primary headers of the data products.
-_HDR_COMMENTS = {"SPLBASIS": "1D continuum spline basis (cardinal or bspline)",
+_HDR_COMMENTS = {"SPLBASIS": "1D continuum spline basis (cardinal, bspline, bspline_nak)",
                  "SPLDEG": "1D continuum spline degree",
-                 "SPLCROP": "bspline: crop threshold for truncated modes",
+                 "SPLCROP": "bsplines: crop threshold for truncated modes",
                  "SPLNNODE": "1D continuum spline number of nodes",
                  "SPLNPAR": "1D continuum spline number of linear parameters",
                  "SPLSEGS": "1D spline segment lengths (discontinuous nodes)"}
@@ -41,7 +49,7 @@ _HDR_COMMENTS = {"SPLBASIS": "1D continuum spline basis (cardinal or bspline)",
 def _normalize_basis(basis):
     key = str(basis).strip().lower()
     if key not in _BASIS_ALIASES:
-        raise ValueError(f"Unknown spline basis '{basis}'. Use 'cardinal' or 'bspline'.")
+        raise ValueError(f"Unknown spline basis '{basis}'. Use 'cardinal', 'bspline' or 'bspline_nak'.")
     return _BASIS_ALIASES[key]
 
 
@@ -55,11 +63,12 @@ class Spline1D:
         Position of the spline nodes (e.g. in microns). A list of arrays defines a discontinuous spline (one independent
         spline per segment), same convention as breads.utils.splines.get_spline_model.
     basis : str (optional, default "cardinal")
-        "cardinal" (get_spline_model) or "bspline" (get_bspline_model).
+        "cardinal" (get_spline_model), "bspline" (get_bspline_model) or "bspline_nak" (get_bspline_model with
+        not_a_knot=True). See the module docstring.
     degree : int (optional, default 3)
         Degree of the splines.
     crop_threshold : float (optional, default DEFAULT_BSPLINE_CROP_THRESHOLD = 1e-3)
-        Only used for the bspline basis, in prune_modes(). A B-spline mode is removed from a fit if its maximum value
+        Only used for the B-spline bases (bspline and bspline_nak), in prune_modes(). A B-spline mode is removed from a fit if its maximum value
         over the fitted samples is less than crop_threshold times the peak value of that mode.
     """
 
@@ -127,7 +136,13 @@ class Spline1D:
 
     @property
     def is_bspline(self):
-        return self.basis == "bspline"
+        """True for both B-spline bases (bspline and bspline_nak)."""
+        return self.basis in _BSPLINE_BASES
+
+    @property
+    def not_a_knot(self):
+        """True for the bspline_nak basis (B-splines with the knots of the cardinal basis)."""
+        return self.basis == "bspline_nak"
 
     @property
     def n_params(self):
@@ -141,16 +156,15 @@ class Spline1D:
     def param_positions(self):
         """
         Position (e.g. wavelength) associated with each linear parameter.
-        cardinal: the nodes themselves. bspline: the Greville abscissae of the clamped knot vector.
+        cardinal: the nodes themselves. bspline and bspline_nak: the Greville abscissae of the clamped knot vector.
         """
         if self.n_params == 1:
             return np.array([np.nanmedian(np.concatenate(self.nodes_list))])
         if not self.is_bspline:
             return np.concatenate(self.nodes_list)
-        k = self._effective_degree()
         pos_list = []
         for nodes in self.nodes_list:
-            t = get_bspline_knots(nodes, k)
+            t, k = get_bspline_knots(nodes, self.degree, not_a_knot=self.not_a_knot, return_degree=True)
             n_basis = np.size(t) - k - 1
             if k == 0:
                 pos_list.append(0.5 * (t[:-1] + t[1:])[:n_basis])
@@ -167,12 +181,6 @@ class Spline1D:
             self._mode_peaks = np.nanmax(np.abs(self.get_spline_model(x_dense)), axis=0)
         return self._mode_peaks
 
-    def _effective_degree(self):
-        # Same rule as in get_spline_model and get_bspline_model
-        if not self.is_segmented and np.size(self.nodes) <= self.degree:
-            return np.size(self.nodes) - 1
-        return self.degree
-
     def _model_nodes(self):
         return self.nodes
 
@@ -185,7 +193,8 @@ class Spline1D:
         """
         x_samples = np.asarray(x_samples)
         if self.is_bspline:
-            return get_bspline_model(self._model_nodes(), x_samples, spline_degree=self.degree)
+            return get_bspline_model(self._model_nodes(), x_samples, spline_degree=self.degree,
+                                     not_a_knot=self.not_a_knot)
         return get_spline_model(self._model_nodes(), x_samples, spline_degree=self.degree)
 
     def prune_modes(self, M_spline, M_eval=None, return_mask=False):
@@ -194,7 +203,7 @@ class Spline1D:
 
         cardinal: remove redundant edge modes, i.e. leading/trailing columns that are nearly collinear with their
             neighbor (first off-diagonal of the normalized Gram matrix > 1-5e-3). This is the historical behavior.
-        bspline: remove modes that have been truncated by the sampling (data coverage, bad pixels, edges), i.e.
+        bspline, bspline_nak: remove modes that have been truncated by the sampling (data coverage, bad pixels, edges), i.e.
             columns whose maximum is less than crop_threshold times the peak value of the full mode.
 
         Parameters
@@ -290,7 +299,10 @@ class Spline1D:
         Files without the SPLBASIS keyword (i.e. made before the B-spline option existed) are cardinal.
         Returns None if there are no nodes in the file.
         """
-        for _name in [name, "x_nodes"]:
+        # Legacy 1D files used an "x_nodes" HDU. 3D spline files (which also have a "y_nodes" HDU) use "x_nodes" for
+        # the spatial nodes, so it is never read as the 1D spline nodes in that case.
+        names = [name] if "y_nodes" in hdulist else [name, "x_nodes"]
+        for _name in names:
             if _name in hdulist:
                 hdu = hdulist[_name]
                 return cls.from_header_and_nodes(np.array(hdu.data), hdu.header)

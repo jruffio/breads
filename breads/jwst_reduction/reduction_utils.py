@@ -64,6 +64,7 @@ from breads.jwst_tools.default_miri import sub_band_from_name
 from breads.jwst_tools.build_cube import build_cube
 from breads.jwst_tools.splines import evaluate_3dspline_pointcloud
 from breads.jwst_tools.spline1d import Spline1D
+from breads.jwst_tools.spline3d import Spline3D
 from breads.fm.hc_atmgrid_splinefm_jwst_ifu_cal import hc_atmgrid_splinefm_jwst_ifu_cal
 from breads.instruments.jwstnirspec_cal import PCA_wvs_axis
 from breads.grid_search import grid_search
@@ -1702,21 +1703,59 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
 
 
 
+def _check_cached_spline3d(spline3d, combdataobj):
+    """
+    Raise an error if the cached 3D spline products of combdataobj (continuum normalization and star subtraction)
+    were made with a different 3D spline than the requested one, so that they are not silently reused.
+    """
+    for key in ["compute_starspectrum_contnorm_3dspline", "compute_starsubtraction_3dspline"]:
+        filename = combdataobj.default_filenames[key]
+        if os.path.exists(filename):
+            cached = Spline3D.from_file(filename)
+            if cached != spline3d:
+                raise ValueError(f"The cached file {filename} was computed with {cached}, but {spline3d} was requested. "
+                                 f"Use a different spline3d_suffix (or utils_dir) for each 3D spline, or overwrite=True.")
+
+
 def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_filename,
-                      wv_nodes=None,x_nodes=None,y_nodes=None,save_pickle=False, load_pickle=False,
+                      spline3d=None,save_pickle=False, load_pickle=False,
                       coords_filename=None,coords_filename_filter = None,numthreads=1,spline3d_suffix = "",
                       centroid_per_frame=True, overwrite=False,mask_charge_transfer_radius=None,ra_dec_point_sources=None,aper_rad =None,
-                      stamp_size = (0.2,0.2),
-                      subtract_comp = None,iterative_3dspline=True):
+                      subtract_comp = None,iterative_3dspline=True, prior3d=None, prior3d_kwargs=None):
+    """
+    Fit a 3D spline (x, y, wavelength) to a sequence of NIRSpec IFU cal files (continuum normalization, then star
+    subtraction), e.g. to build a BreadsPSF (see breads.jwst_tools.breadspsf.create_BreadsPSF).
 
+    spline3d : breads.jwst_tools.spline3d.Spline3D or None
+        3D spline basis (nodes, cardinal or bspline basis, stamp size, overlapping nodes). If None, the default for the
+        grating/detector: wavelength nodes default.wv_nodes_3D_dict[grating][detector], x and y nodes
+        default.x_nodes_3D_5x / y_nodes_3D_5x, cardinal basis, 0.2 arcsec stamps.
+        Cached products made with another 3D spline raise an error (use another spline3d_suffix or overwrite=True).
+    prior3d : str or None
+        None: no prior on the 3D spline parameters. "radial": radial profile prior in the continuum normalization
+        (compute_starspectrum_contnorm_3dspline, see breads.jwst_tools.splines.radial_prior_3dspline), and a loose prior
+        centered on the continuum normalization parameters in the star subtraction (compute_starsubtraction_3dspline,
+        prior3d="contnorm"). Cached products are reused whatever their prior: use a different spline3d_suffix.
+    prior3d_kwargs : dict or None
+        Optional settings of the "radial" prior, as a dictionary {setting name: value}, e.g.
+        prior3d_kwargs=dict(annulus_width=0.1, prior_nsigma=5). Ignored if prior3d is None. None uses the defaults.
+        The possible settings are the keyword arguments of breads.jwst_tools.splines.radial_prior_3dspline (see its
+        docstring for the full list and the defaults); the main ones:
+            annulus_width : width of the annuli of the radial profile (arcsec), e.g. the spaxel size (default 0.1).
+            radial_nsigma : width of the prior in units of the scatter of the data in each annulus (default 5).
+            prior_nsigma : width of the prior far from the star, in units of the noise floor (default 10).
+            faint_fraction : fraction of the faintest pixels used to compute the noise floor (default 0.1).
+        prior_nsigma and faint_fraction are also passed to the star subtraction (compute_starsubtraction_3dspline),
+        where they set the minimum width of its prior; the other settings are only used by the continuum normalization.
+    """
+
+    if prior3d not in (None, "radial"):
+        raise ValueError(f"Unknown prior3d '{prior3d}'. Use None or 'radial'.")
     grating = fits.getheader(cal_files[0])['GRATING'].strip()
     detector = fits.getheader(cal_files[0])['DETECTOR'].strip().lower()
-    if wv_nodes is None:
-        wv_nodes= default.wv_nodes_3D_dict[grating][detector]
-    if x_nodes is None:
-        x_nodes=default.x_nodes_3D_5x
-    if y_nodes is None:
-        y_nodes=default.y_nodes_3D_5x
+    if spline3d is None:
+        spline3d = Spline3D(default.wv_nodes_3D_dict[grating][detector], default.x_nodes_3D_5x, default.y_nodes_3D_5x,
+                            basis="cardinal", stamp_size=(0.2, 0.2))
 
     splitbasename = os.path.basename(cal_files[0]).split("_")
     pickle_filename = os.path.join(utils_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+ "_sky"+spline3d_suffix+".pkl")
@@ -1776,22 +1815,30 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
             combdataobj.save(filename=pickle_filename)
 
 
+    if not overwrite:
+        _check_cached_spline3d(spline3d, combdataobj)
     if not overwrite and os.path.exists(combdataobj.default_filenames["compute_starsubtraction_3dspline"]):
         return combdataobj
 
-    _out = combdataobj.reload_starspectrum_contnorm_3dspline()
-    if overwrite or _out is None:
+    _out = None if overwrite else combdataobj.reload_starspectrum_contnorm_3dspline()
+    if _out is None:
         _out = combdataobj.compute_starspectrum_contnorm_3dspline(save_utils=True,max_cores=numthreads,
-                                                       wv_nodes=wv_nodes,
-                                                       x_nodes=x_nodes,
-                                                       y_nodes=y_nodes,
-                                                       stamp_size = stamp_size)
+                                                                  spline3d=spline3d, prior3d=prior3d,
+                                                                  prior3d_kwargs=prior3d_kwargs)
     # new_wavelengths, combined_fluxes = _out[0],_out[1]
-    new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline3d_paras,spline3d_paras_err,wv_nodes,x_nodes,y_nodes = _out
+    new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline3d_paras,spline3d_paras_err,spline3d = _out
     # exit()
 
+    # The prior of the star subtraction uses the same prior_nsigma and faint_fraction as the radial prior of the
+    # continuum normalization (the other settings in prior3d_kwargs are only for the radial prior).
+    if prior3d_kwargs is None:
+        prior3d_kwargs = {}
+    prior_nsigma = prior3d_kwargs.get("prior_nsigma", 10)
+    faint_fraction = prior3d_kwargs.get("faint_fraction", 0.1)
     _out = combdataobj.compute_starsubtraction_3dspline(save_utils=True,max_cores=numthreads,iterative=iterative_3dspline,
-                                                        threshold_badpix=10,only_identify_badpix=True)
+                                                        threshold_badpix=10,only_identify_badpix=True,
+                                                        prior3d=None if prior3d is None else "contnorm",
+                                                        prior_nsigma=prior_nsigma, faint_fraction=faint_fraction)
     # plt.imshow(spline3d_paras[2,:,:],origin="lower")
     # plt.colorbar()
     # plt.show()
@@ -1799,20 +1846,44 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
     return combdataobj
 
 def compute_3dsplines_miri(cal_files, channel, utils_dir, targetname, combined_contnorm_spec_filename,
-                      wv_nodes=None,x_nodes=None,y_nodes=None,save_pickle=False, load_pickle=False,
+                      spline3d=None,save_pickle=False, load_pickle=False,
                       coords_filename_filter = None,numthreads=1,spline3d_suffix = "",
                       centroid_per_frame=True, overwrite=False, ra_dec_point_sources=None,aper_rad =None,
-                      stamp_size = (0.5, 0.5)):
+                      prior3d=None, prior3d_kwargs=None):
+    """
+    Fit a 3D spline (x, y, wavelength) to a sequence of MIRI MRS cal files (continuum normalization, then star
+    subtraction). MIRI version of compute_3dsplines.
 
+    spline3d : breads.jwst_tools.spline3d.Spline3D or None
+        3D spline basis. If None, the default for the channel/band: wavelength nodes
+        default_miri.wv_nodes_3D_dict[channel_band], x and y nodes default_miri.x_nodes_3D_5x / y_nodes_3D_5x,
+        cardinal basis, 0.5 arcsec stamps.
+    prior3d : str or None
+        None: no prior on the 3D spline parameters. "radial": radial profile prior in the continuum normalization
+        (compute_starspectrum_contnorm_3dspline, see breads.jwst_tools.splines.radial_prior_3dspline), and a loose prior
+        centered on the continuum normalization parameters in the star subtraction (compute_starsubtraction_3dspline,
+        prior3d="contnorm"). Cached products are reused whatever their prior: use a different spline3d_suffix.
+    prior3d_kwargs : dict or None
+        Optional settings of the "radial" prior, as a dictionary {setting name: value}, e.g.
+        prior3d_kwargs=dict(annulus_width=0.1, prior_nsigma=5). Ignored if prior3d is None. None uses the defaults.
+        The possible settings are the keyword arguments of breads.jwst_tools.splines.radial_prior_3dspline (see its
+        docstring for the full list and the defaults); the main ones:
+            annulus_width : width of the annuli of the radial profile (arcsec), set it to the spaxel size of the channel (default 0.1).
+            radial_nsigma : width of the prior in units of the scatter of the data in each annulus (default 5).
+            prior_nsigma : width of the prior far from the star, in units of the noise floor (default 10).
+            faint_fraction : fraction of the faintest pixels used to compute the noise floor (default 0.1).
+        prior_nsigma and faint_fraction are also passed to the star subtraction (compute_starsubtraction_3dspline),
+        where they set the minimum width of its prior; the other settings are only used by the continuum normalization.
+    """
+
+    if prior3d not in (None, "radial"):
+        raise ValueError(f"Unknown prior3d '{prior3d}'. Use None or 'radial'.")
     sub_band = sub_band_from_name(fits.getheader(cal_files[0])['BAND'])
     channel_band = channel + sub_band
 
-    if wv_nodes is None:
-        wv_nodes= default_miri.wv_nodes_3D_dict[channel_band]
-    if x_nodes is None:
-        x_nodes=default_miri.x_nodes_3D_5x
-    if y_nodes is None:
-        y_nodes=default_miri.y_nodes_3D_5x
+    if spline3d is None:
+        spline3d = Spline3D(default_miri.wv_nodes_3D_dict[channel_band], default_miri.x_nodes_3D_5x,
+                            default_miri.y_nodes_3D_5x, basis="cardinal", stamp_size=(0.5, 0.5))
 
     splitbasename = os.path.basename(cal_files[0]).split("_")
     pickle_filename = os.path.join(utils_dir,splitbasename[0] + "_" + splitbasename[1] + "_" + splitbasename[3]+ "_sky"+spline3d_suffix+".pkl")
@@ -1864,22 +1935,30 @@ def compute_3dsplines_miri(cal_files, channel, utils_dir, targetname, combined_c
             combdataobj.save(filename=pickle_filename)
 
 
+    if not overwrite:
+        _check_cached_spline3d(spline3d, combdataobj)
     if not overwrite and os.path.exists(combdataobj.default_filenames["compute_starsubtraction_3dspline"]):
         return combdataobj
 
-    _out = combdataobj.reload_starspectrum_contnorm_3dspline()
-    if overwrite or _out is None:
+    _out = None if overwrite else combdataobj.reload_starspectrum_contnorm_3dspline()
+    if _out is None:
         _out = combdataobj.compute_starspectrum_contnorm_3dspline(save_utils=True,max_cores=numthreads,
-                                                       wv_nodes=wv_nodes,
-                                                       x_nodes=x_nodes,
-                                                       y_nodes=y_nodes,
-                                                       stamp_size = stamp_size)
+                                                                  spline3d=spline3d, prior3d=prior3d,
+                                                                  prior3d_kwargs=prior3d_kwargs)
     # new_wavelengths, combined_fluxes = _out[0],_out[1]
-    new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline3d_paras,spline3d_paras_err,wv_nodes,x_nodes,y_nodes = _out
+    new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline3d_paras,spline3d_paras_err,spline3d = _out
 
+    # The prior of the star subtraction uses the same prior_nsigma and faint_fraction as the radial prior of the
+    # continuum normalization (the other settings in prior3d_kwargs are only for the radial prior).
+    if prior3d_kwargs is None:
+        prior3d_kwargs = {}
+    prior_nsigma = prior3d_kwargs.get("prior_nsigma", 10)
+    faint_fraction = prior3d_kwargs.get("faint_fraction", 0.1)
     _out = combdataobj.compute_starsubtraction_3dspline(save_utils=True,max_cores=numthreads,iterative=True,
-                                                        threshold_badpix=10,only_identify_badpix=True)
-    subtracted_im, spline_cont0, spline3d_paras, spline3d_paras_err, wv_nodes, x_nodes, y_nodes = _out
+                                                        threshold_badpix=10,only_identify_badpix=True,
+                                                        prior3d=None if prior3d is None else "contnorm",
+                                                        prior_nsigma=prior_nsigma, faint_fraction=faint_fraction)
+    subtracted_im, spline_cont0, spline3d_paras, spline3d_paras_err, spline3d = _out
 
     # plt.imshow(spline3d_paras[2,:,:],origin="lower")
     # plt.colorbar()

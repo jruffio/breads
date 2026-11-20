@@ -14,6 +14,7 @@ from astropy.table import Table
 from astropy.io import fits
 
 from breads.jwst_tools.splines import evaluate_3dspline_grid
+from breads.jwst_tools.spline3d import Spline3D
 from breads.jwst_tools.plotting import save_cube_as_gif
 
 def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,numthreads=1,stis_spectrum=None,
@@ -34,16 +35,15 @@ def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,
 
 
     hdulist = pyfits.open(spline3d_filename)
-    wv_nodes = hdulist["wv_nodes"].data
-    x_nodes = hdulist["x_nodes"].data
-    y_nodes = hdulist["y_nodes"].data
+    spline3d = Spline3D.from_hdulist(hdulist) # nodes, basis and stamp layout
     spline3d_paras = hdulist["SPLINE_PARAS0"].data
     spline3d_paras_err = hdulist["SPLINE_PARAS0_ERR"].data
+    # Spline parameters of the model error (older files: None, evaluate_3dspline then uses SPLINE_PARAS0_ERR)
+    spline3d_merr_paras = hdulist["SPLINE_PARAS0_MERR"].data if "SPLINE_PARAS0_MERR" in hdulist else None
     breads_header = hdulist['BREADS'].header
-    stamp_size = (hdulist['BREADS'].header['3DSPLSSX'], hdulist['BREADS'].header['3DSPLSSY'])
     hdulist.close()
 
-    _out = evaluate_3dspline_grid(x_vec, y_vec, wv_sampling, spline3d_filename, max_cores=numthreads,stamp_size=stamp_size)
+    _out = evaluate_3dspline_grid(x_vec, y_vec, wv_sampling, spline3d_filename, max_cores=numthreads)
     breadspsf, breadspsf_err = _out
 
     if stis_spectrum is not None:
@@ -66,9 +66,13 @@ def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,
         sampled_stis = stis_func(wv_sampling)
         breadspsf /= sampled_stis[:,None,None]
         breadspsf_err /= sampled_stis[:,None,None]
-        nodes_stis = stis_func(wv_nodes)
+        # The spline parameters are scaled by the STIS spectrum at their wavelength (the nodes for the cardinal
+        # basis; for B-splines, the Greville abscissae of the control points, which is an approximation).
+        nodes_stis = stis_func(spline3d.wv.param_positions)
         spline3d_paras /= nodes_stis[None,None,:,None,None]
         spline3d_paras_err /= nodes_stis[None,None,:,None,None]
+        if spline3d_merr_paras is not None:
+            spline3d_merr_paras /= nodes_stis[None,None,:,None,None]
         if units_str is None:
             units_str = "[MJy/sr]/[1MJy]"
     else:
@@ -77,9 +81,7 @@ def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,
 
     units = pyfits.Header({'BUNIT': units_str})
 
-    if stamp_size is not None:
-        breads_header['3DSPLSSX'] = stamp_size[0]
-        breads_header['3DSPLSSY']= stamp_size[1]
+    spline3d.update_header(breads_header) # 3DSPL* keywords (basis, stamp size, nodes)
     out_filename = os.path.join(breadsPSF_DIR, basename)
     x_grid, y_grid = np.meshgrid(x_vec, y_vec)
     hdulist = pyfits.HDUList()
@@ -89,19 +91,22 @@ def create_BreadsPSF(spline3d_filename, x_vec, y_vec, wv_sampling,basename=None,
     hdulist.append(pyfits.ImageHDU(data=wv_sampling, name='WAVE'))
     hdulist.append(pyfits.ImageHDU(data=x_grid, name='X'))
     hdulist.append(pyfits.ImageHDU(data=y_grid, name='Y'))
-    hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
-    hdulist.append(pyfits.ImageHDU(data=y_nodes, name='y_nodes'))
-    hdulist.append(pyfits.ImageHDU(data=wv_nodes, name='wv_nodes'))
+    for hdu in spline3d.to_hdus(): # wv_nodes, x_nodes, y_nodes
+        hdulist.append(hdu)
     hdulist.append(pyfits.ImageHDU(data=spline3d_paras, name='SPLINE_PARAS', header=units))
     hdulist.append(pyfits.ImageHDU(data=spline3d_paras_err, name='SPLINE_PARAS_ERR', header=units))
+    if spline3d_merr_paras is not None:
+        hdulist.append(pyfits.ImageHDU(data=spline3d_merr_paras, name='SPLINE_PARAS_MERR', header=units))
     hdulist.writeto(out_filename, overwrite=True)
     hdulist.close()
 
     dx = x_vec[1] - x_vec[0]
     dy = y_vec[1] - y_vec[0]
     extent = [x_vec[0] - dx / 2.0, x_vec[-1] + dx / 2.0, y_vec[0] - dy / 2.0, y_vec[-1] + dy / 2.0]
-    _valid_bpsf = breadspsf[np.where(np.isfinite(breadspsf))]
-    vmin,vmax = np.abs(np.percentile(_valid_bpsf, 1)),np.abs(np.percentile(_valid_bpsf, 99))
+    # The gif shows log10(|PSF|), so the color limits must be in log10 units too.
+    _valid_abs_bpsf = np.abs(breadspsf[np.where(np.isfinite(breadspsf) * (breadspsf != 0))])
+    vmax = np.log10(np.percentile(_valid_abs_bpsf, 99.9))
+    vmin = vmax - 5  # show 5 decades of dynamic range below the peak
     save_cube_as_gif(np.log10(np.abs(breadspsf[::50])), filename=out_filename.replace(".fits", ".gif"),
                      fps=24, vmin=vmin, vmax=vmax, extent=extent, wv_nodes=wv_sampling[::50], dpi=100)
 
@@ -122,9 +127,8 @@ def merge_breadspsfs(breadsPSF_basename_init, J1757132_breadsPSF_basename,breads
         psf0_X = hdulist['X'].data
         spline3d_paras0 = hdulist['SPLINE_PARAS'].data
         spline3d_paras_err0 = hdulist['SPLINE_PARAS_ERR'].data
-        x_nodes0 = hdulist['x_nodes'].data
-        y_nodes0 = hdulist['y_nodes'].data
-        wv_nodes0 = hdulist['wv_nodes'].data
+        spline3d_merr_paras0 = hdulist['SPLINE_PARAS_MERR'].data if 'SPLINE_PARAS_MERR' in hdulist else None
+        spline3d0 = Spline3D.from_hdulist(hdulist)
         # J1757132_breadspsf_unit = hdulist['EPSFS'].header['BUNIT']
         hdulist.close()
 
@@ -137,29 +141,30 @@ def merge_breadspsfs(breadsPSF_basename_init, J1757132_breadsPSF_basename,breads
         breadspsf_header = hdulist[0].header
         spline3d_paras1 = hdulist['SPLINE_PARAS'].data
         spline3d_paras_err1 = hdulist['SPLINE_PARAS_ERR'].data
+        spline3d_merr_paras1 = hdulist['SPLINE_PARAS_MERR'].data if 'SPLINE_PARAS_MERR' in hdulist else None
         psf1_X = hdulist['X'].data
         psf1_Y = hdulist['Y'].data
         wv1_sampling = hdulist['WAVE'].data
-        x_nodes1 = hdulist['x_nodes'].data
-        y_nodes1 = hdulist['y_nodes'].data
-        wv_nodes1 = hdulist['wv_nodes'].data
+        spline3d1 = Spline3D.from_hdulist(hdulist)
         # breadspsf_unit = hdulist['EPSFS'].header['BUNIT']
         hdulist.close()
 
-        print(x_nodes0)
-        print(x_nodes1)
-        if not np.allclose(wv_nodes0, wv_nodes1):
+        if spline3d0.basis != spline3d1.basis or spline3d0.degree != spline3d1.degree:
+            raise Exception(f"BreadsPSF spline bases are different: {spline3d0} and {spline3d1}.")
+        if not np.allclose(spline3d0.wv_nodes, spline3d1.wv_nodes):
             raise Exception("BreadsPSF wv_nodes are different.")
-        if not np.allclose(x_nodes0, x_nodes1):
+        if not np.allclose(spline3d0.x_nodes, spline3d1.x_nodes):
             raise Exception("BreadsPSF x_nodes are different.")
-        if not np.allclose(y_nodes0, y_nodes1):
+        if not np.allclose(spline3d0.y_nodes, spline3d1.y_nodes):
             raise Exception("BreadsPSF y_nodes are different.")
 
-        xx, yy = np.meshgrid(x_nodes1, y_nodes1)
+        # Spatial position associated with each spline parameter (the nodes for the cardinal basis)
+        wv_pos1, y_pos1, x_pos1 = spline3d1.param_positions
+        xx, yy = np.meshgrid(x_pos1, y_pos1)
         rr = np.sqrt(xx ** 2 + yy ** 2)
-        xx = np.tile(xx[None, :, :], (2,2,np.size(wv_nodes1), 1, 1))
-        yy = np.tile(yy[None, :, :], (2,2,np.size(wv_nodes1), 1, 1))
-        rr = np.tile(rr[None, :, :], (2,2,np.size(wv_nodes1), 1, 1))
+        xx = np.tile(xx[None, :, :], (2,2,np.size(wv_pos1), 1, 1))
+        yy = np.tile(yy[None, :, :], (2,2,np.size(wv_pos1), 1, 1))
+        rr = np.tile(rr[None, :, :], (2,2,np.size(wv_pos1), 1, 1))
         where_good = np.where(np.isfinite(spline3d_paras0) & np.isfinite(spline3d_paras1) & np.isfinite(spline3d_paras_err0) & (spline3d_paras_err0>1e7)&
                               np.isfinite(spline3d_paras_err1) & (np.abs(xx) < dist_mask) & (np.abs(yy) < dist_mask) &
                               (np.abs(xx) >= mask_charge_transfer_radius) & np.abs(rr >= (2 * mask_charge_transfer_radius)))
@@ -192,15 +197,24 @@ def merge_breadspsfs(breadsPSF_basename_init, J1757132_breadsPSF_basename,breads
         spline3d_paras_combined = np.nansum(arr_tmp / arr_err_tmp ** 2, axis=0) / denum
         spline3d_paras_combined_err = 1 / np.sqrt(denum)
 
+        # Model error of the combination: inverse variance combination of the model errors of the two PSFs (with the
+        # same masks). For the cardinal basis, SPLINE_PARAS_MERR = SPLINE_PARAS_ERR and this is the error above.
+        if spline3d_merr_paras0 is not None and spline3d_merr_paras1 is not None:
+            merr0 = np.where(np.isfinite(spline3d_paras0), spline3d_merr_paras0, np.nan)
+            merr1 = np.where(np.isfinite(spline3d_paras1_scaled), np.abs(scaling) * spline3d_merr_paras1, np.nan)
+            spline3d_merr_paras_combined = 1 / np.sqrt(np.nansum(1 / np.concatenate([merr0[None], merr1[None]]) ** 2, axis=0))
+        else:
+            spline3d_merr_paras_combined = None
+
         plt.figure()
         mid_id = spline3d_paras0.shape[3]//2
-        plt.errorbar(x_nodes0, np.nanmedian(spline3d_paras0,axis=(0,1))[2, mid_id, :],
+        plt.errorbar(spline3d0.param_positions[2], np.nanmedian(spline3d_paras0,axis=(0,1))[2, mid_id, :],
                      yerr=np.nanmedian(spline3d_paras_err0,axis=(0,1))[2, mid_id, :],
                      label='J1757132 (faint)', fmt="")
-        plt.errorbar(x_nodes1, np.nanmedian(spline3d_paras1_scaled,axis=(0,1))[2, mid_id, :],
+        plt.errorbar(x_pos1, np.nanmedian(spline3d_paras1_scaled,axis=(0,1))[2, mid_id, :],
                      yerr=np.nanmedian(spline3d_paras1_scaled_err,axis=(0,1))[2, mid_id, :],
                      label='scaled HD163466', fmt="")
-        plt.errorbar(x_nodes1, np.nanmedian(spline3d_paras_combined,axis=(0,1))[2, mid_id, :],
+        plt.errorbar(x_pos1, np.nanmedian(spline3d_paras_combined,axis=(0,1))[2, mid_id, :],
                      yerr=np.nanmedian(spline3d_paras_combined_err,axis=(0,1))[2, mid_id, :],
                      label='Combined', fmt="--")
         plt.yscale("log")
@@ -213,9 +227,9 @@ def merge_breadspsfs(breadsPSF_basename_init, J1757132_breadsPSF_basename,breads
         plt.savefig(os.path.join(utils_dir, breadsPSF_combined_init_basename.replace(".fits", "_combination_cut_preview.png")),dpi=200)
 
         vmax = 4+np.log10(np.abs(median_abs_deviation(spline3d_paras0[np.where(np.isfinite(spline3d_paras0))])))
-        dx = x_nodes1[1] - x_nodes1[0]
-        dy = y_nodes1[1] - y_nodes1[0]
-        extent = [x_nodes1[0] - dx / 2.0, x_nodes1[-1] + dx / 2.0, y_nodes1[0] - dy / 2.0, y_nodes1[-1] + dy / 2.0]
+        dx = x_pos1[1] - x_pos1[0]
+        dy = y_pos1[1] - y_pos1[0]
+        extent = [x_pos1[0] - dx / 2.0, x_pos1[-1] + dx / 2.0, y_pos1[0] - dy / 2.0, y_pos1[-1] + dy / 2.0]
         plt.figure()
         plt.subplot(1, 3, 1)
         plt.title("First PSF")
@@ -243,10 +257,11 @@ def merge_breadspsfs(breadsPSF_basename_init, J1757132_breadsPSF_basename,breads
         hdulist.append(fits.PrimaryHDU())
         hdulist.append(fits.ImageHDU(data=spline3d_paras_combined, name='SPLINE_PARAS0'))
         hdulist.append(fits.ImageHDU(data=spline3d_paras_combined_err, name='SPLINE_PARAS0_ERR'))
-        hdulist.append(fits.ImageHDU(data=wv_nodes1, name='wv_nodes'))
-        hdulist.append(fits.ImageHDU(data=x_nodes1, name='x_nodes'))
-        hdulist.append(fits.ImageHDU(data=y_nodes1, name='y_nodes'))
-        hdulist.append(fits.ImageHDU(header=breadspsf_header, name='BREADS'))
+        if spline3d_merr_paras_combined is not None:
+            hdulist.append(fits.ImageHDU(data=spline3d_merr_paras_combined, name='SPLINE_PARAS0_MERR'))
+        for hdu in spline3d1.to_hdus(): # wv_nodes, x_nodes, y_nodes
+            hdulist.append(hdu)
+        hdulist.append(fits.ImageHDU(header=spline3d1.update_header(breadspsf_header), name='BREADS'))
         hdulist.writeto(spline3d_filename_combined, overwrite=True)
         hdulist.close()
 
@@ -262,11 +277,12 @@ def merge_breadspsfs(breadsPSF_basename_init, J1757132_breadsPSF_basename,breads
         hdulist.append(fits.ImageHDU(data=wv_sampling, name='WAVE'))
         hdulist.append(fits.ImageHDU(data=psf1_X, name='X'))
         hdulist.append(fits.ImageHDU(data=psf1_Y, name='Y'))
-        hdulist.append(fits.ImageHDU(data=x_nodes1, name='x_nodes'))
-        hdulist.append(fits.ImageHDU(data=y_nodes1, name='y_nodes'))
-        hdulist.append(fits.ImageHDU(data=wv_nodes1, name='wv_nodes'))
+        for hdu in spline3d1.to_hdus(): # wv_nodes, x_nodes, y_nodes
+            hdulist.append(hdu)
         hdulist.append(fits.ImageHDU(data=spline3d_paras_combined, name='SPLINE_PARAS', header=units))
         hdulist.append(fits.ImageHDU(data=spline3d_paras_combined_err, name='SPLINE_PARAS_ERR', header=units))
+        if spline3d_merr_paras_combined is not None:
+            hdulist.append(fits.ImageHDU(data=spline3d_merr_paras_combined, name='SPLINE_PARAS_MERR', header=units))
         hdulist.writeto(breadsPSF_combined_init_path, overwrite=True)
         hdulist.close()
 

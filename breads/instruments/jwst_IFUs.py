@@ -5,6 +5,7 @@ import sys
 from copy import copy, deepcopy
 from glob import glob
 from warnings import warn
+import warnings
 import numpy as np
 import pickle
 from types import SimpleNamespace
@@ -34,8 +35,9 @@ from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_el
 from breads.utils import get_spline_model
 from breads.utils import get_breads_commit
 from breads.jwst_tools.plotting import save_cube_as_gif,point_cloud_interpolator_2d
-from breads.jwst_tools.splines import fit_3dspline,normalize_rows,evaluate_3dspline_pointcloud
+from breads.jwst_tools.splines import fit_3dspline,normalize_rows,evaluate_3dspline_pointcloud,save_3dspline_model_gif,radial_prior_3dspline
 from breads.jwst_tools.spline1d import Spline1D
+from breads.jwst_tools.spline3d import Spline3D
 from breads.jwst_tools.spectra import combine_spectrum
 from breads.jwst_tools.build_cube import rprint
 
@@ -1588,77 +1590,78 @@ class JWST_IFUs(ABC):
 
     def compute_starspectrum_contnorm_3dspline(self,  save_utils=False,max_cores=1,
                                                spec_R_sampling=None, threshold_badpix=100,
-                                               wv_nodes=None,N_wv_nodes=5,
-                                               x_nodes=None,delta_x_nodes=0.02,
-                                               y_nodes=None,delta_y_nodes=0.02,
-                                               stamp_size = (0.2,0.2),save_plots=True):
+                                               spline3d=None, save_plots=True, prior3d=None, prior3d_kwargs=None):
         """ Compute star spectrum continuum normalized by 3d spline
 
         Parameters
         ----------
+        save_utils : bool or str
+            Save the outputs in the default file (True) or in the given filename (str).
+        max_cores : int
+            Number of processes.
+        spec_R_sampling : float or None
+            Spectral sampling of the combined spectrum. Default is 4 times the resolution of the IFU.
+        threshold_badpix : float
+            Bad pixel threshold in fit_3dspline.
+        spline3d : breads.jwst_tools.spline3d.Spline3D or None
+            3D spline basis (nodes, cardinal or bspline basis, stamp size, overlapping nodes).
+            If None, Spline3D.default(self.wavelengths) is used: 5 wavelength nodes over the data, x and y nodes
+            from -2 to 2 arcsec every 0.02 arcsec, cardinal basis, 0.2 arcsec stamps.
+        save_plots : bool
+            Save diagnostic plots next to the output file.
+        prior3d : str or None
+            Prior on the 3D spline parameters. None: no prior. "radial": wavelength dependent radial profile of the data
+            tapering to a read noise dominated prior (see breads.jwst_tools.splines.radial_prior_3dspline); it only
+            regularizes the parameters that the data do not constrain (edge of the FOV, masked regions).
+            The noise floor of the prior is saved in the BREADS header (3DSPLNFL).
+        prior3d_kwargs : dict or None
+            Optional settings of the "radial" prior, as a dictionary {setting name: value}, e.g.
+            prior3d_kwargs=dict(annulus_width=0.1, prior_nsigma=5). Ignored if prior3d is None. None uses the defaults.
+            The possible settings are the keyword arguments of breads.jwst_tools.splines.radial_prior_3dspline (see
+            its docstring for the full list and the defaults), e.g. annulus_width (arcsec, the spaxel size, default
+            0.1), radial_nsigma (default 5), prior_nsigma (default 10), faint_fraction (default 0.1).
 
         Returns
         -------
-
+        new_wavelengths, combined_fluxes, combined_errors, spline_cont0, spline3d_paras, spline3d_paras_err, spline3d
+            spline3d_paras has the shape spline3d.params_shape. Also sets self.spline3d and self.star_func.
         """
         if spec_R_sampling is None:
             self.breads_header["3DSPL_R"] = self.R*4
         else:
             self.breads_header["3DSPL_R"] = spec_R_sampling
         self.breads_header["3DSPL_TH"] = threshold_badpix
-        self.breads_header["3DSPLSSX"] = stamp_size[0]
-        self.breads_header["3DSPLSSY"] = stamp_size[1]
 
         _ifux,_ifuy = self.get_ifu_coords()
 
-        if wv_nodes is None:
-            wv_nodes = np.linspace(np.nanmin(self.wavelengths), np.nanmax(self.wavelengths), N_wv_nodes, endpoint=True)
-        if x_nodes is None:
-            x_nodes = np.arange(-2, 2.0001, delta_x_nodes)
-        if y_nodes is None:
-            y_nodes = np.arange(-2, 2.0001, delta_y_nodes)
-
-        self.breads_header["3DSPL_NW"] = N_wv_nodes
-        self.breads_header["3DSPL_DX"] = delta_x_nodes
-        self.breads_header["3DSPL_DY"] = delta_y_nodes
-        self.wv_nodes = wv_nodes
-        self.x_nodes = x_nodes
-        self.y_nodes = y_nodes
+        if spline3d is None:
+            spline3d = Spline3D.default(self.wavelengths)
+        self.spline3d = spline3d  # this method defines the 3D spline (it replaces any previous one, as before)
+        spline3d.update_header(self.breads_header)  # 3DSPL* keywords (basis, stamp size, nodes)
+        # Positions associated with the spline parameters (the nodes for the cardinal basis)
+        wv_nodes, y_nodes, x_nodes = spline3d.param_positions
 
         if self.verbose:
             print(f"Computing stellar spectrum with 3d spline (continuum normalized)")
 
-        if 0: # initialize regularization
-            reg_mean_map_init = np.full((len(wv_nodes), len(y_nodes), len(x_nodes) ),np.nan)
-            reg_std_map_init = np.full((len(wv_nodes), len(y_nodes), len(x_nodes) ),np.nan)
-
-            regwvs_tmpobj = SimpleNamespace()
-
-            # once again a function to manage the difference between NIRSpec and MIRI (see redefinition in jwstmiri_cal.py)
-            Ntraces, Nwv = self._get_interpdata_shapes(wv_nodes)
-            self._init_regwvs_obj(regwvs_tmpobj, Ntraces, Nwv)
-            for trace_id in range(Ntraces):
-                wvs_finite, where_finite = self._get_where_finite(trace_id)
-                if np.size(wvs_finite[0]) == 0 or np.size(where_finite[0]) == 0:
-                    continue
-                # interpolates everything row by row. Different behavior between NIRSpec and MIRI
-                self._interpdata_regwvs_trace(regwvs_tmpobj, wv_nodes, wvs_finite, where_finite, trace_id)
-
-            xx, yy = np.meshgrid(x_nodes, y_nodes)
-
-            for wv_id, wv in enumerate(wv_nodes):
-                pointcloud_interp = point_cloud_interpolator_2d(regwvs_tmpobj.x, regwvs_tmpobj.y, wv_nodes,
-                                                                regwvs_tmpobj.data, regwvs_tmpobj.bad_pixels, wv)
-                pointcloud_interp_noise = point_cloud_interpolator_2d(regwvs_tmpobj.x, regwvs_tmpobj.y, wv_nodes,
-                                                                regwvs_tmpobj.noise, regwvs_tmpobj.bad_pixels, wv)
-                if pointcloud_interp is not None:
-                    reg_mean_map_init[wv_id, :, :] = pointcloud_interp(xx,yy)
-                    reg_std_map_init[wv_id, :, :] = pointcloud_interp_noise(xx,yy)*10
-        else:
+        # Optional prior on the spline parameters (regularization of the parameters not constrained by the data)
+        self.breads_header["3DSPLPRI"] = (str(prior3d), "3D spline contnorm prior (None, radial)")
+        if prior3d is None:
             reg_mean_map_init = None
             reg_std_map_init = None
+        elif prior3d == "radial":
+            wv_ref = self.breads_header["WV_REF"]
+            reg_mean_map_init, reg_std_map_init, prior_info = radial_prior_3dspline(
+                spline3d, _ifux * wv_ref / self.wavelengths, _ifuy * wv_ref / self.wavelengths, self.wavelengths,
+                self.data, self.noise, self.bad_pixels, **({} if prior3d_kwargs is None else prior3d_kwargs))
+            self.breads_header["3DSPLNFL"] = (prior_info["noise_floor"], "3D spline prior: noise floor")
+            if self.verbose:
+                print(f"Radial prior on the 3D spline parameters: noise floor {prior_info['noise_floor']:.3e}, "
+                      f"fallback width {prior_info['fallback_std']:.3e}")
+        else:
+            raise ValueError(f"Unknown prior3d '{prior3d}'. Use None or 'radial'.")
 
-        spline_cont0, _, new_badpixs, residuals, spline3d_paras_np,spline3d_paras_err_np = fit_3dspline(self, x_nodes,y_nodes,wv_nodes,stamp_size = stamp_size,
+        spline_cont0, _, new_badpixs, residuals, spline3d_paras_np,spline3d_paras_err_np,spline3d_merr_paras_np = fit_3dspline(self, spline3d,
                                                             reg_mean_map=reg_mean_map_init, reg_std_map=reg_std_map_init,
                                                             max_cores=max_cores,threshold=threshold_badpix)
 
@@ -1693,22 +1696,18 @@ class JWST_IFUs(ABC):
             hdulist.append(pyfits.ImageHDU(data=spline_cont0, name='SPLINE_CONT0'))
             hdulist.append(pyfits.ImageHDU(data=spline3d_paras_np, name='SPLINE_PARAS0'))
             hdulist.append(pyfits.ImageHDU(data=spline3d_paras_err_np, name='SPLINE_PARAS0_ERR'))
-            hdulist.append(pyfits.ImageHDU(data=wv_nodes, name='wv_nodes'))
-            hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
-            hdulist.append(pyfits.ImageHDU(data=y_nodes, name='y_nodes'))
+            hdulist.append(pyfits.ImageHDU(data=spline3d_merr_paras_np, name='SPLINE_PARAS0_MERR'))  # model error
+            for hdu in spline3d.to_hdus(): # wv_nodes, x_nodes, y_nodes
+                hdulist.append(hdu)
             hdulist.append(pyfits.ImageHDU(data=normalized_im, name='CONT_NORM_IM'))
             hdulist.append(pyfits.ImageHDU(header=self.breads_header, name='BREADS'))
             hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
 
             if save_plots:
-                dx_nodes = x_nodes[1]-x_nodes[0]
-                dy_nodes = y_nodes[1]-y_nodes[0]
-                extent = [x_nodes[0]-dx_nodes/2.0,x_nodes[-1]+dx_nodes/2.0,y_nodes[0]-dy_nodes/2.0,y_nodes[-1]+dy_nodes/2.0]
-                spline3d_paras_toplot = np.nanmedian(spline3d_paras_np,axis=(0,1))
-                vmax = 4+np.log10(np.abs(median_abs_deviation(spline3d_paras_toplot[np.where(np.isfinite(spline3d_paras_toplot))])))
-                save_cube_as_gif(np.log10(np.abs(spline3d_paras_toplot)),filename=out_filename.replace(".fits", ".gif"),
-                                 fps=3,vmin=vmax-6,vmax=vmax,extent=extent,wv_nodes=wv_nodes)
+                # Gif of the 3D spline model evaluated on a grid (not of the parameters, which are not model values
+                # for the B-spline basis)
+                save_3dspline_model_gif(out_filename, max_cores=max_cores)
 
                 wl = np.asarray(new_wavelengths)
                 fl = np.asarray(combined_fluxes)
@@ -1757,7 +1756,7 @@ class JWST_IFUs(ABC):
                 fig.write_html(out_filename.replace(".fits", "_starspec.html"))
 
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-        return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline3d_paras_np,spline3d_paras_err_np,wv_nodes,x_nodes,y_nodes
+        return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline3d_paras_np,spline3d_paras_err_np,spline3d
 
 
     def reload_starspectrum_contnorm_3dspline(self, load_filename=None):
@@ -1778,16 +1777,14 @@ class JWST_IFUs(ABC):
             error vector for combined_fluxes
         spline_cont0 : 2d numpy array (N_detector_rows, N_detector_cols)
             Star continuum fitted by splines for each spectral trace of the detector.
-        spline_paras0 : 2d numpy array (N_nodes, N_traces)
-            Linear parameters returned by the continuum spline fitting routine for each spectral trace of the detector.
-        wv_nodes : 1d numpy array
-            Nodes spacing in the wavelength dimension (in micron).
-        x_nodes : 1d numpy array
-            Nodes spacing in the x ifu dimension (in arcsec).
-        y_nodes : 1d numpy array
-            Nodes spacing in the y ifu dimension (in arcsec).
+        spline_paras0 : array (spline3d.params_shape)
+            3D spline parameters.
+        spline_paras0_err : array (spline3d.params_shape)
+            Uncertainties of the 3D spline parameters.
+        spline3d : breads.jwst_tools.spline3d.Spline3D
+            3D spline basis (nodes, basis, stamp layout).
 
-        Also sets self.wv_nodes and self.star_func according to values in the reloaded file headers.
+        Also sets self.spline3d and self.star_func according to the reloaded file.
 
         """
         if load_filename is None:
@@ -1802,38 +1799,45 @@ class JWST_IFUs(ABC):
         spline_cont0 = hdulist["SPLINE_CONT0"].data
         spline_paras0 = hdulist["SPLINE_PARAS0"].data
         spline_paras0_err = hdulist["SPLINE_PARAS0_ERR"].data
-        wv_nodes = hdulist['wv_nodes'].data
-        x_nodes = hdulist['x_nodes'].data
-        y_nodes = hdulist['y_nodes'].data
+        spline3d = Spline3D.from_hdulist(hdulist)
         self.breads_header['3DSPL_R'] = hdulist['BREADS'].header['3DSPL_R']
         self.breads_header['3DSPL_TH'] = hdulist['BREADS'].header['3DSPL_TH']
-        self.breads_header['3DSPLSSX'] = hdulist['BREADS'].header['3DSPLSSX']
-        self.breads_header['3DSPLSSY'] = hdulist['BREADS'].header['3DSPLSSY']
-        self.breads_header['3DSPL_NW'] = hdulist['BREADS'].header['3DSPL_NW']
-        self.breads_header['3DSPL_DX'] = hdulist['BREADS'].header['3DSPL_DX']
-        self.breads_header['3DSPL_DY'] = hdulist['BREADS'].header['3DSPL_DY']
         self.breads_header["3DSPL_FN"] = load_filename
         hdulist.close()
 
-        self.check_and_update_nodes(wv_nodes, x_nodes, y_nodes)
+        self.check_and_update_spline3d(spline3d)
+        spline3d.update_header(self.breads_header)
 
         self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
-        return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,spline_paras0_err,wv_nodes,x_nodes,y_nodes
+        return new_wavelengths,combined_fluxes,combined_errors,spline_cont0,spline_paras0,spline_paras0_err,spline3d
 
 
     def compute_starsubtraction_3dspline(self,  save_utils=False,max_cores=1,
                                          threshold_badpix=10,save_plots=True,iterative=False,
                                          only_identify_badpix = False,
-                                         combined_contnorm_filename = None):
+                                         combined_contnorm_filename = None, prior3d=None, prior_nsigma=10,
+                                         faint_fraction=0.1):
         """
-        Computing star subtraction with 3d splines
+        Subtract the star from the data with a 3D spline model (spline times the continuum normalized stellar
+        spectrum). The 3D spline basis (Spline3D) is read from the continuum normalization file
+        (combined_contnorm_filename, default: the output of compute_starspectrum_contnorm_3dspline).
 
-        Parameters
-        ----------
+        Parameters (partial)
+        --------------------
+        prior3d : str or None
+            Prior on the 3D spline parameters. None: no prior. "contnorm": loose prior centered on the parameters of the
+            continuum normalization (median of the 4 parity copies), width max(|parameter|, prior_nsigma x noise floor).
+            The noise floor is read from the continuum normalization file (3DSPLNFL, written when it used a prior), or
+            computed as the median noise of the faint_fraction faintest good pixels.
+        prior_nsigma : float
+            Only used if prior3d="contnorm". Minimum width of the prior, in units of the noise floor (default 10).
+        faint_fraction : float
+            Only used if prior3d="contnorm" and the noise floor is not in the continuum normalization file: fraction of
+            the faintest good pixels used to compute the noise floor (default 0.1).
 
         Returns
         -------
-
+        subtracted_im, spline_cont0, spline3d_paras, spline3d_paras_err, spline3d
         """
         if combined_contnorm_filename is None:
             combined_contnorm_filename = self.default_filenames["compute_starspectrum_contnorm_3dspline"]
@@ -1842,21 +1846,29 @@ class JWST_IFUs(ABC):
             hdulist = pyfits.open(combined_contnorm_filename)
             new_wavelengths = hdulist["WAVE"].data
             combined_fluxes = hdulist["COM_FLUXES"].data
-            wv_nodes = hdulist['wv_nodes'].data
-            x_nodes = hdulist['x_nodes'].data
-            y_nodes = hdulist['y_nodes'].data
+            spline3d = Spline3D.from_hdulist(hdulist)
             spline_paras0 = hdulist["SPLINE_PARAS0"].data
             spline_paras0_err = hdulist["SPLINE_PARAS0_ERR"].data
-            stamp_size = (hdulist['BREADS'].header['3DSPLSSX'],hdulist['BREADS'].header['3DSPLSSY'])
+            # Noise floor used by the prior of the continuum normalization, if it used one (keyword 3DSPLNFL of the
+            # BREADS header). Reused below for the prior of the star subtraction.
+            contnorm_noise_floor = None
+            if "BREADS" in hdulist:
+                contnorm_noise_floor = hdulist["BREADS"].header.get("3DSPLNFL", None)
             self.breads_header["3DSPL_FN"] = combined_contnorm_filename
             hdulist.close()
 
-            self.check_and_update_nodes(wv_nodes, x_nodes, y_nodes)
+            self.check_and_update_spline3d(spline3d)
+            spline3d.update_header(self.breads_header)
 
             self.star_func = interp1d(new_wavelengths, combined_fluxes, kind="linear", bounds_error=False, fill_value=1)
 
         if not hasattr(self, 'star_func'):
             raise Exception("self.star_func should be defined to continue.")
+        if getattr(self, "spline3d", None) is None:
+            raise Exception("self.spline3d should be defined to continue (see compute_starspectrum_contnorm_3dspline).")
+        spline3d = self.spline3d
+        # Positions associated with the spline parameters (the nodes for the cardinal basis)
+        wv_nodes, y_nodes, x_nodes = spline3d.param_positions
 
 
         _ifux,_ifuy = self.get_ifu_coords()
@@ -1864,15 +1876,32 @@ class JWST_IFUs(ABC):
         if self.verbose:
             print(f"Computing star subtraction with 3d splines")
 
-        if 0:
-            reg_mean_map_init =  np.nanmedian(spline_paras0,axis=(0,1))
-            reg_std_map_init =  np.nanmedian(spline_paras0_err,axis=(0,1))*10
-            # where_low_snr_prior = np.where((spline_paras0/spline_paras0_err)<5)
-            # reg_mean_map_init[where_low_snr_prior] = np.nan
-            # reg_std_map_init[where_low_snr_prior] = np.nan
-        else:
+        # Optional prior on the spline parameters: loose prior centered on the parameters of the continuum normalization
+        # (same 3D spline). Like for the 1D splines, the width is the absolute value of the parameter, so that the
+        # prior never drives the fit, with a read noise dominated floor (prior_nsigma x noise floor) so that the
+        # parameters close to zero are not pinned to zero. Parameters without a contnorm value: mean 0, width = floor.
+        # The model of the star subtraction is the spline times the continuum normalized stellar spectrum (~1), so the
+        # parameters of both fits are in the same units.
+        self.breads_header["3DSPLPRI"] = (str(prior3d), "3D spline starsub prior (None, contnorm)")
+        if prior3d is None:
             reg_mean_map_init = None
             reg_std_map_init = None
+        elif prior3d == "contnorm":
+            if combined_contnorm_filename is None:
+                raise ValueError("prior3d='contnorm' requires the continuum normalization file (combined_contnorm_filename).")
+            if contnorm_noise_floor is None:
+                good = np.isfinite(self.bad_pixels) & np.isfinite(self.data) & np.isfinite(self.noise) & (self.noise > 0)
+                faint = self.data[good] < np.nanpercentile(self.data[good], 100 * faint_fraction)
+                contnorm_noise_floor = float(np.nanmedian(self.noise[good][faint]))
+            floor = prior_nsigma * contnorm_noise_floor
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)   # all-NaN parameters (not fitted in any stamp)
+                reg_mean_map_init = np.nanmedian(spline_paras0, axis=(0, 1))
+            reg_mean_map_init[~np.isfinite(reg_mean_map_init)] = 0
+            reg_std_map_init = np.maximum(np.abs(reg_mean_map_init), floor)
+            self.breads_header["3DSPLNFL"] = (contnorm_noise_floor, "3D spline prior: noise floor")
+        else:
+            raise ValueError(f"Unknown prior3d '{prior3d}'. Use None or 'contnorm'.")
 
         stellar_features = self.star_func(self.wavelengths)
 
@@ -1882,10 +1911,10 @@ class JWST_IFUs(ABC):
             N_iter = 1
 
         for k in range(N_iter):
-            _out = fit_3dspline(self, x_nodes,y_nodes,wv_nodes,stamp_size = stamp_size,stellar_features=stellar_features,
+            _out = fit_3dspline(self, spline3d, stellar_features=stellar_features,
                                 reg_mean_map=reg_mean_map_init, reg_std_map=reg_std_map_init,
                                 max_cores=max_cores,threshold=threshold_badpix)
-            spline_cont0, _, new_badpixs, subtracted_im, spline3d_paras_np, spline3d_paras_err_np = _out
+            spline_cont0, _, new_badpixs, subtracted_im, spline3d_paras_np, spline3d_paras_err_np, spline3d_merr_paras_np = _out
             self.bad_pixels = self.bad_pixels * new_badpixs
 
         subtracted_im[np.where(np.isnan(subtracted_im))] = 0
@@ -1913,22 +1942,18 @@ class JWST_IFUs(ABC):
             hdulist.append(pyfits.ImageHDU(data=self.bad_pixels, name='BADPIX'))
             hdulist.append(pyfits.ImageHDU(data=spline3d_paras_np, name='SPLINE_PARAS0'))
             hdulist.append(pyfits.ImageHDU(data=spline3d_paras_err_np, name='SPLINE_PARAS0_ERR'))
-            hdulist.append(pyfits.ImageHDU(data=wv_nodes, name='wv_nodes'))
-            hdulist.append(pyfits.ImageHDU(data=x_nodes, name='x_nodes'))
-            hdulist.append(pyfits.ImageHDU(data=y_nodes, name='y_nodes'))
+            hdulist.append(pyfits.ImageHDU(data=spline3d_merr_paras_np, name='SPLINE_PARAS0_MERR'))  # model error
+            for hdu in spline3d.to_hdus(): # wv_nodes, x_nodes, y_nodes
+                hdulist.append(hdu)
             hdulist.append(pyfits.ImageHDU(header=_breads_header, name='BREADS'))
             hdulist.writeto(out_filename, overwrite=True)
             hdulist.close()
 
             if save_plots:
                 mad_res = median_abs_deviation(subtracted_im[np.where(np.isfinite(subtracted_im*self.bad_pixels))])
-                dx_nodes = x_nodes[1]-x_nodes[0]
-                dy_nodes = y_nodes[1]-y_nodes[0]
-                extent = [x_nodes[0]-dx_nodes/2.0,x_nodes[-1]+dx_nodes/2.0,y_nodes[0]-dy_nodes/2.0,y_nodes[-1]+dy_nodes/2.0]
-                spline3d_paras_toplot = np.nanmedian(spline3d_paras_np,axis=(0,1))
-                vmax = 4+np.log10(np.abs(median_abs_deviation(spline3d_paras_toplot[np.where(np.isfinite(spline3d_paras_toplot))])))
-                save_cube_as_gif(np.log10(np.abs(spline3d_paras_toplot)),filename=out_filename.replace(".fits", ".gif"),
-                                 fps=3,vmin=vmax-6,vmax=vmax,extent=extent,wv_nodes=wv_nodes)
+                # Gif of the 3D spline model evaluated on a grid (not of the parameters, which are not model values
+                # for the B-spline basis)
+                save_3dspline_model_gif(out_filename, max_cores=max_cores)
 
                 plt.figure(figsize=(16, 8))
                 plt.subplot(1, 2, 1)
@@ -1964,7 +1989,7 @@ class JWST_IFUs(ABC):
             self.data[where_finite_data] = subtracted_im[where_finite_data]
             self.breads_header["DATA_HPF"] = True
             self.breads_header["HPF_TYPE"] = "spline3d"
-        return subtracted_im, spline_cont0, spline3d_paras_np,spline3d_paras_err_np, self.wv_nodes,self.x_nodes,self.y_nodes
+        return subtracted_im, spline_cont0, spline3d_paras_np,spline3d_paras_err_np, self.spline3d
 
 
     def reload_starsubtraction_3dspline(self, load_filename=None):
@@ -1977,7 +2002,8 @@ class JWST_IFUs(ABC):
 
         Returns
         -------
-
+        subtracted_im, spline_cont0, spline3d_paras, spline3d_paras_err, spline3d
+            Also sets self.data, self.bad_pixels and self.spline3d.
         """
         if load_filename is None:
             load_filename = self.default_filenames["compute_starsubtraction_3dspline"]
@@ -1990,18 +2016,16 @@ class JWST_IFUs(ABC):
         spline3d_paras_np = hdulist['SPLINE_PARAS0'].data
         spline3d_paras_err_np = hdulist['SPLINE_PARAS0_ERR'].data
         new_bad_pixels = hdulist['BADPIX'].data
-        wv_nodes = hdulist['wv_nodes'].data
-        x_nodes = hdulist['x_nodes'].data
-        y_nodes = hdulist['y_nodes'].data
+        spline3d = Spline3D.from_hdulist(hdulist)
         self.breads_header['DATA_HPF'] = hdulist['BREADS'].header['DATA_HPF']
         self.breads_header['HPF_TYPE'] = hdulist['BREADS'].header['HPF_TYPE']
         hdulist.close()
 
-        self.check_and_update_nodes(wv_nodes, x_nodes, y_nodes)
+        self.check_and_update_spline3d(spline3d)
 
         self.bad_pixels = self.bad_pixels * new_bad_pixels
         self.data = subtracted_im
-        return subtracted_im, spline_cont0, spline3d_paras_np,spline3d_paras_err_np, self.wv_nodes,self.x_nodes,self.y_nodes
+        return subtracted_im, spline_cont0, spline3d_paras_np,spline3d_paras_err_np, self.spline3d
 
     def set_spline1d(self, spline):
         """
@@ -2074,12 +2098,25 @@ class JWST_IFUs(ABC):
                              f"{requested if not isinstance(requested, str) else 'basis ' + requested}. "
                              f"Use a different utils_dir for each spline basis, or recompute (overwrite) this step.")
 
-    def check_and_update_nodes(self,wv_nodes,x_nodes=None,y_nodes=None):
+    def check_and_update_spline3d(self, spline3d):
+        """
+        Set self.spline3d, or raise an error if a different 3D spline is already defined (nodes, basis, stamp
+        layout). Independent of the 1D continuum spline (self.spline1d / self.wv_nodes).
+        """
+        current = getattr(self, "spline3d", None)
+        if current is not None and current != spline3d:
+            raise ValueError(f"A 3d spline is already defined and does not match the new one. "
+                             f"Existing: {current}, New: {spline3d}")
+        if current is None:
+            self.spline3d = spline3d
+
+    def check_and_update_nodes(self,wv_nodes):
         """
         Make sure that there is no already some spline nodes defined in the class. If not, then update them.
+        This is for the 1D continuum spline; see check_and_update_spline3d for the 3D spline.
 
-        If wv_nodes is a Spline1D (1d spline continuum), both the nodes and the spline basis are checked, and
-        self.spline1d is updated. A plain array of wv_nodes only checks/sets self.wv_nodes (e.g. 3d splines).
+        If wv_nodes is a Spline1D, both the nodes and the spline basis are checked, and
+        self.spline1d is updated. A plain array of wv_nodes only checks/sets self.wv_nodes.
         """
         if isinstance(wv_nodes, Spline1D):
             current = self.get_spline1d()
@@ -2098,24 +2135,6 @@ class JWST_IFUs(ABC):
                 )
         else:
             self.wv_nodes = wv_nodes
-        if x_nodes is not None:
-            if hasattr(self, 'x_nodes'):
-                if not np.array_equal(self.x_nodes, x_nodes):
-                    raise ValueError(
-                        f"x_nodes already defined and does not match the new value. "
-                        f"Existing: {self.x_nodes}, New: {x_nodes}"
-                    )
-            else:
-                self.x_nodes = x_nodes
-        if y_nodes is not None:
-            if hasattr(self, 'y_nodes'):
-                if not np.array_equal(self.y_nodes, y_nodes):
-                    raise ValueError(
-                        f"y_nodes already defined and does not match the new value. "
-                        f"Existing: {self.y_nodes}, New: {y_nodes}"
-                    )
-            else:
-                self.y_nodes = y_nodes
 
     def compute_advanced_badpix(self,  save_utils=False, threshold_badpix=10,mppool=None,combined_contnorm_filename=None,
                                 starsub_dir=None, load_starspectrum_contnorm = None,iterative=True):

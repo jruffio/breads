@@ -2,6 +2,7 @@ from copy import copy
 import numpy as np
 import itertools
 import os
+import warnings
 
 import astropy.io.fits as fits
 from scipy.interpolate import interp1d
@@ -293,14 +294,89 @@ def _tmp_fm(nonlin_paras, data_obj: "Instrument"):
     else :
         return _d, M, _e
 
+def _model_error_paras(spline3d, stamp, linparas_cov):
+    """
+    Compute spline parameters that describe the 1 sigma error of the fitted model of one stamp, so that the model
+    error can be evaluated at any sample like the model itself (design matrix times parameters, see
+    _task_evaluate_3dspline). Used for the B-spline bases.
+
+    For the cardinal basis, the parameter errors are already the model errors at the nodes. For the B-spline bases,
+    the parameters are anti-correlated control points, and interpolating their errors overestimates the model error
+    by >10x. Instead:
+    1. compute the exact model error at the nodes and midpoints between nodes of the extended stamp (spline only,
+       without the stellar features): sqrt(diag(M C M^T)), with M the design matrix at these points and C the
+       covariance of the parameters;
+    2. fit it with the spline basis of the stamp, minimizing the relative difference so that the large errors at the
+       edges do not drive the fit. The result smooths any variation of the error between nodes.
+
+    Parameters
+    ----------
+    spline3d : Spline3D
+    stamp : tuple
+        Stamp (see Spline3D.stamps).
+    linparas_cov : 2d array (N_stamp_params x N_stamp_params)
+        Covariance of the parameters of the stamp (fitfm with return_covariance=True). NaN for the parameters that
+        were not fitted.
+
+    Returns
+    -------
+    merr_paras : 1d array (N_stamp_params)
+        Spline parameters of the model error. NaN if it could not be computed.
+    """
+    n_params = linparas_cov.shape[0]
+
+    # Keep the parameters that were fitted
+    valid = np.isfinite(np.diag(linparas_cov))
+    if np.sum(valid) == 0:
+        return np.full(n_params, np.nan)
+    C = linparas_cov[np.ix_(valid, valid)]
+
+    # 1. Grid of points: nodes and midpoints between nodes, along each axis of the extended stamp.
+    # The points are moved slightly inside the stamp, because the design matrix excludes its boundaries.
+    k0, k1, k2, k3, l0, l1, l2, l3, m0, m1 = stamp
+    wv_nodes = spline3d.wv_nodes
+    y_nodes = spline3d.y_nodes[l0:l3 + 1]
+    x_nodes = spline3d.x_nodes[k0:k3 + 1]
+    grids = []
+    for nodes in [wv_nodes, y_nodes, x_nodes]:
+        midpoints = 0.5 * (nodes[1:] + nodes[:-1])
+        points = np.sort(np.concatenate([nodes, midpoints]))
+        eps = 1e-6 * (nodes[-1] - nodes[0])
+        points = np.clip(points, nodes[0] + eps, nodes[-1] - eps)
+        grids.append(points)
+    w_grid, y_grid, x_grid = np.meshgrid(grids[0], grids[1], grids[2], indexing="ij")
+    w_pts = w_grid.ravel()
+    y_pts = y_grid.ravel()
+    x_pts = x_grid.ravel()
+
+    # Exact model error at these points: err^2 = diag(M C M^T), computed row by row as sum_j (M C)_ij M_ij
+    M_pts = spline3d.design_matrix(stamp, x_pts, y_pts, w_pts)
+    M_valid = M_pts[:, valid]
+    variance_pts = np.sum(np.dot(M_valid, C) * M_valid, axis=1)
+    variance_pts = np.clip(variance_pts, 0, None)   # tiny negative values from rounding errors
+    err_pts = np.sqrt(variance_pts)
+
+    good = np.isfinite(err_pts) & (err_pts > 0)
+    if np.sum(good) == 0:
+        return np.full(n_params, np.nan)
+
+    # 2. Fit the errors with the spline basis: find p such that M_pts @ p ~ err_pts, in relative terms,
+    # i.e. (M_pts / err_pts) @ p ~ 1
+    A = M_pts[good] / err_pts[good, None]
+    b = np.ones(np.sum(good))
+    merr_paras = np.linalg.lstsq(A, b, rcond=None)[0]
+    return merr_paras
+
+
 def _task_fit_3dspline(paras):
     """
-
+    Fit the 3D spline in one stamp (see Spline3D.stamps). Reads the data from the shared arrays and writes the best
+    fit model, the parameters and the bad pixels back into them.
     """
 
     from breads.instruments import Instrument   # runtime import here to avoid circular import problem
 
-    stamp_ids, x_nodes, y_nodes,wv_nodes, wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map, types_tuple = paras
+    stamp_ids, spline3d, threshold, reg_mean_map, reg_std_map, types_tuple = paras
     mp_float_type, mp_bp_type = types_tuple
 
 
@@ -315,44 +391,19 @@ def _task_fit_3dspline(paras):
 
     spline3d_paras_np = _arraytonumpy(shared_spline3d_paras, shared_spline3d_paras_shape, dtype=mp_float_type)
     spline3d_paras_err_np = _arraytonumpy(shared_spline3d_paras_err, shared_spline3d_paras_shape, dtype=mp_float_type)
+    spline3d_merr_paras_np = _arraytonumpy(shared_spline3d_merr_paras, shared_spline3d_paras_shape, dtype=mp_float_type)
 
-
-    # k0 : left index of stamp in x direction including extended margins
-    # k1 : left index of stamp in x direction (defines the first index that will be saved in the output)
-    # k2 : right index of stamp in x direction  (defines the last index that will be saved in the output)
-    # k3 : right index of stamp in x direction including extended margins
-    # Same for l#, but in the y direction
     k0,k1,k2,k3,l0,l1,l2,l3,m0,m1 = stamp_ids
-    # if not (k0 ==38 and k1 ==40 and k2 ==49 and k3 ==51 and l0 ==18 and l1 ==20 and l2 ==29 and l3 ==31):
-    #     return None
-    # else:
-    #     print("I am here")
-    # print("Current stamp indices",stamp_ids)
-    # print("Current stamp values ",x_nodes[k1],x_nodes[k2],y_nodes[l1],y_nodes[l2])
-    # print("Current extended stamp values ",x_nodes[k0],x_nodes[k3],y_nodes[l0],y_nodes[l3])
+    sw, sy, sx = spline3d.stamp_param_slices(stamp_ids)
 
-    _x_nodes = x_nodes[k0:k3+1]
-    _y_nodes = y_nodes[l0:l3+1]
-
-    extended_bool_map = (scaled_x_np>x_nodes[k0]) & (scaled_x_np<x_nodes[k3]) & \
-               (scaled_y_np>y_nodes[l0]) & (scaled_y_np<y_nodes[l3]) & \
-               (wvs_np>np.min(wv_nodes)) & (wvs_np<np.max(wv_nodes))
+    extended_bool_map = spline3d.stamp_extended_mask(stamp_ids, scaled_x_np, scaled_y_np, wvs_np)
     bool_map_from_bp = (np.isfinite(bp_np) * np.isfinite(data_np) * np.isfinite(noise_np) * (noise_np != 0)* \
                         np.isfinite(wvs_np)* np.isfinite(stellar_features_np) * (data_np/noise_np > -10))
     where_data_finite = np.where(extended_bool_map*bool_map_from_bp)
 
-    N_pix_threshold = 3#np.size(wv_nodes)* np.size(_y_nodes)* np.size(_x_nodes)
+    N_pix_threshold = 3
     if np.size(where_data_finite[0]) < N_pix_threshold:
-        # print("exit 1")
         return None
-
-    inner_bool_map = (scaled_x_np[where_data_finite]>x_nodes[np.max([k1-1,0])]) & (scaled_x_np[where_data_finite]<x_nodes[k2]) & \
-               (scaled_y_np[where_data_finite]>y_nodes[np.max([l1-1,0])]) & (scaled_y_np[where_data_finite]<y_nodes[l2]) & \
-               (wvs_np[where_data_finite]>np.min(wv_nodes)) & (wvs_np[where_data_finite]<np.max(wv_nodes))
-    inner_pixels = np.where(inner_bool_map)
-    # if np.size(inner_pixels[0]) < N_pix_threshold:
-    #     # print("exit 2")
-    #     return None
 
     _d = data_np[where_data_finite]
     _x = scaled_x_np[where_data_finite]
@@ -360,111 +411,225 @@ def _task_fit_3dspline(paras):
     _w = wvs_np[where_data_finite]
     _e = noise_np[where_data_finite]
 
+    inner_pixels = np.where(spline3d.stamp_inner_mask(stamp_ids, _x, _y, _w))
 
-    M_spline_x = get_spline_model(_x_nodes, _x, spline_degree=3)
-    # plt.plot(np.linspace(_x_nodes[0],_x_nodes[-1],400),
-    #          get_spline_model(_x_nodes, np.linspace(_x_nodes[0],_x_nodes[-1],400), spline_degree=3)[:,5])
-    # plt.show()
-    M_spline_y = get_spline_model(_y_nodes, _y, spline_degree=3)
-    M_spline_wvs = get_spline_model(wv_nodes, _w, spline_degree=3)
-
-    M_spline_x_tiled = np.tile(M_spline_x[:,None,None,:], (1,np.size(wv_nodes), np.size(_y_nodes), 1))
-    M_spline_y_tiled = np.tile(M_spline_y[:,None,:,None], (1,np.size(wv_nodes), 1, np.size(_x_nodes)))
-    M_spline_wvs_tiled = np.tile(M_spline_wvs[:,:,None,None], (1,1, np.size(_y_nodes), np.size(_x_nodes)))
-    M_3dspline = M_spline_x_tiled * M_spline_y_tiled * M_spline_wvs_tiled
-    M_3dspline = M_3dspline.reshape((M_3dspline.shape[0], -1)) # flatten the last 3 dimensions
-
+    M_3dspline = spline3d.design_matrix(stamp_ids, _x, _y, _w)
     M = M_3dspline * stellar_features_np[where_data_finite][:, None]
 
-    INvalidpara = np.where(~(np.nansum(M > np.nanmax(M) * 0.01, axis=0) != 0))
-    M[:, INvalidpara[0]] = 0 # Deactivate those columns in the model matrix
+    # Deactivate the modes that are barely sampled (see Spline3D.prune_modes)
+    M[:, spline3d.prune_modes(stamp_ids, M_3dspline, M)] = 0
 
     if reg_mean_map is not None and reg_std_map is not None:
-        d_reg, s_reg = np.ravel(reg_mean_map[:, l0:l3 + 1, k0:k3 + 1]), np.ravel(reg_std_map[:, l0:l3 + 1, k0:k3 + 1])#/1e6
+        d_reg, s_reg = np.ravel(reg_mean_map[sw, sy, sx]), np.ravel(reg_std_map[sw, sy, sx])
     else:
         d_reg, s_reg = None, None
-    # d_reg, s_reg = None, None
 
+    # The full covariance of the parameters is only needed for the model error of the B-spline bases (see below)
     _results = fitfm(nonlin_paras=[_d,M,_e,d_reg,s_reg],dataobj=Instrument(),fm_func=_tmp_fm,fm_paras={},
-                    marginalize_noise_scaling=False, scale_noise=False)
-    bestfit_log_prob, rchi2, linparas, linparas_err = _results
-    # plt.figure()
-    # print(linparas)
-    # # print(np.where(~np.isfinite(_d)))
-    # # print(np.where(~np.isfinite(_e)))
-    # # print(np.where(~np.isfinite(M)))
-    # # plt.scatter(_y,_d,s=1,label="data")
-    #
-    # plt.figure()
-    # plt.plot(_e)
-    # plt.plot(_d)
-    # # validpara = np.where((np.nansum(M > np.nanmax(M) * 0.001, axis=0)))
-    # # plt.scatter(_y,M[:,validpara[0][0]],s=1,label="data")
-    # plt.show()
+                    marginalize_noise_scaling=False, scale_noise=False, return_covariance=spline3d.is_bspline)
+    bestfit_log_prob, rchi2, linparas, linparas_err = _results[0:4]
     if np.all(np.isnan(linparas)):
-        # print("exit 3")
         return None
-    paras_canvas = np.reshape(linparas, (np.size(wv_nodes), np.size(_y_nodes), np.size(_x_nodes)))
-    paras_err_canvas = np.reshape(linparas_err, (np.size(wv_nodes), np.size(_y_nodes), np.size(_x_nodes)))
+    stamp_params_shape = spline3d.stamp_params_shape(stamp_ids)
+    paras_canvas = np.reshape(linparas, stamp_params_shape)
+    paras_err_canvas = np.reshape(linparas_err, stamp_params_shape)
     _linparas = copy(linparas)
     _linparas[np.where(~np.isfinite(_linparas))] = 0
     m = np.dot(M, _linparas)
 
-    # spline3d_paras_np[m0,m1,:,l1:l2+1,k1:k2+1] = paras_canvas[:,(l1-l0):(l2-l0+1),(k1-k0):(k2-k0+1)]
-    # spline3d_paras_err_np[m0,m1,:,l1:l2+1,k1:k2+1] = paras_err_canvas[:,(l1-l0):(l2-l0+1),(k1-k0):(k2-k0+1)]
-    spline3d_paras_np[m0,m1,:,l0:l3+1,k0:k3+1] = paras_canvas
-    spline3d_paras_err_np[m0,m1,:,l0:l3+1,k0:k3+1] = paras_err_canvas
-    # concatenate "where" arrays
+    spline3d_paras_np[m0,m1,sw,sy,sx] = paras_canvas
+    spline3d_paras_err_np[m0,m1,sw,sy,sx] = paras_err_canvas
+    if spline3d.is_bspline:
+        spline3d_merr_paras_np[m0,m1,sw,sy,sx] = np.reshape(_model_error_paras(spline3d, stamp_ids, _results[4]),
+                                                            stamp_params_shape)
+    else:
+        # Cardinal basis: the parameters are the values of the model at the nodes, so their errors are the errors of
+        # the model at the nodes, and the model error is interpolated between the nodes with the same spline.
+        spline3d_merr_paras_np[m0,m1,sw,sy,sx] = paras_err_canvas
     combined_idx = tuple(w[inner_pixels] for w in where_data_finite)
     bestfit_model_np[combined_idx] = m[inner_pixels]
 
+    # Bad pixel identification from the normalized residuals
     norm_res = (_d[inner_pixels] - m[inner_pixels]) / _e[inner_pixels]
     meddev = median_abs_deviation(norm_res)
     where_bad = np.where((np.abs(norm_res) / meddev > threshold) | np.isnan(norm_res))
 
-    # concatenate "where" arrays to get the indices of the bad pixels in the original data shape
     combined_inner_pixels = tuple(w[where_bad] for w in inner_pixels)
     combined_idx = tuple(w[combined_inner_pixels] for w in where_data_finite)
     bp_np[combined_idx] = np.nan
 
-    # plt.figure()
-    # plt.imshow(reg_mean_map[2, l0:l3 + 1, k0:k3 + 1],origin='lower')
-    # plt.figure()
-    # plt.imshow(reg_std_map[2, l0:l3 + 1, k0:k3 + 1],origin='lower')
-
-    # plt.figure()
-    # plt.scatter(_y,_d,s=1,label="data")
-    # # plt.show()
-    #
-    # plt.figure()
-    # plt.scatter(_y,_d,s=1,label="data")
-    # plt.scatter(_y,m,s=1,label="model")
-    # plt.scatter(_y,_d-m,s=1,label="res")
-    # plt.legend()
-    #
-    # plt.figure()
-    # plt.imshow(paras_canvas[2,:,:],origin='lower')
-    # plt.show()
-
-    return #paras_canvas[:,(l1-l0):(l2-l0+1),(k1-k0):(k2-k0+1)],paras_err_canvas[:,(l1-l0):(l2-l0+1),(k1-k0):(k2-k0+1)]
+    return
 
 
-def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
-                 stamp_size = (0.2,0.2),N_overlap_nodes = 2,
+def radial_prior_3dspline(spline3d, x, y, wavelengths, data, noise, bad_pixels, annulus_width=0.1, radial_nsigma=5,
+                          prior_nsigma=10, faint_fraction=0.1, end_plane_frac=0.1, min_points_annulus=10,
+                          wv_window_frac=2e-3):
+    """
+    Compute a Gaussian prior on the parameters of a 3D spline from the radial profile of the data around the star
+    (at each wavelength), to pass to fit_3dspline (reg_mean_map, reg_std_map).
+
+    The prior keeps the parameters that the data do not constrain (edge of the field of view, gaps, masked regions)
+    close to the azimuthal average of the data, without affecting the well sampled ones: it is wide (radial_nsigma
+    times the azimuthal scatter).
+
+    For each wavelength parameter (spline3d.param_positions):
+    - the good pixels within +/- wv_window_frac x wavelength of it are binned in concentric annuli of width
+      annulus_width around the star (the origin of the coordinates); for the first/last wavelength parameters, which
+      are usually just outside the wavelength range of the data, each annulus uses its pixels within 2 x wv_window_frac
+      x wavelength of its own shortest/longest wavelength with data (the nearest wavelength with data at that
+      separation: the wavelength coverage depends on the position in the field);
+    - in each annulus with at least min_points_annulus pixels: mean of the data, and radial_nsigma times their standard
+      deviation;
+    - the profile tapers to a read noise dominated prior, mean 0 and width prior_nsigma x noise floor, one annulus
+      beyond the last annulus with data (and this prior is used beyond). The width is never smaller than this fallback
+      width. The noise floor is the median noise of the faint_fraction faintest good pixels;
+    - the prior of each parameter is the profile linearly interpolated at the separation of its (x, y) position;
+    - first/last wavelength parameters: the width is increased (in quadrature) by end_plane_frac x |mean| to account
+      for the change of the flux between the data and the parameter wavelength.
+
+    The prior is in data units, i.e. for a 3D spline fitted without stellar spectrum (continuum normalization). For the
+    B-spline bases, the parameters are control points, not values; the profile is smooth and wide, so a prior on the
+    control points at their positions is a good approximation of the prior on the model.
+
+    Parameters
+    ----------
+    spline3d : breads.jwst_tools.spline3d.Spline3D
+        3D spline basis.
+    x, y : arrays
+        Coordinates of the pixels, in the coordinates of the nodes (IFU coordinates scaled to the reference wavelength,
+        star at the origin), same shape as data.
+    wavelengths, data, noise : arrays
+        Wavelength (micron), data and noise of the pixels.
+    bad_pixels : array
+        NaN for bad pixels, 1 for good ones.
+    annulus_width : float
+        Width of the annuli (arcsec), e.g. the spaxel size (0.1 for NIRSpec).
+    radial_nsigma : float
+        Width of the prior in units of the standard deviation of the data in the annulus.
+    prior_nsigma : float
+        Width of the fallback prior in units of the noise floor.
+    faint_fraction : float
+        Fraction of the faintest good pixels used to compute the noise floor.
+    end_plane_frac : float
+        First/last wavelength parameters: fraction of |mean| added in quadrature to the width.
+    min_points_annulus : int
+        Annuli with fewer pixels are ignored.
+    wv_window_frac : float
+        Half width of the wavelength window around each wavelength parameter, relative to its wavelength.
+
+    Returns
+    -------
+    reg_mean_map, reg_std_map : arrays (n_wv_params, n_y_params, n_x_params)
+        Mean and width of the prior on the parameters (spline3d.param_positions).
+    info : dict
+        "noise_floor", "fallback_std", "wv_centers" (nominal center of the wavelength window of each wavelength
+        parameter; for the first/last ones, the window actually depends on the annulus, see above) and
+        "profiles" (for each wavelength parameter, (radius, mean, width) of the profile, including the taper point).
+    """
+    x, y, wavelengths = np.asarray(x), np.asarray(y), np.asarray(wavelengths)
+    data, noise, bad_pixels = np.asarray(data), np.asarray(noise), np.asarray(bad_pixels)
+    good = (np.isfinite(bad_pixels) & np.isfinite(data) & np.isfinite(noise) & (noise > 0) & np.isfinite(x) &
+            np.isfinite(y) & np.isfinite(wavelengths))
+    if not np.any(good):
+        raise ValueError("No good pixels to compute the radial prior.")
+    data_good = data[good]
+    faint = data_good < np.nanpercentile(data_good, 100 * faint_fraction)
+    noise_floor = float(np.nanmedian(noise[good][faint]))
+    fallback_std = prior_nsigma * noise_floor
+
+    wv_pos, y_pos, x_pos = spline3d.param_positions
+    rr = np.sqrt(x_pos[None, :] ** 2 + y_pos[:, None] ** 2)  # (n_y_params, n_x_params)
+    wv_min, wv_max = np.nanmin(wavelengths[good]), np.nanmax(wavelengths[good])
+
+    reg_mean_map = np.zeros((np.size(wv_pos), np.size(y_pos), np.size(x_pos)))
+    reg_std_map = np.full((np.size(wv_pos), np.size(y_pos), np.size(x_pos)), fallback_std)
+    profiles, wv_centers = [], []
+    # annulus of each good pixel, and shortest / longest wavelength of the good pixels of each annulus (the wavelength
+    # coverage depends on the position in the field, e.g. the data of the core can start later than elsewhere)
+    r_good = np.sqrt(x[good] ** 2 + y[good] ** 2)
+    annulus_good = np.floor(r_good / annulus_width).astype(int)
+    wvs_good = wavelengths[good]
+    n_annuli = np.max(annulus_good) + 1
+    wv_min_annulus = np.full(n_annuli, np.inf)
+    wv_max_annulus = np.full(n_annuli, -np.inf)
+    np.minimum.at(wv_min_annulus, annulus_good, wvs_good)
+    np.maximum.at(wv_max_annulus, annulus_good, wvs_good)
+    for iw, wv in enumerate(wv_pos):
+        half_window = wv_window_frac * wv
+        wv_center = np.clip(wv, wv_min + half_window, wv_max - half_window)
+        wv_centers.append(wv_center)
+        if wv < wv_min + half_window:
+            # before the data: in each annulus, the window starts at the shortest wavelength with data of that annulus
+            in_window = wvs_good < wv_min_annulus[annulus_good] + 2 * half_window
+        elif wv > wv_max - half_window:
+            # after the data: in each annulus, the window ends at the longest wavelength with data of that annulus
+            in_window = wvs_good > wv_max_annulus[annulus_good] - 2 * half_window
+        else:
+            in_window = np.abs(wvs_good - wv) < half_window
+        r = r_good[in_window]
+        d = data_good[in_window]
+        annulus_id = annulus_good[in_window]
+        counts = np.bincount(annulus_id)
+        sums = np.bincount(annulus_id, weights=d)
+        sums2 = np.bincount(annulus_id, weights=d ** 2)
+        populated = np.where(counts >= min_points_annulus)[0]
+        if np.size(populated) == 0:
+            profiles.append((np.array([0.0]), np.array([0.0]), np.array([fallback_std])))
+            continue
+        mean_c = sums[populated] / counts[populated]
+        std_c = np.sqrt(np.clip(sums2[populated] / counts[populated] - mean_c ** 2, 0, None))
+        r_c = (populated + 0.5) * annulus_width
+        # taper to the fallback one annulus beyond the last annulus with data
+        r_c = np.append(r_c, r_c[-1] + annulus_width)
+        mean_c = np.append(mean_c, 0.0)
+        std_c = np.maximum(np.append(radial_nsigma * std_c, fallback_std), fallback_std)
+        profiles.append((r_c, mean_c, std_c))
+
+        reg_mean_map[iw] = np.interp(rr, r_c, mean_c, right=0.0)
+        reg_std_map[iw] = np.interp(rr, r_c, std_c, right=fallback_std)
+        if iw == 0 or iw == np.size(wv_pos) - 1:
+            reg_std_map[iw] = np.sqrt(reg_std_map[iw] ** 2 + (end_plane_frac * reg_mean_map[iw]) ** 2)
+
+    info = {"noise_floor": noise_floor, "fallback_std": fallback_std, "wv_centers": np.array(wv_centers),
+            "profiles": profiles}
+    return reg_mean_map, reg_std_map, info
+
+
+def fit_3dspline(dataobj, spline3d,
                  stellar_features=None,
                  threshold=10, reg_mean_map=None, reg_std_map=None,
                  max_cores = 1):
     """
-    threshold is disabled and not used currently.
+    Fit a 3D spline (x, y, wavelength) to the point cloud of an IFU data object, stamp by stamp.
+
+    Parameters
+    ----------
+    dataobj : JWST_IFUs
+        Data object (data, noise, wavelengths, bad_pixels, IFU coordinates and breads_header["WV_REF"]).
+    spline3d : breads.jwst_tools.spline3d.Spline3D
+        3D spline basis: nodes, basis (cardinal or bspline), stamp size and number of overlapping nodes.
+    stellar_features : 2d array or None
+        Multiplicative factor applied to the spline model (e.g. the stellar spectrum). Default is ones.
+    threshold : float
+        Bad pixel threshold on the normalized residuals (in units of their median absolute deviation).
+    reg_mean_map, reg_std_map : arrays (n_wv_params, n_y_params, n_x_params) or None
+        Optional Gaussian priors on the spline parameters.
+    max_cores : int
+        Number of processes.
+
+    Returns
+    -------
+    bestfit_model, noise, bad_pixels, residuals, spline3d_paras, spline3d_paras_err, spline3d_merr_paras
+        spline3d_paras, spline3d_paras_err and spline3d_merr_paras have the shape spline3d.params_shape.
+        spline3d_paras_err: marginal 1 sigma errors of the parameters (sqrt of the diagonal of their covariance).
+        spline3d_merr_paras: spline parameters of the 1 sigma error of the model (see _model_error_paras); evaluated
+        with the same basis as the model, it gives the model error at any sample (evaluate_3dspline). For the
+        cardinal basis, it is equal to spline3d_paras_err.
     """
 
     wv_ref = dataobj.breads_header["WV_REF"]
 
-    ss_x, ss_y = stamp_size
-
     ny, nx = dataobj.data.shape
-    N_wv_nodes, N_y_nodes, N_x_nodes = len(wv_nodes), len(y_nodes), len(x_nodes)
-    # wv_nodes_grid,y_nodes_grid,x_nodes_grid = np.meshgrid(wv_nodes,y_nodes,x_nodes,indexing='ij' )
 
     _ifux, _ifuy = dataobj.get_ifu_coords()
 
@@ -508,70 +673,37 @@ def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
     bestfit_model_np = _arraytonumpy(bestfit_model_mp, data_shape, dtype=mp_float_type)
     bestfit_model_np[:] = np.full(data_shape,np.nan, dtype=np.float32)
 
-    spline3d_paras_mp = RawArray(mp_float_type, 2*2* N_wv_nodes * N_y_nodes * N_x_nodes)
-    spline3d_paras_shape = (2,2,N_wv_nodes, N_y_nodes, N_x_nodes )
+    spline3d_paras_shape = spline3d.params_shape
+    spline3d_paras_mp = RawArray(mp_float_type, int(np.prod(spline3d_paras_shape)))
     spline3d_paras_np = _arraytonumpy(spline3d_paras_mp, spline3d_paras_shape, dtype=mp_float_type)
     spline3d_paras_np[:] = np.full(spline3d_paras_shape,np.nan, dtype=np.float32)
 
-    spline3d_paras_err_mp = RawArray(mp_float_type, 2*2* N_wv_nodes * N_y_nodes * N_x_nodes)
+    spline3d_paras_err_mp = RawArray(mp_float_type, int(np.prod(spline3d_paras_shape)))
     spline3d_paras_err_np = _arraytonumpy(spline3d_paras_err_mp, spline3d_paras_shape, dtype=mp_float_type)
     spline3d_paras_err_np[:] = np.full(spline3d_paras_shape,np.nan, dtype=np.float32)
 
-    ###################
-    # create the small stamps for calculating the 3D spline in.
-    # This is because it would not be tractable to fit for the whole thing at once.import numpy as np
+    spline3d_merr_paras_mp = RawArray(mp_float_type, int(np.prod(spline3d_paras_shape)))
+    spline3d_merr_paras_np = _arraytonumpy(spline3d_merr_paras_mp, spline3d_paras_shape, dtype=mp_float_type)
+    spline3d_merr_paras_np[:] = np.full(spline3d_paras_shape,np.nan, dtype=np.float32)
 
-    x_chunk_starts_ids = np.searchsorted(x_nodes, np.arange(x_nodes[0], x_nodes[-1], ss_x))
-    x_chunk_ends_ids   = np.append(x_chunk_starts_ids[1:] - 1, len(x_nodes) - 1)
-    y_chunk_starts_ids = np.searchsorted(y_nodes, np.arange(y_nodes[0], y_nodes[-1], ss_y))
-    y_chunk_ends_ids   = np.append(y_chunk_starts_ids[1:] - 1, len(y_nodes) - 1)
-
-    x_bigchunk_starts_ids = np.clip(x_chunk_starts_ids-N_overlap_nodes, 0, N_x_nodes - 1)
-    x_bigchunk_ends_ids   = np.clip(x_chunk_ends_ids+N_overlap_nodes, 0, N_x_nodes - 1)
-    y_bigchunk_starts_ids = np.clip(y_chunk_starts_ids-N_overlap_nodes, 0, N_y_nodes - 1)
-    y_bigchunk_ends_ids   = np.clip(y_chunk_ends_ids+N_overlap_nodes, 0, N_y_nodes - 1)
-
-    # Define chunks
-    stamp_list = []
-    for k in range(len(x_chunk_starts_ids)):
-        for l in range(len(y_chunk_starts_ids)):
-            stamp_tuple = (x_bigchunk_starts_ids[k],x_chunk_starts_ids[k],x_chunk_ends_ids[k],x_bigchunk_ends_ids[k],
-                           y_bigchunk_starts_ids[l],y_chunk_starts_ids[l],y_chunk_ends_ids[l],y_bigchunk_ends_ids[l],
-                           l%2, k%2)
-            stamp_list.append(stamp_tuple)
-    N_stamps = len(stamp_list)
-
-    if 0:
-        stamp_list = stamp_list[(840-41*0):(840-41*0+1)]
-        # for stamp_id,stamp_tuple in enumerate(stamp_list):
-        #     k0,k1,k2,k3,l0,l1,l2,l3,m0,m1 = stamp_tuple
-        #     print("stamp_id",stamp_id,stamp_id % len(x_chunk_starts_ids),(stamp_id-(stamp_id % len(x_chunk_starts_ids)))//len(x_chunk_starts_ids))
-        #     print(k0,k1,k2,k3,l0,l1,l2,l3,m0,m1)
-        #     print("x", x_nodes[k0],x_nodes[k1],x_nodes[k2],x_nodes[k3])
-        #     print("y", y_nodes[l0],y_nodes[l1],y_nodes[l2],y_nodes[l3])
-        # N_stamps = len(stamp_list)
-        # print(N_stamps)
-        # print(np.sqrt(N_stamps))
-        # exit()
+    # Small stamps fitted independently, because fitting the whole field at once would not be tractable.
+    stamp_list = spline3d.stamps()
 
     _init_args = (
         data_mp, data_shape,
         noise_mp, wvs_mp, scaled_x_mp, scaled_y_mp, bp_mp,stellar_features_mp,bestfit_model_mp,
-        spline3d_paras_mp, spline3d_paras_shape,spline3d_paras_err_mp
+        spline3d_paras_mp, spline3d_paras_shape,spline3d_paras_err_mp, spline3d_merr_paras_mp
     )
 
-    if 0 or max_cores <= 1:
+    # The data, noise, stellar features etc. are in shared memory; only small objects are passed to each task.
+    args_list = [(stamp_ids, spline3d, threshold, reg_mean_map, reg_std_map, types_tuple) for stamp_ids in stamp_list]
+
+    if max_cores <= 1:
         _tpool_init_3dspline(*_init_args)
 
         print("\tPerforming serial fit_3dspline...")
-        for id,stamp_ids in enumerate(stamp_list):
-            print(id, stamp_ids)
-            paras = stamp_ids, x_nodes, y_nodes,wv_nodes,\
-                    wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map,types_tuple
-
-            _task_fit_3dspline(paras)
-        # print("coucou here")
-        # exit()
+        for args_tuple in args_list:
+            _task_fit_3dspline(args_tuple)
     else:
 
         ctx = mp.get_context("spawn")  # avoids unsafe fork after OpenMP init
@@ -581,13 +713,6 @@ def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
             initargs=_init_args,
             maxtasksperchild=50
         )
-
-        args_list = []
-        for id,stamp_ids in enumerate(stamp_list):
-
-            paras = stamp_ids, x_nodes, y_nodes,wv_nodes,\
-                    wv_ref, stellar_features, threshold, reg_mean_map, reg_std_map,types_tuple
-            args_list.append(paras)
 
         try:
             tasks = [
@@ -602,17 +727,17 @@ def fit_3dspline(dataobj,x_nodes,y_nodes,wv_nodes,
             tpool.join()
 
     residuals = dataobj.data - bestfit_model_np
-    return bestfit_model_np, noise_np, bp_np, residuals, spline3d_paras_np,spline3d_paras_err_np
+    return bestfit_model_np, noise_np, bp_np, residuals, spline3d_paras_np,spline3d_paras_err_np,spline3d_merr_paras_np
 
 
 def _task_evaluate_3dspline(paras):
     """
-
+    Evaluate the 3D spline in one stamp (see Spline3D.stamps). Reads the coordinates and parameters from the shared
+    arrays and writes the model and its error back into them.
     """
-    stamp_ids, x_nodes, y_nodes,wv_nodes, wv_ref, stellar_features, types_tuple = paras
+    stamp_ids, spline3d, types_tuple = paras
     mp_float_type, mp_bp_type = types_tuple
 
-    # data_np = _arraytonumpy(shared_data, shared_data_shape, dtype=mp_float_type)
     noise_np = _arraytonumpy(shared_noise, shared_data_shape, dtype=mp_float_type)
     wvs_np = _arraytonumpy(shared_wvs, shared_data_shape, dtype=mp_float_type)
     scaled_x_np = _arraytonumpy(shared_scaled_x, shared_data_shape, dtype=mp_float_type)
@@ -622,27 +747,12 @@ def _task_evaluate_3dspline(paras):
     bestfit_model_np = _arraytonumpy(shared_bestfit_model, shared_data_shape, dtype=mp_float_type)
 
     spline3d_paras_np = _arraytonumpy(shared_spline3d_paras, shared_spline3d_paras_shape, dtype=mp_float_type)
-    spline3d_paras_err_np = _arraytonumpy(shared_spline3d_paras_err, shared_spline3d_paras_shape, dtype=mp_float_type)
+    spline3d_merr_paras_np = _arraytonumpy(shared_spline3d_merr_paras, shared_spline3d_paras_shape, dtype=mp_float_type)
 
-    # _mins,_maxs = np.nanmin(scaled_x_np,axis=(1,2)),np.nanmax(scaled_x_np,axis=(1,2))
-
-    # k0 : left index of stamp in x direction including extended margins
-    # k1 : left index of stamp in x direction (defines the first index that will be saved in the output)
-    # k2 : right index of stamp in x direction  (defines the last index that will be saved in the output)
-    # k3 : right index of stamp in x direction including extended margins
-    # Same for l#, but in the y direction
     k0,k1,k2,k3,l0,l1,l2,l3,m0,m1 = stamp_ids
-    # print("Current stamp indices",stamp_ids)
-    # print("Current stamp values ",x_nodes[k1],x_nodes[k2],y_nodes[l1],y_nodes[l2])
-    # print("Current extended stamp values ",x_nodes[k0],x_nodes[k3],y_nodes[l0],y_nodes[l3])
+    sw, sy, sx = spline3d.stamp_param_slices(stamp_ids)
 
-    # print(stamp_ids)
-    _x_nodes = x_nodes[k0:k3+1]
-    _y_nodes = y_nodes[l0:l3+1]
-
-    extended_bool_map = (scaled_x_np>x_nodes[k0]) & (scaled_x_np<x_nodes[k3]) & \
-               (scaled_y_np>y_nodes[l0]) & (scaled_y_np<y_nodes[l3]) & \
-               (wvs_np>np.min(wv_nodes)) & (wvs_np<np.max(wv_nodes))
+    extended_bool_map = spline3d.stamp_extended_mask(stamp_ids, scaled_x_np, scaled_y_np, wvs_np)
     bool_map_from_bp = (np.isfinite(bp_np) * np.isfinite(stellar_features_np))
     where_data_finite = np.where(extended_bool_map*bool_map_from_bp)
 
@@ -650,144 +760,84 @@ def _task_evaluate_3dspline(paras):
     if np.size(where_data_finite[0]) < N_pix_threshold:
         return
 
-    inner_bool_map = (scaled_x_np[where_data_finite]>x_nodes[np.max([k1-1,0])]) & (scaled_x_np[where_data_finite]<x_nodes[k2]) & \
-               (scaled_y_np[where_data_finite]>y_nodes[np.max([l1-1,0])]) & (scaled_y_np[where_data_finite]<y_nodes[l2]) & \
-               (wvs_np[where_data_finite]>np.min(wv_nodes)) & (wvs_np[where_data_finite]<np.max(wv_nodes))
-    inner_pixels = np.where(inner_bool_map)
-    # if np.size(inner_pixels[0]) < N_pix_threshold:
-    #     return
-
-    # _d = data_np[where_data_finite]
     _x = scaled_x_np[where_data_finite]
     _y = scaled_y_np[where_data_finite]
     _w = wvs_np[where_data_finite]
-    # _e = noise_np[where_data_finite]
 
+    inner_pixels = np.where(spline3d.stamp_inner_mask(stamp_ids, _x, _y, _w))
 
-    M_spline_x = get_spline_model(_x_nodes, _x, spline_degree=3)
-    M_spline_y = get_spline_model(_y_nodes, _y, spline_degree=3)
-    M_spline_wvs = get_spline_model(wv_nodes, _w, spline_degree=3)
-
-    M_spline_x_tiled = np.tile(M_spline_x[:,None,None,:], (1,np.size(wv_nodes), np.size(_y_nodes), 1))
-    M_spline_y_tiled = np.tile(M_spline_y[:,None,:,None], (1,np.size(wv_nodes), 1, np.size(_x_nodes)))
-    M_spline_wvs_tiled = np.tile(M_spline_wvs[:,:,None,None], (1,1, np.size(_y_nodes), np.size(_x_nodes)))
-    M_3dspline = M_spline_x_tiled * M_spline_y_tiled * M_spline_wvs_tiled
-    M_3dspline = M_3dspline.reshape((M_3dspline.shape[0], -1)) # flatten the last 3 dimensions
-
+    M_3dspline = spline3d.design_matrix(stamp_ids, _x, _y, _w)
     M = M_3dspline * stellar_features_np[where_data_finite][:, None]
-    m = np.dot(M, np.ravel(spline3d_paras_np[m0,m1,:,l0:l3+1,k0:k3+1]))
-    merr = np.dot(M, np.ravel(spline3d_paras_err_np[m0,m1,:,l0:l3+1,k0:k3+1]))
+    m = np.dot(M, np.ravel(spline3d_paras_np[m0,m1,sw,sy,sx]))
+    # Model error: same spline evaluated on the parameters of the model error (see _model_error_paras; for the cardinal
+    # basis, the errors of the parameters, i.e. the model errors at the nodes, interpolated between the nodes)
+    merr = np.dot(M, np.ravel(spline3d_merr_paras_np[m0,m1,sw,sy,sx]))
+    if spline3d.is_bspline:
+        merr = np.clip(merr, 0, None)
 
     combined_idx = tuple(w[inner_pixels] for w in where_data_finite)
     bestfit_model_np[combined_idx] = m[inner_pixels]
     noise_np[combined_idx] = merr[inner_pixels]
-
-    # print(stamp_ids)
-    # print("Current stamp indices",stamp_ids)
-    # print("Current stamp values ",x_nodes[k1],x_nodes[k2],y_nodes[l1],y_nodes[l2])
-    # print("Current extended stamp values ",x_nodes[k0],x_nodes[k3],y_nodes[l0],y_nodes[l3])
-    # # plt.figure()
-    # # _xxn,_yyn = np.meshgrid(_x_nodes, _y_nodes)
-    # # print(_xxn.shape,spline3d_paras_np[m0,m1,2,l0:l3+1,k0:k3+1].shape)
-    # # plt.subplot(1,2,1)
-    # # plt.scatter(_xxn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
-    # # plt.subplot(1,2,2)
-    # # plt.scatter(_yyn,spline3d_paras_np[2,l0:l3+1,k0:k3+1],s=1)
-    # # plt.figure()
-    # # plt.imshow(spline3d_paras_np[0,0,2,l0:l3+1,k0:k3+1],origin="lower")
-    #
-    # plt.figure()
-    # plt.imshow(bestfit_model_np,origin="lower")
-    # plt.show()
-
-    # plt.figure()
-    # dx = x_nodes[1] - x_nodes[0]
-    # dy = y_nodes[1] - y_nodes[0]
-    # extent = [x_nodes[0] - dx / 2.0, x_nodes[-1] + dx / 2.0, y_nodes[0] - dy / 2.0, y_nodes[-1] + dy / 2.0]
-    # # plt.imshow(np.log10(np.abs(spline3d_paras_np[m0,m1,2,:,:])),origin="lower",extent=extent)
-    # plt.imshow(np.log10(np.abs(np.nanmean((spline3d_paras_np[:,:,2,:,:]),axis=(0,1)))),origin="lower",extent=extent)
-    # plt.clim([0,10])
-    #
-    # plt.figure()
-    # dx = x_nodes[1] - x_nodes[0]
-    # dy = y_nodes[1] - y_nodes[0]
-    # extent = [x_nodes[0] - dx / 2.0, x_nodes[-1] + dx / 2.0, y_nodes[0] - dy / 2.0, y_nodes[-1] + dy / 2.0]
-    # plt.imshow(np.log10(np.abs(spline3d_paras_np[m0,m1,2,:,:])),origin="lower",extent=extent)
-    # # plt.imshow(np.log10(np.abs(np.nanmean((spline3d_paras_np[:,:,2,:,:]),axis=(0,1)))),origin="lower",extent=extent)
-    # plt.clim([0,10])
-    # plt.show()
-    #
-    # plt.plot(_mins)
-    # plt.figure()
-    # plt.plot(_maxs)
-    # print(_x_nodes)
-    # print(_y_nodes)
-    #
-    # # plt.figure()
-    # # plt.scatter(_x/4.0*_w,_y/4.0*_w,s=1)
-    # #
-    # # plt.figure()
-    # # plt.scatter(_x/4.0*_w,m,s=1)
-    # plt.show()
-    # exit()
     return
 
-def evaluate_3dspline_grid(x_vec,y_vec,wv_sampling,spline3d_filename,
-                           N_overlap_nodes = 2,max_cores = 1,
-                      stamp_size = None):
+
+def evaluate_3dspline_grid(x_vec,y_vec,wv_sampling,spline3d_filename,max_cores = 1):
+    """Evaluate a 3D spline file (see evaluate_3dspline) on a regular (wv, y, x) grid. Returns (model, error) cubes."""
     wv_grid,y_grid,x_grid = np.meshgrid(wv_sampling,y_vec,x_vec,indexing='ij' )
-    stellar_features = None
-    return evaluate_3dspline(x_grid,y_grid,wv_grid,
-                          spline3d_filename,
-                     stellar_features=stellar_features,N_overlap_nodes = N_overlap_nodes,
-                     max_cores = max_cores,stamp_size=stamp_size)
+    return evaluate_3dspline(x_grid,y_grid,wv_grid,spline3d_filename,stellar_features=None,max_cores=max_cores)
 
-def evaluate_3dspline_pointcloud(dataobj, spline3d_filename,stellar_features=None,
-                           N_overlap_nodes = 2, max_cores=1,
-                      stamp_size = None):
+
+def evaluate_3dspline_pointcloud(dataobj, spline3d_filename,stellar_features=None, max_cores=1):
+    """Evaluate a 3D spline file (see evaluate_3dspline) at the IFU coordinates and wavelengths of a data object."""
     ifux,ifuy = dataobj.get_ifu_coords()
-    # if hasattr(dataobj,'star_func'):
-    #     stellar_features = dataobj.star_func(dataobj.wavelengths)
-    return evaluate_3dspline(ifux,ifuy, dataobj.wavelengths,
-                             spline3d_filename,
-                             stellar_features=stellar_features, N_overlap_nodes=N_overlap_nodes,
-                             max_cores=max_cores,stamp_size=stamp_size)
+    return evaluate_3dspline(ifux,ifuy, dataobj.wavelengths, spline3d_filename,
+                             stellar_features=stellar_features, max_cores=max_cores)
 
-def evaluate_3dspline(ifux,ifuy,wvs,
-                      spline3d_filename,
-                 stellar_features=None,N_overlap_nodes = 2,
-                 max_cores = 1,
-                      stamp_size = None):
+
+def evaluate_3dspline(ifux,ifuy,wvs,spline3d_filename,stellar_features=None,max_cores = 1):
     """
+    Evaluate a 3D spline saved in a FITS file (3D spline products of JWST_IFUs, or BreadsPSF files) at the samples
+    (ifux, ifuy, wvs). The basis, nodes, stamp layout and reference wavelength are read from the file.
 
+    Parameters
+    ----------
+    ifux, ifuy, wvs : arrays (same shape)
+        Coordinates (arcsec, not scaled) and wavelengths (micron) of the samples.
+    spline3d_filename : str
+        File with the SPLINE_PARAS0/SPLINE_PARAS0_ERR, wv_nodes/x_nodes/y_nodes HDUs and the BREADS header. The model
+        error is computed from SPLINE_PARAS0_MERR if present (see fit_3dspline), otherwise from SPLINE_PARAS0_ERR
+        (files made before SPLINE_PARAS0_MERR existed; only correct for the cardinal basis).
+    stellar_features : array or None
+        Multiplicative factor applied to the model. Default is ones.
+    max_cores : int
+        Number of processes.
+
+    Returns
+    -------
+    model, model_err : arrays with the shape of ifux. NaN outside of the spline nodes.
+        Parameters that were not fitted (NaN) are set to 0.
     """
+    from breads.jwst_tools.spline3d import Spline3D
 
-    hdulist = fits.open(spline3d_filename)
-    wv_nodes = hdulist["wv_nodes"].data
-    x_nodes = hdulist["x_nodes"].data
-    y_nodes = hdulist["y_nodes"].data
-    spline3d_paras = hdulist["SPLINE_PARAS0"].data
-    spline3d_paras_err = hdulist["SPLINE_PARAS0_ERR"].data
-    if stamp_size is None:
-        ss_x,ss_y = (hdulist['BREADS'].header['3DSPLSSX'], hdulist['BREADS'].header['3DSPLSSY'])
-    else:
-        ss_x,ss_y = stamp_size
-    wv_ref = hdulist['BREADS'].header['WV_REF']
-    hdulist.close()
-
-    N_wv_nodes, N_y_nodes, N_x_nodes = len(wv_nodes), len(y_nodes), len(x_nodes)
-    # wv_nodes_grid,y_nodes_grid,x_nodes_grid = np.meshgrid(wv_nodes,y_nodes,x_nodes,indexing='ij' )
+    with fits.open(spline3d_filename) as hdulist:
+        spline3d = Spline3D.from_hdulist(hdulist)
+        spline3d_paras = hdulist["SPLINE_PARAS0"].data
+        if "SPLINE_PARAS0_MERR" in hdulist:
+            spline3d_merr_paras = hdulist["SPLINE_PARAS0_MERR"].data
+        else:
+            spline3d_merr_paras = hdulist["SPLINE_PARAS0_ERR"].data
+            if spline3d.is_bspline:
+                warnings.warn(f"No SPLINE_PARAS0_MERR in {spline3d_filename}: the model error is computed from "
+                              f"SPLINE_PARAS0_ERR, which overestimates it for the {spline3d.basis} basis.")
+        wv_ref = hdulist['BREADS'].header['WV_REF']
 
     mp_float_type = ctypes.c_float
     mp_bp_type = ctypes.c_uint8
     types_tuple = (mp_float_type, mp_bp_type)
 
     data_size = np.size(ifux)
-    # data_mp = RawArray(mp_float_type, data_size)
     data_mp = None
     data_shape = ifux.shape
-    # data_np = _arraytonumpy(data_mp, data_shape, dtype=mp_float_type)
-    # data_np[:] = np.full(data_shape,np.nan, dtype=np.float32)
 
     noise_mp = RawArray(mp_float_type, data_size)
     noise_np = _arraytonumpy(noise_mp, data_shape, dtype=mp_float_type)
@@ -820,73 +870,36 @@ def evaluate_3dspline(ifux,ifuy,wvs,
     bestfit_model_np = _arraytonumpy(bestfit_model_mp, data_shape, dtype=mp_float_type)
     bestfit_model_np[:] = np.full(data_shape,np.nan, dtype=np.float32)
 
-    spline3d_paras_mp = RawArray(mp_float_type, 2*2* N_wv_nodes * N_y_nodes * N_x_nodes)
-    spline3d_paras_shape = (2,2,N_wv_nodes, N_y_nodes, N_x_nodes )
+    spline3d_paras_shape = spline3d.params_shape
+    if tuple(np.shape(spline3d_paras)) != tuple(spline3d_paras_shape):
+        raise ValueError(f"SPLINE_PARAS0 in {spline3d_filename} has shape {np.shape(spline3d_paras)}, "
+                         f"but {spline3d} expects {spline3d_paras_shape}.")
+    spline3d_paras_mp = RawArray(mp_float_type, int(np.prod(spline3d_paras_shape)))
     spline3d_paras_np = _arraytonumpy(spline3d_paras_mp, spline3d_paras_shape, dtype=mp_float_type)
     spline3d_paras_np[:] = copy(spline3d_paras)
     spline3d_paras_np[np.where(~np.isfinite(spline3d_paras_np))] = 0
 
-    spline3d_paras_err_mp = RawArray(mp_float_type, 2*2* N_wv_nodes * N_y_nodes * N_x_nodes)
-    spline3d_paras_err_np = _arraytonumpy(spline3d_paras_err_mp, spline3d_paras_shape, dtype=mp_float_type)
-    spline3d_paras_err_np[:] = copy(spline3d_paras_err)
-    spline3d_paras_err_np[np.where(~np.isfinite(spline3d_paras_err_np))] = 0
+    spline3d_merr_paras_mp = RawArray(mp_float_type, int(np.prod(spline3d_paras_shape)))
+    spline3d_merr_paras_np = _arraytonumpy(spline3d_merr_paras_mp, spline3d_paras_shape, dtype=mp_float_type)
+    spline3d_merr_paras_np[:] = copy(spline3d_merr_paras)
+    spline3d_merr_paras_np[np.where(~np.isfinite(spline3d_merr_paras_np))] = 0
 
-    ###################
-    # create the small stamps for calculating the 3D spline in.
-    # This is because it would not be tractable to fit for the whole thing at once.import numpy as np
-
-    x_chunk_starts_ids = np.searchsorted(x_nodes, np.arange(x_nodes[0], x_nodes[-1], ss_x))
-    x_chunk_ends_ids   = np.append(x_chunk_starts_ids[1:] - 1, len(x_nodes) - 1)
-    y_chunk_starts_ids = np.searchsorted(y_nodes, np.arange(y_nodes[0], y_nodes[-1], ss_y))
-    y_chunk_ends_ids   = np.append(y_chunk_starts_ids[1:] - 1, len(y_nodes) - 1)
-
-    x_bigchunk_starts_ids = np.clip(x_chunk_starts_ids-N_overlap_nodes, 0, N_x_nodes - 1)
-    x_bigchunk_ends_ids   = np.clip(x_chunk_ends_ids+N_overlap_nodes, 0, N_x_nodes - 1)
-    y_bigchunk_starts_ids = np.clip(y_chunk_starts_ids-N_overlap_nodes, 0, N_y_nodes - 1)
-    y_bigchunk_ends_ids   = np.clip(y_chunk_ends_ids+N_overlap_nodes, 0, N_y_nodes - 1)
-
-    # Define chunks
-    stamp_list = []
-    for k in range(len(x_chunk_starts_ids)):
-        for l in range(len(y_chunk_starts_ids)):
-            stamp_tuple = (x_bigchunk_starts_ids[k],x_chunk_starts_ids[k],x_chunk_ends_ids[k],x_bigchunk_ends_ids[k],
-                           y_bigchunk_starts_ids[l],y_chunk_starts_ids[l],y_chunk_ends_ids[l],y_bigchunk_ends_ids[l],
-                           l%2, k%2)
-            stamp_list.append(stamp_tuple)
-    N_stamps = len(stamp_list)
-
-    if 0:
-        print(spline3d_filename)
-        stamp_list = stamp_list[74:75]
-        # # stamp_list = stamp_list[243:245]
-        # # stamp_list = stamp_list[(840-41*0)::41]
-        # for stamp_id,stamp_tuple in enumerate(stamp_list):
-        #     k0,k1,k2,k3,l0,l1,l2,l3,m0,m1 = stamp_tuple
-        #     print("stamp_id",stamp_id,stamp_tuple)
-        #     print("x", x_nodes[k0],x_nodes[k1],x_nodes[k2],x_nodes[k3])
-        #     print("y", y_nodes[l0],y_nodes[l1],y_nodes[l2],y_nodes[l3])
-        # N_stamps = len(stamp_list)
-        # print(N_overlap_nodes)
-        # exit()
+    # Same stamps as in the fit
+    stamp_list = spline3d.stamps()
 
     _init_args = (
         data_mp, data_shape,
         noise_mp, wvs_mp, scaled_x_mp, scaled_y_mp, bp_mp,stellar_features_mp,bestfit_model_mp,
-        spline3d_paras_mp, spline3d_paras_shape,spline3d_paras_err_mp
+        spline3d_paras_mp, spline3d_paras_shape, None, spline3d_merr_paras_mp
     )
+    args_list = [(stamp_ids, spline3d, types_tuple) for stamp_ids in stamp_list]
 
-    if 0 or max_cores <= 1:
+    if max_cores <= 1:
         _tpool_init_3dspline(*_init_args)
 
         print("\tPerforming serial evaluate_3dspline...")
-        for id,stamp_ids in enumerate(stamp_list):
-            print(id,len(stamp_list),stamp_ids)
-            paras = stamp_ids, x_nodes, y_nodes,wv_nodes,\
-                    wv_ref, stellar_features, types_tuple
-
-            _task_evaluate_3dspline(paras)
-        #     print("coucou")
-        # exit()
+        for args_tuple in args_list:
+            _task_evaluate_3dspline(args_tuple)
     else:
 
         ctx = mp.get_context("spawn")  # avoids unsafe fork after OpenMP init
@@ -896,13 +909,6 @@ def evaluate_3dspline(ifux,ifuy,wvs,
             initargs=_init_args,
             maxtasksperchild=50
         )
-
-        args_list = []
-        for id,stamp_ids in enumerate(stamp_list):
-
-            paras = stamp_ids, x_nodes, y_nodes,wv_nodes,\
-                    wv_ref, stellar_features, types_tuple
-            args_list.append(paras)
 
         try:
             tasks = [
@@ -918,6 +924,64 @@ def evaluate_3dspline(ifux,ifuy,wvs,
 
     return bestfit_model_np, noise_np
 
+
+def save_3dspline_model_gif(spline3d_filename, gif_filename=None, N_frames=10, max_cores=1):
+    """
+    Save a gif of the 3D spline model saved in spline3d_filename (see evaluate_3dspline), evaluated on a regular grid
+    of the scaled coordinates (x * WV_REF / wavelength, the coordinates of the spline nodes) with one frame per
+    wavelength, and shown as log10(|model|).
+
+    The model is plotted rather than the spline parameters because the parameters of the B-spline basis are not
+    values of the model (control points), and neighbouring stamps store their parameters in separate copies.
+
+    Parameters
+    ----------
+    spline3d_filename : str
+        File with the 3D spline (as read by evaluate_3dspline).
+    gif_filename : str or None
+        Output gif. Default: spline3d_filename with a .gif extension.
+    N_frames : int
+        Number of wavelengths, evenly spaced strictly inside the range of the wavelength nodes.
+    max_cores : int
+        Number of processes for evaluate_3dspline.
+    """
+    from breads.jwst_tools.spline3d import Spline3D
+    from breads.jwst_tools.plotting import save_cube_as_gif
+
+    if gif_filename is None:
+        gif_filename = spline3d_filename.replace(".fits", ".gif")
+    with fits.open(spline3d_filename) as hdulist:
+        spline3d = Spline3D.from_hdulist(hdulist)
+        wv_ref = hdulist['BREADS'].header['WV_REF']
+
+    # Regular grid (pixel centers) covering the spline nodes, in scaled coordinates
+    x_nodes, y_nodes, wv_nodes = spline3d.x_nodes, spline3d.y_nodes, spline3d.wv_nodes
+    dx = np.median(np.diff(x_nodes))
+    dy = np.median(np.diff(y_nodes))
+    x_vec = np.arange(x_nodes[0] + dx / 2, x_nodes[-1], dx)
+    y_vec = np.arange(y_nodes[0] + dy / 2, y_nodes[-1], dy)
+    # The model is only defined strictly between the first and last wavelength nodes
+    wv_frames = np.linspace(np.min(wv_nodes), np.max(wv_nodes), N_frames + 2)[1:-1]
+
+    wv_grid, y_grid, x_grid = np.meshgrid(wv_frames, y_vec, x_vec, indexing='ij')
+    # evaluate_3dspline takes unscaled coordinates and scales them by WV_REF / wavelength
+    model, _ = evaluate_3dspline(x_grid * wv_grid / wv_ref, y_grid * wv_grid / wv_ref, wv_grid, spline3d_filename,
+                                 max_cores=max_cores)
+
+    log_model = np.log10(np.abs(model))
+    valid = np.isfinite(log_model)
+    if not np.any(valid):
+        print("save_3dspline_model_gif: the model is not finite anywhere, no gif saved.")
+        return
+    # Color scale set by the peak within 0.5 arcsec of the star (the coordinates are relative to the star): poorly
+    # constrained stamps at the edge of the field can be orders of magnitude brighter than the PSF core.
+    near_star = valid & (np.sqrt(x_grid ** 2 + y_grid ** 2) < 0.5)
+    vmax = np.max(log_model[near_star]) if np.any(near_star) else np.percentile(log_model[valid], 99.9)
+    extent = [x_vec[0] - dx / 2, x_vec[-1] + dx / 2, y_vec[0] - dy / 2, y_vec[-1] + dy / 2]
+    save_cube_as_gif(log_model, filename=gif_filename, fps=3, vmin=vmax - 5, vmax=vmax, extent=extent,
+                     wv_nodes=wv_frames)
+
+
 def _tpool_init_3dspline(
     data : np.ndarray, data_shape : tuple,
     noise : np.ndarray,
@@ -929,13 +993,14 @@ def _tpool_init_3dspline(
     bestfit_model : np.ndarray,
     spline3d_paras : np.ndarray, spline3d_paras_shape : tuple,
     spline3d_paras_err : np.ndarray or None,
+    spline3d_merr_paras : np.ndarray or None = None,
 ):
     """
     Initialize shared global variables for the multiprocessing pool.
     """
     global shared_data, shared_data_shape, shared_noise, \
         shared_wvs, shared_scaled_x, shared_scaled_y, shared_bp, shared_stellar_features,shared_bestfit_model, \
-        shared_spline3d_paras, shared_spline3d_paras_shape,shared_spline3d_paras_err
+        shared_spline3d_paras, shared_spline3d_paras_shape,shared_spline3d_paras_err, shared_spline3d_merr_paras
 
     shared_data = data
     shared_data_shape = data_shape
@@ -951,6 +1016,7 @@ def _tpool_init_3dspline(
     shared_spline3d_paras = spline3d_paras
     shared_spline3d_paras_shape = spline3d_paras_shape
     shared_spline3d_paras_err = spline3d_paras_err
+    shared_spline3d_merr_paras = spline3d_merr_paras
 
 
 _CTYPES_TO_NP = {

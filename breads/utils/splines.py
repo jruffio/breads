@@ -96,16 +96,45 @@ def filter_spec_with_spline(wvs, spec,specerr=None,x_nodes=None,M_spline=None):
 
     return HPF_spec,LPF_spec
 
-def get_bspline_knots(nodes, spline_degree=3):
+def get_bspline_knots(nodes, spline_degree=3, not_a_knot=False, return_degree=False):
     """ Clamped knot vector used by get_bspline_model for one segment of nodes.
 
-    The boundary nodes appear spline_degree+1 times in total (spline_degree extra copies on each side).
-    The number of B-spline basis functions is then np.size(nodes) + spline_degree - 1.
+    The boundary nodes appear spline_degree+1 times in total (spline_degree extra copies on each side). These repeated
+    end knots do not add any freedom: they only make the basis stop at the end nodes.
+
+    - not_a_knot=False: every node is a knot. The number of B-spline basis functions is np.size(nodes)+spline_degree-1.
+    - not_a_knot=True: same functions as the cardinal basis of get_spline_model (scipy InterpolatedUnivariateSpline,
+      "not-a-knot" end conditions): the (spline_degree-1)/2 nodes next to each end node are not knots (for a cubic
+      spline, the second and second-to-last nodes), so the number of basis functions is np.size(nodes). As in
+      get_spline_model, the degree is reduced to np.size(nodes)-1 if there are too few nodes. Only for odd degrees.
+
+    Args:
+        nodes: 1d array of nodes (one segment).
+        spline_degree: Degree of the B-splines.
+        not_a_knot: See above.
+        return_degree: If True, also return the degree actually used (only differs from spline_degree if not_a_knot).
+
+    Returns:
+        t, or (t, degree) if return_degree.
     """
     nodes = np.asarray(nodes)
-    return np.concatenate((np.repeat(nodes[0], spline_degree), nodes, np.repeat(nodes[-1], spline_degree)))
+    k = spline_degree
+    if not_a_knot:
+        if k % 2 == 0:
+            raise ValueError("The not-a-knot B-spline basis is only defined for odd spline degrees.")
+        if np.size(nodes) <= k:
+            # Too few nodes: a single polynomial of degree n_nodes-1 (n_nodes functions), as in get_spline_model
+            k = np.size(nodes) - 1
+            interior = nodes[1:1]
+        else:
+            n_skip = (k + 1) // 2  # nodes that are not interior knots on each side (including the end node)
+            interior = nodes[n_skip:np.size(nodes) - n_skip]
+        t = np.concatenate((np.repeat(nodes[0], k + 1), interior, np.repeat(nodes[-1], k + 1)))
+    else:
+        t = np.concatenate((np.repeat(nodes[0], k), nodes, np.repeat(nodes[-1], k)))
+    return (t, k) if return_degree else t
 
-def get_bspline_model(x_knots, x_samples, spline_degree=3):
+def get_bspline_model(x_knots, x_samples, spline_degree=3, not_a_knot=False):
     """ Compute a B-spline based linear model.
     Same interface/semantics as get_spline_model, but each column of M
     is now a local B-spline basis function instead of a cardinal
@@ -116,12 +145,17 @@ def get_bspline_model(x_knots, x_samples, spline_degree=3):
         x_knots: List of nodes (breakpoints) as np.ndarray in the same units as x_samples.
             x_knots can also be a list of ndarrays/list to model discontinous functions.
         x_samples: Vector of x values. ie, the sampling of the data.
-        spline_degree: Degree of the B-splines (default: 3).
-            if np.size(x_knots) <= spline_degree, then spline_degree = np.size(x_knots)-1 (same rule as get_spline_model)
+        spline_degree: Degree of the B-splines (default: 3). Unlike get_spline_model, the degree is not reduced when
+            there are few nodes: clamped B-splines of any degree are defined with as few as 2 nodes (e.g. 3 nodes and
+            degree 3 give 5 basis functions). With not_a_knot=True, the degree is reduced as in get_spline_model.
+        not_a_knot: If False (default), every node is a knot. If True, the knots are those of the cardinal basis of
+            get_spline_model (not-a-knot end conditions, see get_bspline_knots): the B-splines then span exactly the
+            same functions as get_spline_model, with one basis function per node.
 
     Returns:
-        M: Matrix of size (D,N) with D the size of x_samples and N = sum over segments of (n_nodes + spline_degree - 1).
-            Clamped knots are used, so N is larger than the total number of nodes.
+        M: Matrix of size (D,N) with D the size of x_samples and N = sum over segments of (n_nodes + spline_degree - 1)
+            (not_a_knot=False: N is larger than the total number of nodes), or N = total number of nodes
+            (not_a_knot=True).
     """
     x_samples = np.asarray(x_samples)
     if type(x_knots[0]) is list or type(x_knots[0]) is np.ndarray:
@@ -130,8 +164,6 @@ def get_bspline_model(x_knots, x_samples, spline_degree=3):
         x_knots_list = [x_knots]
     if np.size(x_knots_list) <= 1:
         return np.ones((np.size(x_samples), 1))
-    if np.size(x_knots_list) <= spline_degree:
-        spline_degree = np.size(x_knots) - 1
 
     M_list = []
     for nodes in x_knots_list:
@@ -140,12 +172,12 @@ def get_bspline_model(x_knots, x_samples, spline_degree=3):
         inbounds = np.where((min_ < x_samples) & (x_samples < max_))
         _x = x_samples[inbounds]
 
-        t = get_bspline_knots(nodes, spline_degree)
-        N_basis = np.size(t) - spline_degree - 1  # = n_nodes + spline_degree - 1
+        t, k = get_bspline_knots(nodes, spline_degree, not_a_knot=not_a_knot, return_degree=True)
+        N_basis = np.size(t) - k - 1  # = n_nodes + k - 1, or n_nodes if not_a_knot
 
         M = np.zeros((np.size(x_samples), N_basis))
         if np.size(_x) != 0:
             # Design matrix: columns are the B-spline basis functions evaluated at _x.
-            M[inbounds[0], :] = BSpline.design_matrix(_x, t, spline_degree).toarray()
+            M[inbounds[0], :] = BSpline.design_matrix(_x, t, k).toarray()
         M_list.append(M)
     return np.concatenate(M_list, axis=1)

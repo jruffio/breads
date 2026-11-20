@@ -74,6 +74,25 @@ def test_bspline_basis_properties():
     np.testing.assert_allclose(M[inb] @ (2 * pos + 1), 2 * X[inb] + 1, rtol=1e-12)
 
 
+def test_bspline_few_nodes_keeps_degree():
+    """With fewer nodes than the degree requires for an interpolating spline (e.g. 3 nodes, cubic), the B-spline basis
+    stays cubic (n_nodes + 2 = 5 functions, reproducing any cubic polynomial exactly), while the cardinal basis is
+    still reduced to degree n_nodes - 1 (3 functions)."""
+    nodes = np.array([4.0, 4.6, 5.3])
+    x = np.linspace(3.9, 5.4, 400)
+    inb = (x > nodes[0]) & (x < nodes[-1])
+    sp = Spline1D(nodes, basis="bspline")
+    M = sp.get_spline_model(x)
+    assert sp.n_params == 5 and M.shape == (np.size(x), 5)
+    assert np.size(sp.param_positions) == 5 and np.all(np.diff(sp.param_positions) > 0)
+    np.testing.assert_allclose(M[inb].sum(axis=1), 1, atol=1e-12)
+    f = 0.3 * x ** 3 - 2 * x ** 2 + x - 1
+    coefs = np.linalg.lstsq(M[inb], f[inb], rcond=None)[0]
+    np.testing.assert_allclose(M[inb] @ coefs, f[inb], rtol=1e-9, atol=1e-9)
+    assert Spline1D(nodes, basis="cardinal").n_params == 3
+    assert Spline1D(nodes[:2], basis="bspline").n_params == 4
+
+
 def test_bspline_segmented_and_empty_sampling():
     """Parameter count of a segmented B-spline (N_nodes+2 per segment), and that sampling entirely outside the nodes returns an all-zero matrix instead of crashing."""
     segs = [NODES[:5], NODES[5:]]
@@ -83,6 +102,41 @@ def test_bspline_segmented_and_empty_sampling():
     # no sample within the nodes
     M = get_bspline_model(NODES, np.array([1., 2.]), spline_degree=3)
     assert M.shape == (2, np.size(NODES) + 2) and np.all(M == 0)
+
+
+@pytest.mark.parametrize("n_nodes", [2, 3, 4, 5, 14])
+def test_bspline_nak_spans_cardinal(n_nodes):
+    """bspline_nak (B-splines with the not-a-knot knots of the cardinal basis) has one parameter per node and spans
+    exactly the same functions as the cardinal basis: a weighted least-squares fit gives the same model."""
+    rng = np.random.default_rng(n_nodes)
+    nodes = np.sort(np.concatenate([[4.07, 5.3], rng.uniform(4.1, 5.25, n_nodes - 2)]))
+    x = np.sort(rng.uniform(4.07, 5.3, 400))
+    sp_c, sp_n = Spline1D(nodes), Spline1D(nodes, basis="bspline_nak")
+    assert sp_n.is_bspline and sp_n.not_a_knot
+    assert sp_n.n_params == sp_c.n_params == n_nodes
+    assert sp_n.param_positions.shape == (n_nodes,)
+    M_c, M_n = sp_c.get_spline_model(x), sp_n.get_spline_model(x)
+    np.testing.assert_allclose(M_n.sum(axis=1), 1)  # partition of unity
+    d = 1 + np.sin(4 * x) + 0.1 * rng.normal(size=x.size)
+    s = rng.uniform(0.5, 2, x.size)
+    model_c = M_c @ np.linalg.lstsq(M_c / s[:, None], d / s, rcond=None)[0]
+    model_n = M_n @ np.linalg.lstsq(M_n / s[:, None], d / s, rcond=None)[0]
+    np.testing.assert_allclose(model_n, model_c, rtol=0, atol=1e-10 * np.max(np.abs(model_c)))
+
+
+def test_bspline_nak_knots():
+    """The not-a-knot basis does not use the second and second-to-last nodes as knots (cubic): moving them leaves the
+    basis unchanged, while it changes the bspline basis (where every node is a knot). Even degrees are refused."""
+    moved = np.copy(NODES)
+    moved[1], moved[-2] = 4.09, 5.25
+    np.testing.assert_array_equal(get_bspline_model(NODES, X, not_a_knot=True), get_bspline_model(moved, X, not_a_knot=True))
+    assert not np.allclose(get_bspline_model(NODES, X), get_bspline_model(moved, X))
+    with pytest.raises(ValueError):
+        get_bspline_model(NODES, X, spline_degree=2, not_a_knot=True)
+    # segmented nodes: one not-a-knot spline per segment
+    sp = Spline1D([NODES[:5], NODES[5:]], basis="bspline_nak")
+    assert sp.n_params == np.size(NODES)
+    assert Spline1D(NODES, basis="b-spline-nak").basis == "bspline_nak"
 
 
 def test_prune_modes_cardinal_matches_old_code():
@@ -122,7 +176,7 @@ def test_prune_modes_bspline():
 def test_fits_roundtrip_and_legacy(tmp_path):
     """FITS I/O used by the utils_dir caching and consistency checks: to_hdu()/from_hdulist() round-trip nodes, basis and crop_threshold, and legacy files (no SPLBASIS, or an x_nodes HDU) are read as cardinal."""
     for sp in [Spline1D(NODES), Spline1D(NODES, basis="bspline", crop_threshold=2e-3),
-               Spline1D([NODES[:5], NODES[5:]], basis="bspline")]:
+               Spline1D([NODES[:5], NODES[5:]], basis="bspline"), Spline1D(NODES, basis="bspline_nak")]:
         fn = os.path.join(tmp_path, "sp.fits")
         fits.HDUList([fits.PrimaryHDU(), sp.to_hdu()]).writeto(fn, overwrite=True)
         with fits.open(fn) as hdul:
@@ -137,6 +191,7 @@ def test_fits_roundtrip_and_legacy(tmp_path):
     assert Spline1D.from_hdulist(hdul) == Spline1D(NODES)
     assert Spline1D.from_hdulist(fits.HDUList([fits.PrimaryHDU()])) is None
     assert Spline1D(NODES) != Spline1D(NODES, basis="bspline")
+    assert Spline1D(NODES, basis="bspline_nak") != Spline1D(NODES, basis="bspline")
 
 
 def _synthetic_image(nrows=6, ncols=400, seed=0):
@@ -148,7 +203,7 @@ def _synthetic_image(nrows=6, ncols=400, seed=0):
     return im, wvs, noise, cont
 
 
-@pytest.mark.parametrize("basis", ["cardinal", "bspline"])
+@pytest.mark.parametrize("basis", ["cardinal", "bspline", "bspline_nak"])
 def test_normalize_rows_shapes(basis):
     """End-to-end continuum fit with normalize_rows() for each basis: spline_paras has N_params columns and the fitted model recovers a smooth synthetic continuum within 2% (residuals at the noise level)."""
     im, wvs, noise, cont = _synthetic_image()

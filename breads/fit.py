@@ -10,7 +10,8 @@ from scipy.linalg import cho_factor, cho_solve
 __all__ =  ('fitfm', 'log_prob', 'combined_log_prob', 'nlog_prob')
 
 
-def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=True, marginalize_noise_scaling=False):
+def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=True, marginalize_noise_scaling=False,
+          return_covariance=False):
     """
     Fit a forward model (FM) to a data object (defined by an instrument class) returning probabilities and best fit linear parameters.
 
@@ -35,6 +36,8 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             If true (default False), marginalize the log probability with respect to the noise scaling factor with a Jeffreys prior. This is useful when the noise is not well estimated. Set to False if you want to use the original noise estimation.
             This only works when there is no regularization in the forward model.
             This also only affect the calculation of the log probability but not the best fit linear parameters and their uncertainties.
+        return_covariance : bool, optional
+            If true (default False), also return the full covariance matrix of the linear parameters (see below).
 
     Returns
     -------
@@ -50,6 +53,9 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             Best fit linear parameters
         linparas_err : np.ndarray
             Uncertainties of best fit linear parameters
+        linparas_cov : np.ndarray (N_linear_parameters x N_linear_parameters)
+            Only if return_covariance is True. Covariance matrix of the linear parameters, whose diagonal is
+            linparas_err**2. Rows and columns of the invalid parameters (NaN in linparas) are NaN.
     """
     fm_out = fm_func(nonlin_paras, dataobj, **fm_paras)
 
@@ -68,7 +74,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
 
     if N_data == 0:
         # Nothing can be fitted
-        return _invalid_outputs(N_linpara)
+        return _invalid_outputs(N_linpara, return_covariance)
 
     # Initializing the boundaries for least-square fit
     if bounds is None:
@@ -91,7 +97,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     #     # Hence, we return nan for the best fit linear parameters and -inf for their probability
     #     warning_text = "Companion cannot be fitted, returning nan arrays"
     #     warn(warning_text)
-    #     return _invalid_outputs(N_linpara)
+    #     return _invalid_outputs(N_linpara, return_covariance)
 
     M_no_reg = M_no_reg[:, validpara[0]]  # Filtering the column(s) full of 0
     _bounds = (np.array(_bounds[0])[validpara[0]], np.array(_bounds[1])[validpara[0]]) #Selecting the bounds for the valid parameters
@@ -160,7 +166,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             # Will simply return the outputs corresponding to invalid data.
             print("Exiting covariance section in fitfm() with error:")
             print(e)
-            return _invalid_outputs(N_linpara)
+            return _invalid_outputs(N_linpara, return_covariance)
 
         covphi = noise_scaling ** 2 * covphi0
 
@@ -250,7 +256,7 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             # Will simply return the outputs corresponding to invalid data.
             print("Exiting covariance section in fitfm() with error:")
             print(e)
-            return _invalid_outputs(N_linpara)
+            return _invalid_outputs(N_linpara, return_covariance)
 
     diagcovphi = copy(np.diag(covphi))
     diagcovphi[np.where(diagcovphi < 0.0)] = np.nan  # uncertainties cannot be negative so replacing by nan here
@@ -277,6 +283,10 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
     linparas[validpara] = paras / _para_scale
     linparas_err[validpara] = paras_err / _para_scale
 
+    if return_covariance:
+        linparas_cov = np.full((N_linpara, N_linpara), np.nan)
+        linparas_cov[np.ix_(validpara[0], validpara[0])] = covphi / np.outer(_para_scale, _para_scale)
+        return log_prob, rchi2, linparas, linparas_err, linparas_cov
     return log_prob, rchi2, linparas, linparas_err
 
 def log_prob(nonlin_paras, dataobj, fm_func, fm_paras, nonlin_lnprior_func=None, bounds=None, scale_noise=True, marginalize_noise_scaling=False):
@@ -339,13 +349,15 @@ def nlog_prob(nonlin_paras, dataobj, fm_func, fm_paras,nonlin_lnprior_func=None,
     # print( nlogprob_val, nonlin_paras)
     return nlogprob_val
 
-def _invalid_outputs(N_linear_parameters):
+def _invalid_outputs(N_linear_parameters, return_covariance=False):
     """Helper to return invalid outputs"""
     linparas = np.full(N_linear_parameters, np.nan)
     linparas_err = np.full(N_linear_parameters, np.nan)
     log_prob = -np.inf
     s2 = np.inf
 
+    if return_covariance:
+        return log_prob, s2, linparas, linparas_err, np.full((N_linear_parameters, N_linear_parameters), np.nan)
     return log_prob, s2, linparas, linparas_err
 
 
