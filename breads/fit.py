@@ -308,7 +308,17 @@ def fitfm(nonlin_paras, dataobj, fm_func, fm_paras, bounds=None, scale_noise=Tru
             # print("condition number:", cond, nonlin_paras)
             # print("min/max eigenvalue:", eigvals.min(), eigvals.max())
             if cond > 1e10:
-                warning_text = "conditioning number too high (>1e10): cond={0} for nonlin={1}".format(cond,nonlin_paras)
+                # Only print the nonlinear parameters when they are small. Some callers (e.g., the 3D spline fit)
+                # pass whole data arrays as nonlin_paras, which would fill the logs.
+                if isinstance(nonlin_paras, (list, tuple)):
+                    nonlin_size = sum(np.size(p) for p in nonlin_paras)
+                else:
+                    nonlin_size = np.size(nonlin_paras)
+                if nonlin_size <= 20:
+                    nonlin_str = str(nonlin_paras)
+                else:
+                    nonlin_str = f"<{nonlin_size} values, not printed>"
+                warning_text = f"conditioning number too high (>1e10): cond={cond} for nonlin={nonlin_str}"
                 warn(warning_text)
                 # raise Exception(warning_text)
             # The formula below assumes that we are using the determinant of the inverse covariance
