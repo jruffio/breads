@@ -1086,9 +1086,9 @@ def clean_rate_nirspec(rate_files, stage2_dir, output_dir, N_nodes=40, clean_1f_
         outname = os.path.join(output_dir, os.path.basename(rate_file))
         cleaned_rate_files.append(outname)
         # skip if already processed
-        # if os.path.exists(outname) and not overwrite: #todo undo
-        #     print(f"\tOutput file {os.path.basename(outname)} already exists in the cleaned output directory; skipping {os.path.basename(rate_file)}.")
-        #     continue
+        if os.path.exists(outname) and not overwrite:
+            print(f"\tOutput file {os.path.basename(outname)} already exists in the cleaned output directory; skipping {os.path.basename(rate_file)}.")
+            continue
 
         N_files_processed += 1
         clean_rate_nirspec_per_file(rate_file, stage2_dir, output_dir,N_nodes=N_nodes,
