@@ -15,7 +15,7 @@ from scipy.interpolate import interp1d
 from scipy.ndimage import gaussian_filter, median_filter
 from scipy.signal import medfilt
 from numpy.linalg import LinAlgError
-from tqdm import tqdm
+import progressbar
 
 from breads.jwst_tools.PositiveEtalonModel import PositiveEtalonModel
 
@@ -1090,10 +1090,10 @@ def _collect_results(pending, active_jobs, pbar, overwrite, keep_job=None):
                     "Retry with fewer processes (n_procs), or n_procs=1 to debug."
                 ) from e
             if tb is not None:
-                tqdm.write(f"[{os.path.basename(job.save_filename)}] error on column {col_id} "
-                           f"(band {channel_band}):\n{tb}")
+                print(f"[{os.path.basename(job.save_filename)}] error on column {col_id} "
+                      f"(band {channel_band}):\n{tb}")
             job.add(col_id, f, c, bp_col, fit_info)
-            pbar.update(1)
+            pbar.increment()
 
         for job in [j for j in active_jobs if j.remaining == 0]:
             job.write(overwrite)
@@ -1101,7 +1101,7 @@ def _collect_results(pending, active_jobs, pbar, overwrite, keep_job=None):
             msg = f"==> Estimated fringe flat written to {job.save_filename}"
             if job.n_errors:
                 msg += f" ({job.n_errors} columns failed)"
-            tqdm.write(msg)
+            print(msg)
 
 
 def get_flat_parallelized(uncaldir, targetname, list_bands=None, bkg_sub=False,
@@ -1155,14 +1155,16 @@ def get_flat_parallelized(uncaldir, targetname, list_bands=None, bkg_sub=False,
                 initializer=_init_worker,
                 initargs=(options,),
             )
-        pbar = stack.enter_context(tqdm(total=0, desc="Fitting columns", unit="col"))
+        # redirect_stdout keeps the bar intact when printing messages while it runs.
+        pbar = stack.enter_context(progressbar.ProgressBar(max_value=0, prefix="Fitting columns ",
+                                                           min_poll_interval=1, redirect_stdout=True))
 
         pending = {}       # future -> (job, channel_band)
         active_jobs = []
         try:
             for combined_channel_band, rate_file, save_filename, channel_band_left_fitted in _iter_files_to_fit(
                     uncaldir, targetname, list_bands, bkg_sub, skip_4, overwrite):
-                pbar.set_description(f"Band {combined_channel_band} - {os.path.basename(rate_file)}")
+                print(f"Band {combined_channel_band} - {os.path.basename(rate_file)}")
 
                 # Loading + WCS in the parent: happens while the workers are
                 # still fitting the previous file.
@@ -1176,8 +1178,7 @@ def get_flat_parallelized(uncaldir, targetname, list_bands=None, bkg_sub=False,
 
                 tasks = list(job.tasks())
                 job.remaining = len(tasks)
-                pbar.total += len(tasks)
-                pbar.refresh()
+                pbar.max_value += len(tasks)
 
                 arrays = (data, wave, beta, err, DQ)
                 for channel_band, col_id in tasks:

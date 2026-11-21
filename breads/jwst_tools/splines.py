@@ -14,7 +14,7 @@ from scipy.optimize import lsq_linear
 import multiprocessing as mp
 import ctypes
 from multiprocessing.sharedctypes import RawArray
-from tqdm import tqdm
+import progressbar
 
 from breads.utils import get_spline_model
 from breads.fit import fitfm
@@ -733,7 +733,7 @@ def fit_3dspline(dataobj, spline3d,
                 for args_tuple in args_list
             ]
 
-            for t in tqdm(tasks, desc="Processing blocks"):
+            for t in progressbar.progressbar(tasks, prefix="Processing blocks ", min_poll_interval=1):
                 t.wait()
         finally:
             tpool.close()
@@ -930,7 +930,7 @@ def evaluate_3dspline(ifux,ifuy,wvs,spline3d_filename,stellar_features=None,max_
                 for args_tuple in args_list
             ]
 
-            for t in tqdm(tasks, desc="Processing blocks"):
+            for t in progressbar.progressbar(tasks, prefix="Processing blocks ", min_poll_interval=1):
                 t.wait()
         finally:
             tpool.close()

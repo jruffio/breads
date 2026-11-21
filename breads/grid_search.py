@@ -1,7 +1,7 @@
 import multiprocessing as mp
 import signal
 import warnings
-from tqdm import tqdm
+import progressbar
 import numpy as np
 
 from scipy.optimize import lsq_linear
@@ -169,7 +169,8 @@ def grid_search(para_vecs,dataobj,fm_func,fm_paras,numthreads=None,bounds=None,s
         # The context manager terminates the workers on exit, including on error or KeyboardInterrupt.
         with mp.Pool(processes=numthreads, initializer=_init_grid_search_worker,
                      initargs=(dataobj, fm_func, fm_paras, bounds, scale_noise, marginalize_noise_scaling)) as mypool:
-            output_lists = list(tqdm(mypool.imap(_process_chunk_worker, nonlin_paras_lists), total=N_chunks))
+            output_lists = list(progressbar.progressbar(mypool.imap(_process_chunk_worker, nonlin_paras_lists),
+                                                            max_value=int(N_chunks), min_poll_interval=1))
 
         outarr_not_created = True
         for k,(indices, output_list) in enumerate(zip(indices_lists,output_lists)):

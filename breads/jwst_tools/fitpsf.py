@@ -14,7 +14,7 @@ from astropy.table import Table
 from scipy.interpolate import CloughTocher2DInterpolator, LinearNDInterpolator
 from scipy.interpolate import interp1d
 from scipy.optimize import minimize
-from tqdm import tqdm
+import progressbar
 from scipy.stats import median_abs_deviation
 from scipy.interpolate import RegularGridInterpolator
 
@@ -206,7 +206,8 @@ def fitpsf(dataobj, ref_dataobj = None,
     if mppool is None:
         print(f"\tPerforming serial PSF fit at {debug_end - debug_init} wavelengths.")
 
-        for wv_id, wv in tqdm(enumerate(dataobj.wv_sampling), total=len(dataobj.wv_sampling), ncols=100):
+        for wv_id, wv in progressbar.progressbar(enumerate(dataobj.wv_sampling), max_value=len(dataobj.wv_sampling),
+                                                min_poll_interval=1):
             if not (debug_init <= wv_id < debug_end):
                 continue
             paras = linear_interp, _psfs[wv_id], _psfX[wv_id], _psfY[wv_id], rotate_psf,flipx, \
@@ -223,7 +224,7 @@ def fitpsf(dataobj, ref_dataobj = None,
     else:
         print(f"\tPerforming parallelized PSF fit at {debug_end - debug_init} wavelengths.")
 
-        output_lists = [o for o in tqdm(mppool.imap(_fit_wpsf_task,
+        output_lists = [o for o in progressbar.progressbar(mppool.imap(_fit_wpsf_task,
                                   zip(itertools.repeat(linear_interp),
                                       _psfs[debug_init:debug_end],
                                       _psfX[debug_init:debug_end],
@@ -243,9 +244,9 @@ def fitpsf(dataobj, ref_dataobj = None,
                                       itertools.repeat(ann_width),
                                       itertools.repeat(padding),
                                       itertools.repeat(sector_area))),
-                                        total=debug_end-debug_init, ncols=100)]
+                                        max_value=int(debug_end - debug_init), min_poll_interval=1)]
 
-        for out_id, out in tqdm(enumerate(output_lists), total=len(output_lists), ncols=100):
+        for out_id, out in progressbar.progressbar(enumerate(output_lists), max_value=len(output_lists), min_poll_interval=1):
             if not bestfit_paras_defined:
                 bestfit_paras = np.full((out[0].shape[0],np.size(dataobj.wv_sampling), 5), np.nan)  # flux_init, flux,ra,dec,angle
                 bestfit_paras_defined = True

@@ -28,7 +28,7 @@ from scipy.interpolate import interp1d
 from scipy.optimize import minimize, curve_fit, lsq_linear
 from scipy.signal import convolve2d
 from scipy.stats import median_abs_deviation
-from tqdm import tqdm
+import progressbar
 
 import breads.utils as utils
 from breads.utils import broaden, rotate_coordinates, find_closest_leftnright_elements
@@ -682,7 +682,7 @@ class JWST_IFUs(ABC):
                 print(f"\tPerforming serial calculation of PSF at {nwavelen} wavelengths.")
 
             outarr_not_created = True
-            for wv_id, wv in tqdm(enumerate(wv_sampling), total=nwavelen, ncols=100):
+            for wv_id, wv in progressbar.progressbar(enumerate(wv_sampling), max_value=nwavelen, min_poll_interval=1):
                 paras = IFU, wv, oversample, self.opmode, parallelize, fov_arcsec
                 out = _get_wpsf_task(paras)
                 if outarr_not_created:
@@ -716,7 +716,8 @@ class JWST_IFUs(ABC):
 
             print('starting parallel _get_wpsf_task ...')
             # Iterate, and display progress bar
-            pool_out = [ o for o in tqdm(mppool.imap(_get_wpsf_task, paras_list), total=nwavelen, ncols=100)]
+            pool_out = [o for o in progressbar.progressbar(mppool.imap(_get_wpsf_task, paras_list), max_value=nwavelen,
+                                                            min_poll_interval=1)]
             print('')
 
             print('collating pool outputs...')

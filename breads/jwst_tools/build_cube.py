@@ -12,7 +12,7 @@ from astropy import constants as const
 from astropy import units as u
 from scipy.stats import median_abs_deviation
 from scipy.ndimage import generic_filter
-from tqdm import tqdm
+import progressbar
 from scipy.interpolate import CloughTocher2DInterpolator, LinearNDInterpolator
 
 from breads.utils import rotate_coordinates
@@ -262,14 +262,14 @@ def build_cube(dataobj,
 
         outputs = []
         # Iterate calculation serially, also showing a progress bar of percentage completion
-        for j,inp in enumerate(tqdm(inputs, total=len(inputs), ncols=100)):
+        for j,inp in enumerate(progressbar.progressbar(inputs, min_poll_interval=1)):
             mfflux_arr,mffluxerr_arr = _build_cube_task(inp)
             flux_cube[debug_init+j, :, :] = mfflux_arr
             fluxerr_cube[debug_init+j, :, :] = mffluxerr_arr
     else:
         print('starting parallel _build_cube_task...')
         # Iterate calculation in parallel, showing a progress bar of percentage completion
-        outputs = list(tqdm(mppool.imap(_build_cube_task, inputs), total=len(inputs), ncols=100))
+        outputs = list(progressbar.progressbar(mppool.imap(_build_cube_task, inputs), max_value=len(inputs), min_poll_interval=1))
 
         #step 3 iterate over outputs and save values
         for j, inp in enumerate(inputs):

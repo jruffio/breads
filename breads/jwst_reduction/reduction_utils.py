@@ -7,7 +7,7 @@ import fnmatch
 import numpy as np
 from scipy.stats import median_abs_deviation
 from astropy.io import fits
-from tqdm import tqdm
+import progressbar
 from multiprocess import Pool
 import itertools
 import h5py
@@ -487,11 +487,11 @@ def fit_1f_noise_nirspec(im,noise,bkg_bad_pixels,N_nodes=40,mppool=None):
             noise_1f_col = _task_1f_noise_nirspec_col(args)
             model_1f_noise[:,colid] = noise_1f_col
     else:
-        results = list(tqdm(
+        results = list(progressbar.progressbar(
             mppool.imap(_task_1f_noise_nirspec_col,zip(im.T,noise.T,bkg_bad_pixels.T,
                                                        itertools.repeat(N_nodes),
                                                        itertools.repeat(m_spline_column))),
-            total=im.shape[1]
+            max_value=im.shape[1], min_poll_interval=1
         ))
 
         for colid, col_result in enumerate(results):
@@ -696,9 +696,9 @@ def fit_charge_transfer_nirspec(rate_dataobj,bkg_bad_pixels,rn_noise,poisson_noi
             # bestfit_paras_arr[0,:] => cutoff for each column
             # bestfit_paras_arr[1,:] => power
     else:
-        results = list(tqdm(
+        results = list(progressbar.progressbar(
             mppool.imap(_task_charge_transfer_nirspec_col,zip(data.T,bkg_bad_pixels.T,new_model.T,noise_ratio_vec_smooth)),
-            total=data.shape[1]
+            max_value=data.shape[1], min_poll_interval=1
         ))
 
         for colid, col_result in enumerate(results):
@@ -2685,8 +2685,8 @@ def compute_breads_flatfield(cal_files, utils_dir,combined_contnorm_spec_filenam
                 n_chunks = mppool._processes*3  # or however many workers you have
                 row_chunks = np.array_split(res, n_chunks, axis=0)
                 paras_list = [(chunk, smooth_kernel_half_width) for chunk in row_chunks]
-                pool_out = [o for o in tqdm(mppool.imap(_nanmedian_chunk_task, paras_list),
-                                             total=len(paras_list), ncols=100)]
+                pool_out = [o for o in progressbar.progressbar(mppool.imap(_nanmedian_chunk_task, paras_list),
+                                                                max_value=len(paras_list), min_poll_interval=1)]
                 smoothed = np.concatenate(pool_out, axis=0)
 
                 res -= smoothed

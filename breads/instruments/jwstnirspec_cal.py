@@ -13,7 +13,7 @@ from scipy.interpolate import interp1d, splev, splrep
 from scipy.ndimage import generic_filter, median_filter
 from scipy.optimize import lsq_linear
 from scipy.stats import median_abs_deviation
-from tqdm import tqdm
+import progressbar
 
 from breads.utils import get_spline_model
 from breads.instruments.jwst_IFUs import JWST_IFUs
@@ -124,7 +124,7 @@ class JWSTNirspec_cal(JWST_IFUs):
 
             new_badpix = np.ones(self.data.shape)
             print(f"Computing coords for {len(wcses)} slices...")
-            for i in tqdm(range(len(wcses)), total=len(wcses), ncols=100):
+            for i in progressbar.progressbar(range(len(wcses)), min_poll_interval=1):
                 # Set up 2D X, Y index arrays spanning across the full area of the slice WCS
                 xmin = max(int(np.round(wcses[i].bounding_box.intervals[0][0])), 0)
                 xmax = int(np.round(wcses[i].bounding_box.intervals[0][1]))

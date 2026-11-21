@@ -32,7 +32,7 @@ dependencies = [
     "pandas>2.0.0",
     "astroquery>=0.4.9",
     "multiprocess",
-    "tqdm",
+    "progressbar2",
     "threadpoolctl",
     "h5py",
     "species",
