@@ -741,3 +741,83 @@ def test_fitfm_units_of_linear_parameters():
                 np.testing.assert_allclose(rchi21, rchi20, rtol=1e-10)
                 np.testing.assert_allclose(lin1 * wild, lin0, rtol=1e-8, atol=1e-10 * np.max(np.abs(lin0)))
                 np.testing.assert_allclose(err1 * wild, err0, rtol=1e-8)
+
+
+def _matrix_fm(nonlin_paras, data_obj, d=None, M=None, s=None, d_reg=None, s_reg=None):
+    """Forward model returning fixed matrices (and an optional diagonal regularization)."""
+    if d_reg is None:
+        return d, M.copy(), s
+    return d, M.copy(), s, {"regularization": (d_reg, s_reg)}
+
+
+def _random_problem(rng, n_data=400, n_para=30, regularized=False):
+    x = np.linspace(-1, 1, n_data)
+    # badly scaled columns (as in the BREADS forward models), one empty column
+    M = np.stack([np.cos(k * np.pi * x) * 10.0 ** rng.uniform(-3, 3) for k in range(n_para)], axis=1)
+    M[:, 3] = 0
+    s = rng.uniform(0.5, 2.0, n_data)
+    d = M @ rng.normal(size=n_para) + rng.normal(size=n_data) * s
+    fm_paras = {"d": d, "M": M, "s": s}
+    if regularized:
+        d_reg = rng.normal(size=n_para)
+        s_reg = 10.0 ** rng.uniform(-1, 2, n_para)
+        s_reg[[5, 7]] = np.nan  # parameters without prior
+        fm_paras.update(d_reg=d_reg, s_reg=s_reg)
+    return fm_paras
+
+
+def _compare_fast_and_lsq(fm_paras, **kwargs):
+    fast = fitfm([], Instrument(), _matrix_fm, fm_paras, return_covariance=True, fast_unbounded_solve=True, **kwargs)
+    slow = fitfm([], Instrument(), _matrix_fm, fm_paras, return_covariance=True, fast_unbounded_solve=False, **kwargs)
+    assert np.isclose(fast[0], slow[0], rtol=1e-9, atol=1e-6)  # log_prob
+    assert np.isclose(fast[1], slow[1], rtol=1e-9)  # rchi2
+    for a, b in zip(fast[2:], slow[2:]):  # linparas, errors, covariance (NaN for the empty column)
+        assert np.array_equal(np.isnan(a), np.isnan(b))
+        ok = np.isfinite(b)
+        assert np.allclose(a[ok], b[ok], rtol=1e-7, atol=1e-12 * np.nanmax(np.abs(b)))
+
+
+def test_fitfm_fast_unbounded_solve_matches_lsq_linear():
+    """The Cholesky path of fitfm (default) gives the same results as lsq_linear, with or without regularization."""
+    rng = np.random.default_rng(1)
+    for scale_noise in (True, False):
+        _compare_fast_and_lsq(_random_problem(rng), scale_noise=scale_noise)
+        _compare_fast_and_lsq(_random_problem(rng, regularized=True), scale_noise=scale_noise)
+    _compare_fast_and_lsq(_random_problem(rng), marginalize_noise_scaling=True)
+
+
+def test_fitfm_fast_unbounded_solve_falls_back():
+    """Rank deficient model matrix: the Cholesky path is rejected and fitfm falls back to lsq_linear."""
+    rng = np.random.default_rng(2)
+    fm_paras = _random_problem(rng, n_para=10)
+    fm_paras["M"][:, 1] = 2 * fm_paras["M"][:, 2]
+    fast = fitfm([], Instrument(), _matrix_fm, fm_paras, fast_unbounded_solve=True)
+    slow = fitfm([], Instrument(), _matrix_fm, fm_paras, fast_unbounded_solve=False)
+    assert np.array_equal(fast[2], slow[2], equal_nan=True)
+    # bounded fit: always lsq_linear
+    bounds = ([0] * 10, [np.inf] * 10)
+    fm_paras = _random_problem(rng, n_para=10)
+    fast = fitfm([], Instrument(), _matrix_fm, fm_paras, bounds=bounds, fast_unbounded_solve=True)
+    slow = fitfm([], Instrument(), _matrix_fm, fm_paras, bounds=bounds, fast_unbounded_solve=False)
+    assert np.array_equal(fast[2], slow[2], equal_nan=True)
+
+
+def test_fitfm_sparse_model_matrix():
+    """A scipy sparse model matrix gives the same results as the dense one, with or without regularization."""
+    from scipy import sparse
+    rng = np.random.default_rng(3)
+    for regularized in (False, True):
+        for scale_noise in (True, False):
+            fm_dense = _random_problem(rng, regularized=regularized)
+            fm_dense["M"][np.abs(fm_dense["M"]) < 0.5 * np.abs(fm_dense["M"]).max(axis=0)] = 0  # make it sparse
+            fm_sparse = dict(fm_dense, M=sparse.csr_matrix(fm_dense["M"]))
+            dense = fitfm([], Instrument(), _matrix_fm, fm_dense, scale_noise=scale_noise, return_covariance=True,
+                          fast_unbounded_solve=False)
+            for fast in (True, False):
+                res = fitfm([], Instrument(), _matrix_fm, fm_sparse, scale_noise=scale_noise, return_covariance=True,
+                            fast_unbounded_solve=fast)
+                assert np.isclose(res[0], dense[0], rtol=1e-9, atol=1e-6)
+                for a, b in zip(res[2:], dense[2:]):
+                    assert np.array_equal(np.isnan(a), np.isnan(b))
+                    ok = np.isfinite(b)
+                    assert np.allclose(a[ok], b[ok], rtol=1e-7, atol=1e-12 * np.nanmax(np.abs(b)))

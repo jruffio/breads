@@ -1904,7 +1904,8 @@ class JWST_IFUs(ABC):
         else:
             raise ValueError(f"Unknown prior3d '{prior3d}'. Use None or 'contnorm'.")
 
-        stellar_features = self.star_func(self.wavelengths)
+        # float32 up front: fit_3dspline copies it into a float32 shared array anyway (saves memory in the parent)
+        stellar_features = self.star_func(self.wavelengths).astype(np.float32)
 
         if iterative:
             N_iter = 2

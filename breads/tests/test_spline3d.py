@@ -104,6 +104,11 @@ def test_bspline_local_stamp_basis(basis):
         assert M.shape[1] == np.prod(sp.stamp_params_shape(stamp))
         assert sp.stamp_param_slices(stamp) == (slice(None), slice(l0, l0 + M_y.shape[1]), slice(k0, k0 + M_x.shape[1]))
         np.testing.assert_allclose(M.sum(axis=1), 1, rtol=1e-6)
+        # sparse version used by the fit: same values, bit for bit, at most (degree + 1)^3 non-zeros per sample
+        M_sparse = sp.design_matrix_sparse(stamp, x, y, w)
+        assert np.array_equal(M_sparse.toarray(), M)
+        assert np.max(np.diff(M_sparse.indptr)) <= 4 ** 3
+        assert np.array_equal(sp.prune_modes(stamp, M_sparse), sp.prune_modes(stamp, M))
 
 
 def test_bspline_nak_stamp_fit_equals_cardinal():

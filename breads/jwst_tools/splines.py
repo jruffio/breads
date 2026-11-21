@@ -1,5 +1,6 @@
 from copy import copy
 import numpy as np
+from scipy import sparse
 import itertools
 import os
 import warnings
@@ -413,11 +414,21 @@ def _task_fit_3dspline(paras):
 
     inner_pixels = np.where(spline3d.stamp_inner_mask(stamp_ids, _x, _y, _w))
 
-    M_3dspline = spline3d.design_matrix(stamp_ids, _x, _y, _w)
-    M = M_3dspline * stellar_features_np[where_data_finite][:, None]
+    if spline3d.is_bspline:
+        # Sparse design matrix for the B-spline bases (local basis functions), solved by fitfm through the normal
+        # equations without ever building the dense matrix (much less memory and time for large stamps).
+        M_3dspline = spline3d.design_matrix_sparse(stamp_ids, _x, _y, _w)
+        M = sparse.diags(stellar_features_np[where_data_finite].astype(M_3dspline.dtype)) @ M_3dspline
+        # Deactivate the modes that are barely sampled (see Spline3D.prune_modes)
+        M = M @ sparse.diags((~spline3d.prune_modes(stamp_ids, M_3dspline, M)).astype(M.dtype))
+        M.eliminate_zeros()
+        M = sparse.csr_matrix(M)
+    else:
+        M_3dspline = spline3d.design_matrix(stamp_ids, _x, _y, _w)
+        M = M_3dspline * stellar_features_np[where_data_finite][:, None]
 
-    # Deactivate the modes that are barely sampled (see Spline3D.prune_modes)
-    M[:, spline3d.prune_modes(stamp_ids, M_3dspline, M)] = 0
+        # Deactivate the modes that are barely sampled (see Spline3D.prune_modes)
+        M[:, spline3d.prune_modes(stamp_ids, M_3dspline, M)] = 0
 
     if reg_mean_map is not None and reg_std_map is not None:
         d_reg, s_reg = np.ravel(reg_mean_map[sw, sy, sx]), np.ravel(reg_std_map[sw, sy, sx])
@@ -435,7 +446,7 @@ def _task_fit_3dspline(paras):
     paras_err_canvas = np.reshape(linparas_err, stamp_params_shape)
     _linparas = copy(linparas)
     _linparas[np.where(~np.isfinite(_linparas))] = 0
-    m = np.dot(M, _linparas)
+    m = M @ _linparas if sparse.issparse(M) else np.dot(M, _linparas)
 
     spline3d_paras_np[m0,m1,sw,sy,sx] = paras_canvas
     spline3d_paras_err_np[m0,m1,sw,sy,sx] = paras_err_canvas
@@ -666,7 +677,8 @@ def fit_3dspline(dataobj, spline3d,
     stellar_features_mp = RawArray(mp_float_type, nx * ny)
     stellar_features_np = _arraytonumpy(stellar_features_mp, data_shape, dtype=mp_float_type)
     if stellar_features is None:
-        stellar_features_np[:] = np.ones(dataobj.data.shape)
+        # scalar fill: np.ones(...) would allocate a full-size float64 temporary (1.0 is exact in float32)
+        stellar_features_np[:] = 1
     else:
         stellar_features_np[:] = stellar_features
 
@@ -864,7 +876,7 @@ def evaluate_3dspline(ifux,ifuy,wvs,spline3d_filename,stellar_features=None,max_
     stellar_features_mp = RawArray(mp_float_type, data_size)
     stellar_features_np = _arraytonumpy(stellar_features_mp, data_shape, dtype=mp_float_type)
     if stellar_features is None:
-        stellar_features_np[:] = np.ones(ifux.shape)
+        stellar_features_np[:] = 1  # scalar fill, see fit_3dspline
     else:
         stellar_features_np[:] = stellar_features
 
