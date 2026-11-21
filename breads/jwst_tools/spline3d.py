@@ -3,8 +3,9 @@
 breads.jwst_tools.splines.fit_3dspline) and to build BreadsPSFs (breads.jwst_tools.breadspsf).
 
 The 3D basis is the tensor product of three 1D splines (breads.jwst_tools.spline1d.Spline1D), one per axis, all with
-the same basis ("cardinal", the historical default, "bspline" or "bspline_nak", see Spline1D). The spatial coordinates are in arcsec, scaled to a
-reference wavelength (x * WV_REF / wavelength), so that the PSF is approximately achromatic in these coordinates.
+the same basis ("cardinal", the historical default, "bspline", "bspline_nak" or "catmull_rom", see Spline1D). The
+spatial coordinates are in arcsec, scaled to a reference wavelength (x * WV_REF / wavelength), so that the PSF is
+approximately achromatic in these coordinates.
 
 The full field of view is not fitted at once: it is split in stamps of size `stamp_size` (arcsec), each fitted
 independently with `N_overlap_nodes` extra nodes on each side. Adjacent stamps overlap, so the parameters of each stamp
@@ -19,13 +20,16 @@ parameters of a stamp are stored in its parity copy starting at the index of its
   parameters are control points.
 - bspline: B-splines with a knot at every node (n_nodes + degree - 1 parameters per axis, i.e. one extra degree of
   freedom near each edge of the stamp compared to cardinal); the parameters are control points.
+- catmull_rom: like cardinal, the parameters are the values of the model at the nodes, but the basis functions are
+  local (zero beyond 2 nodes on each side). It is handled like cardinal everywhere (pruning, model error).
 
 Modes (columns of the model matrix of a stamp) that are not constrained by the data are switched off in the fit (see
 Spline3D.prune_modes):
-- cardinal, cardinal_pruning="decorrelation" (default): redundant modes, found by a greedy decorrelation of the sampled
-  columns (Spline3D.prune_modes_decorrelation, the 3D generalization of the cardinal rule of Spline1D.prune_modes);
-- cardinal, cardinal_pruning="historical": no sample above 1% of the maximum of the stamp model matrix (the rule of the
-  original implementation; products without the 3DSPLPRN keyword were made with it);
+- cardinal and catmull_rom, cardinal_pruning="decorrelation" (default): redundant modes, found by a greedy
+  decorrelation of the sampled columns (Spline3D.prune_modes_decorrelation, the 3D generalization of the cardinal rule
+  of Spline1D.prune_modes);
+- cardinal and catmull_rom, cardinal_pruning="historical": no sample above 1% of the maximum of the stamp model matrix
+  (the rule of the original implementation; products without the 3DSPLPRN keyword were made with it);
 - B-spline bases: the same rule as Spline1D.prune_modes (maximum over the fitted samples below crop_threshold times the
   peak value of the mode).
 """
@@ -40,13 +44,13 @@ DEFAULT_CARDINAL_PRUNING = "decorrelation"
 DEFAULT_DECORRELATION_TOL = 1e-2
 
 # Keywords of the BREADS header describing the 3D spline (3DSPLSSX/3DSPLSSY predate this class).
-_HDR_COMMENTS = {"3DSPLBAS": "3D spline basis (cardinal, bspline, bspline_nak)",
+_HDR_COMMENTS = {"3DSPLBAS": "3D spline basis (see breads Spline3D)",
                  "3DSPLDEG": "3D spline degree",
                  "3DSPLSSX": "3D spline stamp size in x (arcsec)",
                  "3DSPLSSY": "3D spline stamp size in y (arcsec)",
                  "3DSPLNOV": "3D spline number of overlapping nodes",
                  "3DSPLCRP": "3D bsplines: crop threshold for truncated modes",
-                 "3DSPLPRN": "3D cardinal spline: mode pruning (decorrelation, historical)",
+                 "3DSPLPRN": "3D cardinal/catmull_rom spline: mode pruning",
                  "3DSPL_NW": "3D spline number of wavelength nodes",
                  "3DSPL_NX": "3D spline number of x nodes",
                  "3DSPL_NY": "3D spline number of y nodes",
@@ -65,7 +69,7 @@ class Spline3D:
     x_nodes, y_nodes : 1d arrays
         Spatial nodes (arcsec, in coordinates scaled to the reference wavelength).
     basis : str (optional, default "cardinal")
-        "cardinal", "bspline" or "bspline_nak" (see Spline1D), used for the three axes.
+        "cardinal", "bspline", "bspline_nak" or "catmull_rom" (see Spline1D), used for the three axes.
     degree : int (optional, default 3)
         Degree of the splines.
     stamp_size : tuple (optional, default (0.2, 0.2))
@@ -76,8 +80,8 @@ class Spline3D:
         Only used for the B-spline bases, in prune_modes(): a mode is switched off if its maximum over the fitted samples
         is less than crop_threshold times its peak value (same rule as Spline1D).
     cardinal_pruning : str (optional, default "decorrelation")
-        Only used for the cardinal basis, in prune_modes(): "decorrelation" (prune_modes_decorrelation) or "historical"
-        (no sample above 1% of the maximum of the stamp model matrix).
+        Only used for the cardinal and catmull_rom bases, in prune_modes(): "decorrelation"
+        (prune_modes_decorrelation) or "historical" (no sample above 1% of the maximum of the stamp model matrix).
     """
 
     def __init__(self, wv_nodes, x_nodes, y_nodes, basis="cardinal", degree=3, stamp_size=(0.2, 0.2),
@@ -271,9 +275,9 @@ class Spline3D:
         their best fit value and error are NaN.
 
         Rule for each basis:
-        - cardinal, cardinal_pruning="decorrelation" (default): modes mostly explained by the other modes (see
-          prune_modes_decorrelation).
-        - cardinal, cardinal_pruning="historical": modes that never exceed 1% of the maximum of M.
+        - cardinal and catmull_rom, cardinal_pruning="decorrelation" (default): modes mostly explained by the other
+          modes (see prune_modes_decorrelation).
+        - cardinal and catmull_rom, cardinal_pruning="historical": modes that never exceed 1% of the maximum of M.
         - bspline, bspline_nak: modes cut off by the sampling, i.e. whose largest sampled value is less than
           crop_threshold times the peak of the mode (same rule as Spline1D.prune_modes).
 

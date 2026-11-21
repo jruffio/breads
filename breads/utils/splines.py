@@ -16,6 +16,7 @@ from scipy.optimize import lsq_linear
 from scipy.signal import correlate2d
 from scipy.stats import median_abs_deviation
 from scipy.interpolate import BSpline
+from scipy.interpolate import CubicHermiteSpline
 
 def get_spline_model(x_knots, x_samples, spline_degree=3):
     """ Compute a spline based linear model.
@@ -179,5 +180,52 @@ def get_bspline_model(x_knots, x_samples, spline_degree=3, not_a_knot=False):
         if np.size(_x) != 0:
             # Design matrix: columns are the B-spline basis functions evaluated at _x.
             M[inbounds[0], :] = BSpline.design_matrix(_x, t, k).toarray()
+        M_list.append(M)
+    return np.concatenate(M_list, axis=1)
+
+
+def get_catmull_rom_model(x_knots, x_samples):
+    """ Compute a Catmull-Rom spline based linear model.
+    Same interface as get_spline_model: if Y = [y1, y2, ...] are the values of the function at the nodes [x1, x2, ...],
+    np.dot(M, Y) is the interpolated function at x_samples.
+
+    The function is a cubic between consecutive nodes, going through the node values, with the slope at each node
+    computed from the node values: the slope at that node of the parabola through the node and its two neighbors
+    (np.gradient, edge_order=2; at the first and last nodes, the parabola through the first or last three nodes).
+    For evenly spaced nodes, this is the usual Catmull-Rom slope (y[i+1] - y[i-1]) / (x[i+1] - x[i-1]) in the
+    interior. Unlike get_spline_model, each column is local: it is zero beyond 2 nodes on each side of its node.
+    With 2 nodes, the model is a straight line.
+
+    Args:
+        x_knots: List of nodes as np.ndarray in the same units as x_samples.
+            x_knots can also be a list of ndarrays/list to model discontinous functions.
+        x_samples: Vector of x values. ie, the sampling of the data.
+
+    Returns:
+        M: Matrix of size (D,N) with D the size of x_samples and N the total number of nodes.
+    """
+    x_samples = np.asarray(x_samples)
+    if type(x_knots[0]) is list or type(x_knots[0]) is np.ndarray:
+        x_knots_list = x_knots
+    else:
+        x_knots_list = [x_knots]
+    if np.size(x_knots_list) <= 1:
+        return np.ones((np.size(x_samples), 1))
+
+    M_list = []
+    for nodes in x_knots_list:
+        nodes = np.asarray(nodes, dtype=float)
+        n_nodes = np.size(nodes)
+        min_, max_ = np.min(nodes), np.max(nodes)
+        inbounds = np.where((min_ < x_samples) & (x_samples < max_))
+        _x = x_samples[inbounds]
+        edge_order = 2 if n_nodes >= 3 else 1
+
+        M = np.zeros((np.size(x_samples), n_nodes))
+        for chunk in range(n_nodes):
+            values = np.zeros(n_nodes)
+            values[chunk] = 1
+            slopes = np.gradient(values, nodes, edge_order=edge_order)
+            M[inbounds[0], chunk] = CubicHermiteSpline(nodes, values, slopes)(_x)
         M_list.append(M)
     return np.concatenate(M_list, axis=1)

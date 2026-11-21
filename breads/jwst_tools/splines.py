@@ -62,8 +62,8 @@ def _task_normrows(paras):
 
         M_spline = spline.get_spline_model(im_wvs_rows[k, :])
         # Remove the spline modes that should not be fitted (depends on the basis, see Spline1D.prune_modes):
-        # cardinal: redundant edge modes, evaluated on the full row (historical behavior).
-        # bspline: modes truncated by the sampling, evaluated on the pixels actually being fitted.
+        # cardinal, catmull_rom: redundant edge modes, evaluated on the full row (historical behavior).
+        # bspline, bspline_nak: modes truncated by the sampling, evaluated on the pixels actually being fitted.
         if spline.is_bspline:
             spline.prune_modes(M_spline, M_eval=M_spline[where_data_finite[0], :])
         else:
@@ -149,10 +149,10 @@ def normalize_rows(image, im_wvs, noise=None, badpixs=None, stellar_features=Non
         If None, N_nodes will set an evenly nodes spacing (cardinal basis).
     regularization : bool (optional)
         If True, the spline fitting is regularized by providing Gaussian priors on each linear spline parameter
-        (cardinal basis: value of the continuum at each node; bspline basis: B-spline control points).
+        (cardinal and catmull_rom: value of the continuum at each node; B-spline bases: control points).
     reg_mean_map : 2d array or None (optional)
         If regularization is True, this 2d array (Nrows, n_params) provides the mean of the prior,
-        with n_params = Spline1D.n_params (= number of nodes for the cardinal basis).
+        with n_params = Spline1D.n_params (= number of nodes for the cardinal and catmull_rom bases).
     reg_std_map : 2d array or None (optional)
         If regularization is True, this 2d array (Nrows, n_params) provides the standard deviation of the prior.
 
@@ -300,7 +300,7 @@ def _model_error_paras(spline3d, stamp, linparas_cov):
     error can be evaluated at any sample like the model itself (design matrix times parameters, see
     _task_evaluate_3dspline). Used for the B-spline bases.
 
-    For the cardinal basis, the parameter errors are already the model errors at the nodes. For the B-spline bases,
+    For the cardinal and catmull_rom bases, the parameter errors are already the model errors at the nodes. For the B-spline bases,
     the parameters are anti-correlated control points, and interpolating their errors overestimates the model error
     by >10x. Instead:
     1. compute the exact model error at the nodes and midpoints between nodes of the extended stamp (spline only,
@@ -443,8 +443,9 @@ def _task_fit_3dspline(paras):
         spline3d_merr_paras_np[m0,m1,sw,sy,sx] = np.reshape(_model_error_paras(spline3d, stamp_ids, _results[4]),
                                                             stamp_params_shape)
     else:
-        # Cardinal basis: the parameters are the values of the model at the nodes, so their errors are the errors of
-        # the model at the nodes, and the model error is interpolated between the nodes with the same spline.
+        # Cardinal and Catmull-Rom bases: the parameters are the values of the model at the nodes, so their errors are
+        # the errors of the model at the nodes, and the model error is interpolated between the nodes with the same
+        # spline.
         spline3d_merr_paras_np[m0,m1,sw,sy,sx] = paras_err_canvas
     combined_idx = tuple(w[inner_pixels] for w in where_data_finite)
     bestfit_model_np[combined_idx] = m[inner_pixels]
@@ -607,7 +608,7 @@ def fit_3dspline(dataobj, spline3d,
     dataobj : JWST_IFUs
         Data object (data, noise, wavelengths, bad_pixels, IFU coordinates and breads_header["WV_REF"]).
     spline3d : breads.jwst_tools.spline3d.Spline3D
-        3D spline basis: nodes, basis (cardinal or bspline), stamp size and number of overlapping nodes.
+        3D spline basis: nodes, basis type, stamp size and number of overlapping nodes.
     stellar_features : 2d array or None
         Multiplicative factor applied to the spline model (e.g. the stellar spectrum). Default is ones.
     threshold : float
@@ -624,7 +625,7 @@ def fit_3dspline(dataobj, spline3d,
         spline3d_paras_err: marginal 1 sigma errors of the parameters (sqrt of the diagonal of their covariance).
         spline3d_merr_paras: spline parameters of the 1 sigma error of the model (see _model_error_paras); evaluated
         with the same basis as the model, it gives the model error at any sample (evaluate_3dspline). For the
-        cardinal basis, it is equal to spline3d_paras_err.
+        cardinal and catmull_rom bases, it is equal to spline3d_paras_err.
     """
 
     wv_ref = dataobj.breads_header["WV_REF"]
@@ -770,7 +771,8 @@ def _task_evaluate_3dspline(paras):
     M = M_3dspline * stellar_features_np[where_data_finite][:, None]
     m = np.dot(M, np.ravel(spline3d_paras_np[m0,m1,sw,sy,sx]))
     # Model error: same spline evaluated on the parameters of the model error (see _model_error_paras; for the cardinal
-    # basis, the errors of the parameters, i.e. the model errors at the nodes, interpolated between the nodes)
+    # and catmull_rom bases, the errors of the parameters, i.e. the model errors at the nodes, interpolated between
+    # the nodes)
     merr = np.dot(M, np.ravel(spline3d_merr_paras_np[m0,m1,sw,sy,sx]))
     if spline3d.is_bspline:
         merr = np.clip(merr, 0, None)
@@ -806,7 +808,7 @@ def evaluate_3dspline(ifux,ifuy,wvs,spline3d_filename,stellar_features=None,max_
     spline3d_filename : str
         File with the SPLINE_PARAS0/SPLINE_PARAS0_ERR, wv_nodes/x_nodes/y_nodes HDUs and the BREADS header. The model
         error is computed from SPLINE_PARAS0_MERR if present (see fit_3dspline), otherwise from SPLINE_PARAS0_ERR
-        (files made before SPLINE_PARAS0_MERR existed; only correct for the cardinal basis).
+        (files made before SPLINE_PARAS0_MERR existed; only correct for the cardinal and catmull_rom bases).
     stellar_features : array or None
         Multiplicative factor applied to the model. Default is ones.
     max_cores : int

@@ -1620,7 +1620,7 @@ def compute_normalized_stellar_spectrum(cal_files, utils_dir, combined_contnorm_
         Nodes of the 1d spline continuum model. If None, default.nodes_dict[grating][detector] is used.
         It can be a breads.jwst_tools.spline1d.Spline1D, which defines both the nodes and the spline basis.
     spline_basis : str or None
-        "cardinal" (default) or "bspline". Basis of the 1d spline continuum model.
+        "cardinal" (default), "bspline", "bspline_nak" or "catmull_rom". Basis of the 1d spline continuum model.
         The basis is saved in the combined_contnorm_spec_filename file, and later steps (compute_snr_grid,
         cube_extraction, extract_spectrum) read it from there.
 
@@ -2464,7 +2464,9 @@ def extract_spectrum(cube_filename, out_filename, xy_coords, labels=None, extrac
         if spline1d is not None:
             # Provenance: spline basis used to model the starlight continuum (SPLBASIS, SPLDEG, SPLNNODE, SPLNPAR, ...)
             spline1d.update_header(hdulist_out[0].header)
-            _basis_str = "B-spline" if spline1d.is_bspline else "cardinal spline"
+            basis_labels = {"cardinal": "cardinal spline", "bspline": "B-spline", "bspline_nak": "not-a-knot B-spline",
+                            "catmull_rom": "Catmull-Rom spline"}
+            _basis_str = basis_labels[spline1d.basis]
             hdulist_out[0].header['COMMENT'] = (f"Starlight continuum modeled with a degree {spline1d.degree} "
                                                 f"{_basis_str} basis on the wv_nodes extension.")
         try:
@@ -4488,7 +4490,7 @@ def compute_normalized_stellar_spectrum_miri(cal_files, channel, utils_dir, comb
     wv_nodes : 1d array, Spline1D, or None
         Nodes of the 1d spline continuum model. If None, default_miri.nodes_dict[channel_band] is used.
     spline_basis : str or None
-        "cardinal" (default) or "bspline". Basis of the 1d spline continuum model.
+        "cardinal" (default), "bspline", "bspline_nak" or "catmull_rom". Basis of the 1d spline continuum model.
 
     Returns
     -------

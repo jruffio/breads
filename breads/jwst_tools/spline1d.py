@@ -12,6 +12,10 @@ It lets the same code use either:
       (not-a-knot end conditions: for a cubic spline, the second and second-to-last nodes are not knots). It spans
       exactly the same functions as the cardinal basis (same fitted model), with one parameter per node, but with
       local basis functions; the parameters are B-spline control points, not the values at the nodes.
+    - the "catmull_rom" basis (breads.utils.splines.get_catmull_rom_model): like cardinal, each linear parameter is the
+      value of the continuum at a node, but the basis functions are local (zero beyond 2 nodes on each side). Cubic
+      only; the slope at each node is that of the parabola through the node and its two neighbors. Its modes are
+      pruned like the cardinal basis.
 
 Code that needs the number of linear parameters must use Spline1D.n_params (not np.size(nodes)), and code that needs a
 wavelength associated with each linear parameter must use Spline1D.param_positions (not the nodes).
@@ -22,7 +26,7 @@ Any function accepting spline nodes should call Spline1D.coerce() on it, so that
 import numpy as np
 import astropy.io.fits as fits
 
-from breads.utils.splines import get_spline_model, get_bspline_model, get_bspline_knots
+from breads.utils.splines import get_spline_model, get_bspline_model, get_bspline_knots, get_catmull_rom_model
 
 __all__ = ["Spline1D"]
 
@@ -34,11 +38,12 @@ _BASIS_ALIASES = {"cardinal": "cardinal",
                   "bspline": "bspline", "b-spline": "bspline", "b_spline": "bspline", "bsplines": "bspline",
                   "b-splines": "bspline",
                   "bspline_nak": "bspline_nak", "bspline-nak": "bspline_nak", "b-spline-nak": "bspline_nak",
-                  "b_spline_nak": "bspline_nak", "bspline_notaknot": "bspline_nak"}
+                  "b_spline_nak": "bspline_nak", "bspline_notaknot": "bspline_nak",
+                  "catmull_rom": "catmull_rom", "catmull-rom": "catmull_rom", "catmullrom": "catmull_rom"}
 _BSPLINE_BASES = ("bspline", "bspline_nak")
 
 # FITS header keywords, used both in the wv_nodes HDU and in the primary headers of the data products.
-_HDR_COMMENTS = {"SPLBASIS": "1D continuum spline basis (cardinal, bspline, bspline_nak)",
+_HDR_COMMENTS = {"SPLBASIS": "1D spline basis (see breads Spline1D)",
                  "SPLDEG": "1D continuum spline degree",
                  "SPLCROP": "bsplines: crop threshold for truncated modes",
                  "SPLNNODE": "1D continuum spline number of nodes",
@@ -49,7 +54,7 @@ _HDR_COMMENTS = {"SPLBASIS": "1D continuum spline basis (cardinal, bspline, bspl
 def _normalize_basis(basis):
     key = str(basis).strip().lower()
     if key not in _BASIS_ALIASES:
-        raise ValueError(f"Unknown spline basis '{basis}'. Use 'cardinal', 'bspline' or 'bspline_nak'.")
+        raise ValueError(f"Unknown spline basis '{basis}'. Use 'cardinal', 'bspline', 'bspline_nak' or 'catmull_rom'.")
     return _BASIS_ALIASES[key]
 
 
@@ -63,10 +68,10 @@ class Spline1D:
         Position of the spline nodes (e.g. in microns). A list of arrays defines a discontinuous spline (one independent
         spline per segment), same convention as breads.utils.splines.get_spline_model.
     basis : str (optional, default "cardinal")
-        "cardinal" (get_spline_model), "bspline" (get_bspline_model) or "bspline_nak" (get_bspline_model with
-        not_a_knot=True). See the module docstring.
+        "cardinal" (get_spline_model), "bspline" (get_bspline_model), "bspline_nak" (get_bspline_model with
+        not_a_knot=True) or "catmull_rom" (get_catmull_rom_model). See the module docstring.
     degree : int (optional, default 3)
-        Degree of the splines.
+        Degree of the splines. Must be 3 for catmull_rom.
     crop_threshold : float (optional, default DEFAULT_BSPLINE_CROP_THRESHOLD = 1e-3)
         Only used for the B-spline bases (bspline and bspline_nak), in prune_modes(). A B-spline mode is removed from a fit if its maximum value
         over the fitted samples is less than crop_threshold times the peak value of that mode.
@@ -79,6 +84,8 @@ class Spline1D:
             self.nodes = np.asarray(nodes, dtype=float)
         self.basis = _normalize_basis(basis)
         self.degree = int(degree)
+        if self.basis == "catmull_rom" and self.degree != 3:
+            raise ValueError(f"The catmull_rom basis is cubic: degree must be 3, not {self.degree}.")
         self.crop_threshold = float(crop_threshold)
         self._n_params = None
         self._mode_peaks = None
@@ -156,7 +163,8 @@ class Spline1D:
     def param_positions(self):
         """
         Position (e.g. wavelength) associated with each linear parameter.
-        cardinal: the nodes themselves. bspline and bspline_nak: the Greville abscissae of the clamped knot vector.
+        cardinal and catmull_rom: the nodes themselves. bspline and bspline_nak: the Greville abscissae of the clamped
+        knot vector.
         """
         if self.n_params == 1:
             return np.array([np.nanmedian(np.concatenate(self.nodes_list))])
@@ -195,13 +203,15 @@ class Spline1D:
         if self.is_bspline:
             return get_bspline_model(self._model_nodes(), x_samples, spline_degree=self.degree,
                                      not_a_knot=self.not_a_knot)
+        if self.basis == "catmull_rom":
+            return get_catmull_rom_model(self._model_nodes(), x_samples)
         return get_spline_model(self._model_nodes(), x_samples, spline_degree=self.degree)
 
     def prune_modes(self, M_spline, M_eval=None, return_mask=False):
         """
         Set to zero the columns of M_spline that should not be fitted. M_spline is modified in place and returned.
 
-        cardinal: remove redundant edge modes, i.e. leading/trailing columns that are nearly collinear with their
+        cardinal, catmull_rom: remove redundant edge modes, i.e. leading/trailing columns that are nearly collinear with their
             neighbor (first off-diagonal of the normalized Gram matrix > 1-5e-3). This is the historical behavior.
         bspline, bspline_nak: remove modes that have been truncated by the sampling (data coverage, bad pixels, edges), i.e.
             columns whose maximum is less than crop_threshold times the peak value of the full mode.

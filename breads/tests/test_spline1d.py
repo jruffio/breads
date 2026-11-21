@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from breads.utils.splines import get_spline_model, get_bspline_model
+from breads.utils.splines import get_spline_model, get_bspline_model, get_catmull_rom_model
 from breads.jwst_tools.spline1d import Spline1D
 from breads.jwst_tools.splines import normalize_rows
 
@@ -139,6 +139,42 @@ def test_bspline_nak_knots():
     assert Spline1D(NODES, basis="b-spline-nak").basis == "bspline_nak"
 
 
+def test_catmull_rom_basis():
+    """Check that the catmull_rom basis interpolates the node values with local basis functions, reproduces straight
+    lines and parabolas exactly (uneven nodes, ends included), and matches a direct CubicHermiteSpline computation."""
+    from scipy.interpolate import CubicHermiteSpline
+    sp = Spline1D(NODES, basis="catmull_rom")
+    assert sp.n_params == np.size(NODES)
+    np.testing.assert_array_equal(sp.param_positions, NODES)
+    x_in = X[(X > NODES[0]) & (X < NODES[-1])]
+    M = sp.get_spline_model(x_in)
+
+    # interpolation: 1 at its own node, 0 at the other nodes
+    np.testing.assert_allclose(sp.get_spline_model(NODES[1:-1]), np.eye(np.size(NODES))[1:-1], atol=1e-12)
+    # local: column j is zero beyond the nodes j-2 and j+2
+    for j in range(np.size(NODES)):
+        outside = (x_in < NODES[max(j - 2, 0)]) | (x_in > NODES[min(j + 2, np.size(NODES) - 1)])
+        assert np.all(M[outside, j] == 0)
+    # straight lines and parabolas are reproduced exactly
+    for f in [lambda t: 3 * t - 2, lambda t: (t - 4.5) ** 2]:
+        np.testing.assert_allclose(M @ f(NODES), f(x_in), atol=1e-10)
+    # same as a direct computation
+    for j in range(np.size(NODES)):
+        values = np.zeros(np.size(NODES))
+        values[j] = 1
+        ref = CubicHermiteSpline(NODES, values, np.gradient(values, NODES, edge_order=2))(x_in)
+        np.testing.assert_allclose(M[:, j], ref, atol=1e-12)
+
+    # 2 nodes: straight line; segments: block structure; outside the nodes: 0
+    np.testing.assert_allclose(get_catmull_rom_model(np.array([0., 1.]), np.array([0.25])), [[0.75, 0.25]])
+    M_seg = Spline1D([NODES[:5], NODES[5:]], basis="catmull_rom").get_spline_model(x_in)
+    assert M_seg.shape == (x_in.size, np.size(NODES))
+    assert np.all(M_seg[x_in > NODES[4], :5] == 0) and np.all(M_seg[x_in < NODES[5], 5:] == 0)
+    assert np.all(sp.get_spline_model(np.array([NODES[0] - 0.1, NODES[-1] + 0.1])) == 0)
+    with pytest.raises(ValueError):
+        Spline1D(NODES, basis="catmull_rom", degree=2)
+
+
 def test_prune_modes_cardinal_matches_old_code():
     """Regression test: Spline1D.prune_modes() for the cardinal basis removes exactly the same redundant edge modes as the historical inline code, on random partial wavelength coverages."""
     rng = np.random.default_rng(1)
@@ -176,7 +212,8 @@ def test_prune_modes_bspline():
 def test_fits_roundtrip_and_legacy(tmp_path):
     """FITS I/O used by the utils_dir caching and consistency checks: to_hdu()/from_hdulist() round-trip nodes, basis and crop_threshold, and legacy files (no SPLBASIS, or an x_nodes HDU) are read as cardinal."""
     for sp in [Spline1D(NODES), Spline1D(NODES, basis="bspline", crop_threshold=2e-3),
-               Spline1D([NODES[:5], NODES[5:]], basis="bspline"), Spline1D(NODES, basis="bspline_nak")]:
+               Spline1D([NODES[:5], NODES[5:]], basis="bspline"), Spline1D(NODES, basis="bspline_nak"),
+               Spline1D(NODES, basis="catmull_rom")]:
         fn = os.path.join(tmp_path, "sp.fits")
         fits.HDUList([fits.PrimaryHDU(), sp.to_hdu()]).writeto(fn, overwrite=True)
         with fits.open(fn) as hdul:
@@ -203,7 +240,7 @@ def _synthetic_image(nrows=6, ncols=400, seed=0):
     return im, wvs, noise, cont
 
 
-@pytest.mark.parametrize("basis", ["cardinal", "bspline", "bspline_nak"])
+@pytest.mark.parametrize("basis", ["cardinal", "bspline", "bspline_nak", "catmull_rom"])
 def test_normalize_rows_shapes(basis):
     """End-to-end continuum fit with normalize_rows() for each basis: spline_paras has N_params columns and the fitted model recovers a smooth synthetic continuum within 2% (residuals at the noise level)."""
     im, wvs, noise, cont = _synthetic_image()
@@ -228,7 +265,7 @@ def test_normalize_rows_cardinal_array_equals_spline1d():
         np.testing.assert_array_equal(a, b)
 
 
-@pytest.mark.parametrize("basis", ["cardinal", "bspline"])
+@pytest.mark.parametrize("basis", ["cardinal", "bspline", "catmull_rom"])
 def test_extract_spectrum_header_has_spline_basis(tmp_path, basis):
     """Provenance: the planet spectrum written by extract_spectrum() (shared with collaborators) states the spline basis (SPLBASIS, SPLNPAR, SPLNNODE) in its primary header. Skipped without the [jwst] extra."""
     try:

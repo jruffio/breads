@@ -221,7 +221,8 @@ def test_fits_roundtrip_and_legacy(tmp_path):
     for sp in [Spline3D(WV_NODES, X_NODES, Y_NODES),
                Spline3D(WV_NODES, X_NODES, Y_NODES, cardinal_pruning="historical"),
                Spline3D(WV_NODES, X_NODES[::2], Y_NODES, basis="bspline", stamp_size=(0.3, 0.4), N_overlap_nodes=3),
-               Spline3D(WV_NODES, X_NODES, Y_NODES, basis="bspline_nak")]:
+               Spline3D(WV_NODES, X_NODES, Y_NODES, basis="bspline_nak"),
+               Spline3D(WV_NODES, X_NODES, Y_NODES, basis="catmull_rom")]:
         fn = os.path.join(tmp_path, "sp3d.fits")
         hdr = fits.Header({"WV_REF": 4.5})
         sp.update_header(hdr)
@@ -264,7 +265,7 @@ class _FakeIFU:
         return self.ifux, self.ifuy
 
 
-@pytest.mark.parametrize("basis", ["cardinal", "bspline", "bspline_nak"])
+@pytest.mark.parametrize("basis", ["cardinal", "bspline", "bspline_nak", "catmull_rom"])
 def test_fit_and_evaluate_3dspline(tmp_path, basis):
     """Check on a simulated PSF that fit_3dspline recovers the model for each basis, and that evaluate_3dspline on the
     saved file reproduces the best fit model at the same samples."""
@@ -293,7 +294,7 @@ def test_fit_and_evaluate_3dspline(tmp_path, basis):
     np.testing.assert_allclose(model_eval[good], model[good], rtol=1e-5, atol=1e-4)
 
 
-@pytest.mark.parametrize("basis", ["cardinal", "bspline", "bspline_nak"])
+@pytest.mark.parametrize("basis", ["cardinal", "bspline", "bspline_nak", "catmull_rom"])
 def test_radial_prior_3dspline(basis):
     """Check that radial_prior_3dspline follows the azimuthal average of the data and falls back to the noise floor
     beyond the data, and that fitting with it leaves the model unchanged where the data constrain it."""
@@ -334,7 +335,7 @@ def test_radial_prior_3dspline(basis):
     assert np.nanmax(np.abs(paras1)) < 10 * np.nanmax(np.abs(dataobj.model))
 
 
-@pytest.mark.parametrize("basis", ["cardinal", "bspline", "bspline_nak"])
+@pytest.mark.parametrize("basis", ["cardinal", "bspline", "bspline_nak", "catmull_rom"])
 def test_model_error_3dspline(tmp_path, basis):
     """Check that the model error given by evaluate_3dspline (SPLINE_PARAS0_MERR) matches the exact model error
     sqrt(diag(M C M^T)), with M the design matrix of the stamp and C the covariance of its parameters, and that for
@@ -347,7 +348,7 @@ def test_model_error_3dspline(tmp_path, basis):
                   basis=basis, stamp_size=(0.3, 0.3))
     model, _, bp, res, paras, paras_err, merr_paras = fit_3dspline(dataobj, sp, threshold=100, max_cores=1)
     assert merr_paras.shape == sp.params_shape
-    if basis == "cardinal":
+    if not sp.is_bspline:
         np.testing.assert_array_equal(merr_paras, paras_err)
 
     fn = os.path.join(tmp_path, "fit3d.fits")
@@ -379,8 +380,9 @@ def test_model_error_3dspline(tmp_path, basis):
     C = cov[np.ix_(valid, valid)]
     exact = np.sqrt(np.sum(np.dot(M_in, C) * M_in, axis=1))
     ratio = model_err.ravel()[ext][inner] / exact
-    if basis == "cardinal":
-        # unchanged behavior: model errors at the nodes interpolated with the cardinal spline (correlations ignored)
+    if not sp.is_bspline:
+        # cardinal (unchanged behavior) and catmull_rom: model errors at the nodes interpolated with the same spline
+        # (correlations ignored)
         assert 0.7 < np.median(ratio) < 2.0
     else:
         # the fitted error map follows the exact error on the scale of the nodes (it smooths the variations between

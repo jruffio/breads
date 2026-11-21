@@ -1074,7 +1074,8 @@ class JWST_IFUs(ABC):
         iterative : Boolean (optional)
             If True, the fitting procedure is iteratively applied. It helps identifies potential additional bad pixels flagging and to have a better regularization.
         spline_basis : str or None (optional)
-            "cardinal" (default) or "bspline". Basis of the 1d spline continuum model (see Spline1D).
+            "cardinal" (default), "bspline", "bspline_nak" or "catmull_rom". Basis of the 1d spline continuum model
+            (see Spline1D).
             Must be None or consistent with wv_nodes if wv_nodes is already a Spline1D.
 
         Returns
