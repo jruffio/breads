@@ -1845,6 +1845,194 @@ def compute_3dsplines(cal_files, utils_dir, targetname,combined_contnorm_spec_fi
 
     return combdataobj
 
+
+def _edge_wavelength_indices(priheader, edges):
+    """
+    Convert the edges requested in extrapolate_3dspline_edges into wavelength parameter slices (0: first, -1: last).
+
+    "blue" is the first slice and "red" the last one. "inner" and "outer" are only defined for NIRSpec: the inner edge
+    is the one next to the gap between the two detectors (red edge of nrs1, blue edge of nrs2), the outer edge is the
+    other one. The detector is read from the primary header (INSTRUME and DETECTOR keywords) of the 3D spline file.
+    """
+    if isinstance(edges, str):
+        edges = [edges]
+    instrument = str(priheader.get("INSTRUME", "")).strip().upper()
+    detector = str(priheader.get("DETECTOR", "")).strip().lower()
+    nirspec_inner = {"nrs1": -1, "nrs2": 0}
+
+    indices = []
+    for edge in edges:
+        if edge == "blue":
+            indices.append(0)
+        elif edge == "red":
+            indices.append(-1)
+        elif edge in ("inner", "outer"):
+            if instrument != "NIRSPEC" or detector not in nirspec_inner:
+                raise ValueError(f"edges='{edge}' is only defined for NIRSpec nrs1 and nrs2 (here {instrument} "
+                                 f"{detector}). Use 'blue' and/or 'red'.")
+            inner_index = nirspec_inner[detector]
+            if edge == "inner":
+                indices.append(inner_index)
+            else:
+                indices.append(-1 - inner_index)  # 0 <-> -1
+        else:
+            raise ValueError(f"Unknown edge '{edge}'. Use 'inner', 'outer', 'blue' or 'red'.")
+    return sorted(set(indices))
+
+
+def extrapolate_3dspline_edges(spline3d_filename, edges=("inner",), suffix="_extrapolated", edge_flux="fitted",
+                               other_detector_spline3d=None, joint_degree=2, weighted=True,
+                               numthreads=1, overwrite=False, save_plots=True):
+    """
+    Optional step after compute_3dsplines (or compute_3dsplines_miri): replace the edge wavelength nodes of the 3D
+    spline of the star subtraction by a fit of the middle nodes, before e.g. create_BreadsPSF. Optionally, the inner
+    edge is interpolated across the gap with the 3D spline of the other detector (e.g. nrs2 for nrs1).
+
+    Why: an edge wavelength node can be outside the data, e.g. the last node of NIRSpec nrs1 (4.12 um in G395H) or the
+    first node of nrs2 (4.07 um). Its parameters are then poorly constrained, which makes the model (e.g. a BreadsPSF)
+    noisy and negative near the edge of the band and biases the PSF centroid fits there.
+
+    The star subtraction 3D spline file (spline3d_filename, in the utils folder) is copied, in the same folder, with
+    suffix added to its name. In the copy, the edge slices of the parameters are replaced (see
+    breads.jwst_tools.splines.extrapolate_3dspline_edge_paras: the PSF shape of each slice is its parameters divided by
+    their total; a line is fitted to the shapes of the middle nodes and evaluated at the edge node, or, for the edge
+    facing the other detector if other_detector_spline3d is given, a polynomial through the middle nodes of both
+    detectors; the fits are weighted by the errors of the parameters by default, and the errors of the new parameters
+    are propagated from those of the middle nodes). The stellar spectrum (e.g. STIS) is not needed. The name of the
+    copy is returned, to be given to the code that uses the 3D spline (e.g. create_BreadsPSF) instead of the original
+    file.
+
+    The copy has no STARMODEL and IM_SUB extensions: they hold the star model of the original parameters, and the code
+    that uses the 3D spline model (create_BreadsPSF, evaluate_3dspline) reads the parameters. So functions that read
+    those two extensions (plot_3dspline_residuals, reload_starsubtraction_3dspline) need the original file.
+
+    Designed for the interpolating bases (cardinal, catmull_rom), where the parameters are the model values at the
+    nodes. With the B-spline bases, the first and last slices of coefficients are replaced the same way.
+
+    Parameters
+    ----------
+    spline3d_filename : str
+        Star subtraction 3D spline file, i.e. combdataobj.default_filenames["compute_starsubtraction_3dspline"] after
+        compute_3dsplines (or compute_3dsplines_miri). Not modified. For "inner"/"outer", the detector is read from
+        its primary header.
+    edges : str or list of str
+        Edges to replace: "inner" and/or "outer" (NIRSpec only; inner = next to the gap between the detectors, i.e.
+        red edge of nrs1 and blue edge of nrs2), or "blue" and/or "red". Only the middle nodes are used for the
+        extrapolation, so replacing one edge or both gives the same result for each edge. Default: ("inner",).
+    suffix : str
+        Added to the name of the star subtraction file for the copy (default "_extrapolated").
+    edge_flux : str
+        Total flux of a new edge node: "fitted" (default, that of the original node) or "powerlaw" (power law fitted
+        to the totals of the middle nodes). See extrapolate_3dspline_edge_paras.
+    other_detector_spline3d : str or None
+        Star subtraction 3D spline file of the other detector (e.g. the nrs2 file when processing nrs1). Both detectors see the same PSF, so the edge node facing the other detector (inner edge for NIRSpec) is then
+        interpolated through the middle nodes of both detectors instead of extrapolated from this detector only. Only
+        the middle nodes of the other file are used, so it can be the original file or its extrapolated copy. It must
+        have the same spatial nodes, stamps and WV_REF. The other edge is still extrapolated with a line. Not modified.
+        Default None: this detector only.
+    joint_degree : int
+        Degree of the polynomial through the middle nodes of both detectors (default 2). Ignored without
+        other_detector_spline3d.
+    weighted : bool
+        Weight the fits by 1/error^2 of the parameters (SPLINE_PARAS0_ERR), default True. False: unweighted fits.
+        Either way, SPLINE_PARAS0_ERR and SPLINE_PARAS0_MERR of the new nodes are propagated from the middle nodes.
+    numthreads : int
+        Number of processes for the gif.
+    overwrite : bool
+        If False and the copy already exists, it is reused.
+    save_plots : bool
+        Save a gif of the new 3D spline model, as compute_starsubtraction_3dspline does.
+
+    Returns
+    -------
+    out_filename : str
+        The copy with the replaced edge nodes (reused if it exists and overwrite is False).
+    """
+    from breads.jwst_tools.splines import extrapolate_3dspline_edge_paras, save_3dspline_model_gif
+
+    in_filename = str(spline3d_filename)
+    out_filename = in_filename.replace(".fits", suffix + ".fits")
+    if out_filename == in_filename:
+        raise ValueError(f"suffix must be a non-empty string, not '{suffix}'.")
+    edge_indices = _edge_wavelength_indices(fits.getheader(in_filename, 0), edges)
+    other_filename = None if other_detector_spline3d is None else str(other_detector_spline3d)
+
+    if overwrite or not os.path.exists(out_filename):
+        other_wv_positions = None
+        other_paras = None
+        other_paras_err = None
+        other_paras_merr = None
+        if other_filename is not None:
+            with fits.open(other_filename) as other_hdulist:
+                other_spline3d = Spline3D.from_hdulist(other_hdulist)
+                other_wv_ref = other_hdulist["BREADS"].header["WV_REF"]
+                other_paras = other_hdulist["SPLINE_PARAS0"].data.astype(float)
+                other_paras_err = other_hdulist["SPLINE_PARAS0_ERR"].data.astype(float)
+                other_paras_merr = None
+                if "SPLINE_PARAS0_MERR" in other_hdulist:
+                    other_paras_merr = other_hdulist["SPLINE_PARAS0_MERR"].data.astype(float)
+            other_wv_positions = other_spline3d.wv.param_positions
+
+        with fits.open(in_filename) as hdulist:
+            spline3d = Spline3D.from_hdulist(hdulist)
+            if other_filename is not None:
+                # The parameters of the two detectors must be values of the same PSF on the same scaled grid
+                same_grid = (np.array_equal(spline3d.x_nodes, other_spline3d.x_nodes)
+                             and np.array_equal(spline3d.y_nodes, other_spline3d.y_nodes)
+                             and spline3d.basis == other_spline3d.basis
+                             and spline3d.stamp_size == other_spline3d.stamp_size
+                             and spline3d.N_overlap_nodes == other_spline3d.N_overlap_nodes
+                             and hdulist["BREADS"].header["WV_REF"] == other_wv_ref)
+                if not same_grid:
+                    raise ValueError("other_detector_spline3d must have the same x/y nodes, basis, stamps and WV_REF "
+                                     f"as {in_filename}.")
+            paras = hdulist["SPLINE_PARAS0"].data
+            paras_err = hdulist["SPLINE_PARAS0_ERR"].data
+            paras_merr = hdulist["SPLINE_PARAS0_MERR"].data if "SPLINE_PARAS0_MERR" in hdulist else None
+            _out = extrapolate_3dspline_edge_paras(spline3d.wv.param_positions, paras, paras_err, paras_merr,
+                                                   edge_indices, edge_flux=edge_flux,
+                                                   other_wv_positions=other_wv_positions, other_paras=other_paras,
+                                                   other_paras_err=other_paras_err,
+                                                   other_paras_merr=other_paras_merr, joint_degree=joint_degree,
+                                                   weighted=weighted)
+            new_paras, new_paras_err, new_paras_merr = _out
+
+            hdulist["SPLINE_PARAS0"].data = new_paras.astype(np.float32)
+            hdulist["SPLINE_PARAS0_ERR"].data = new_paras_err.astype(np.float32)
+            if new_paras_merr is not None:
+                hdulist["SPLINE_PARAS0_MERR"].data = new_paras_merr.astype(np.float32)
+            # The star model of the original parameters is not kept (see the docstring)
+            for name in ["STARMODEL", "IM_SUB"]:
+                if name in hdulist:
+                    del hdulist[name]
+
+            breads_header = hdulist["BREADS"].header
+            edge_names = ",".join(["first" if edge == 0 else "last" for edge in edge_indices])
+            breads_header["3DSPLEXT"] = (edge_names, "3D spline wv nodes replaced by extrapolation")
+            breads_header["3DSPLEXF"] = (edge_flux, "3D spline extrapolated nodes: total flux")
+            breads_header["3DSPLEXW"] = (weighted, "3D spline extrapolated nodes: weighted fit")
+            if other_filename is None:
+                method = "a linear extrapolation of the middle nodes (PSF shape)"
+            else:
+                # 3D spline file of the other detector (no comment: the file name fills the card)
+                breads_header["3DSPLEXO"] = os.path.basename(other_filename)
+                breads_header["3DSPLEXD"] = (joint_degree, "3D spline extrapolated nodes: joint degree")
+                method = ("a fit of the middle nodes (PSF shape; inner edge: polynomial of degree "
+                          + str(joint_degree) + " through the middle nodes of both detectors, with "
+                          + os.path.basename(other_filename) + ")")
+            breads_header["HISTORY"] = ("extrapolate_3dspline_edges: wavelength node(s) " + edge_names
+                                        + " replaced by " + method
+                                        + (", weighted by the errors" if weighted else ", unweighted")
+                                        + ", errors propagated, from "
+                                        + os.path.basename(in_filename) + "; STARMODEL and IM_SUB removed")
+            hdulist.writeto(out_filename, overwrite=True)
+
+        if save_plots:
+            save_3dspline_model_gif(out_filename, max_cores=numthreads)
+
+    return out_filename
+
+
 def compute_3dsplines_miri(cal_files, channel, utils_dir, targetname, combined_contnorm_spec_filename,
                       spline3d=None,save_pickle=False, load_pickle=False,
                       coords_filename_filter = None,numthreads=1,spline3d_suffix = "",

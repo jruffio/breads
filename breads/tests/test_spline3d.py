@@ -9,7 +9,9 @@ from astropy.io import fits
 from breads.utils.splines import get_spline_model, get_bspline_model
 from breads.jwst_tools.spline1d import Spline1D
 from breads.jwst_tools.spline3d import Spline3D
-from breads.jwst_tools.splines import fit_3dspline, evaluate_3dspline, radial_prior_3dspline
+from breads.jwst_tools.splines import (fit_3dspline, evaluate_3dspline, radial_prior_3dspline,
+                                      extrapolate_3dspline_edge_paras, polynomial_fit_weights,
+                                      weighted_polynomial_fit_weights)
 
 WV_NODES = np.linspace(4.07, 5.3, 5)
 X_NODES = np.arange(-2, 2.0001, 0.02)
@@ -394,3 +396,221 @@ def test_model_error_3dspline(tmp_path, basis):
         # the nodes); the former formula (M @ paras_err) overestimated it by more than 10x for the B-spline bases
         assert 0.7 < np.median(ratio) < 1.3
         assert np.percentile(ratio, 1) > 0.25 and np.percentile(ratio, 99) < 2.5
+
+
+def _separable_paras(wv, shape_slope=0.0, spectrum_exponent=-2.0, nan_corner=False):
+    """Parameters (2, 2, n_wv, 6, 7) = PSF shape (changing linearly with wavelength) x power-law spectrum."""
+    rng = np.random.default_rng(1)
+    fitted = np.ones((6, 7), dtype=bool)
+    if nan_corner:
+        fitted[0, 0] = False  # not fitted at any wavelength
+    # Shape with a total of 1 over the fitted positions at every wavelength (gradient with a total of 0)
+    base = rng.uniform(0.5, 1.5, (6, 7))
+    base = base / np.sum(base[fitted])
+    gradient = rng.uniform(-1, 1, (6, 7)) / 42
+    gradient = gradient - np.mean(gradient[fitted])
+    paras = np.zeros((2, 2, wv.size, 6, 7))
+    for k in range(wv.size):
+        shape = base + shape_slope * gradient * (wv[k] - wv[0])
+        paras[:, :, k] = shape * 100.0 * wv[k] ** spectrum_exponent
+    paras[:, :, :, ~fitted] = np.nan
+    return paras
+
+
+@pytest.mark.parametrize("n_wv", [4, 5, 8])
+def test_extrapolate_3dspline_edge_paras(n_wv):
+    wv = np.linspace(2.9, 4.1, n_wv)
+    paras = _separable_paras(wv, shape_slope=0.02, nan_corner=True)
+    errors = np.abs(paras) * 0.01
+    # Corrupt both edge slices, as poorly constrained nodes
+    corrupted = paras.copy()
+    corrupted[:, :, 0] = corrupted[:, :, 0] * np.random.default_rng(2).uniform(0.5, 1.5, corrupted.shape[3:])
+    corrupted[:, :, -1] = corrupted[:, :, -1] * np.random.default_rng(3).uniform(0.5, 1.5, corrupted.shape[3:])
+
+    # powerlaw: shape linear in wavelength and power-law spectrum are recovered exactly, for both edges
+    new, new_err, new_merr = extrapolate_3dspline_edge_paras(wv, corrupted, errors, errors, [0, -1],
+                                                             edge_flux="powerlaw")
+    np.testing.assert_allclose(new, paras, rtol=1e-10, equal_nan=True)
+    assert np.all(np.isnan(new[:, :, :, 0, 0]))
+
+    # fitted: same shape, total of the original (corrupted) edge slice
+    new, new_err, new_merr = extrapolate_3dspline_edge_paras(wv, corrupted, errors, None, [-1], edge_flux="fitted")
+    assert new_merr is None
+    expected_total = np.nansum(corrupted[0, 0, -1])
+    np.testing.assert_allclose(np.nansum(new[0, 0, -1]), expected_total, rtol=1e-10)
+    np.testing.assert_allclose(new[0, 0, -1] / np.nansum(new[0, 0, -1]),
+                               paras[0, 0, -1] / np.nansum(paras[0, 0, -1]), rtol=1e-10, equal_nan=True)
+    # Only the requested edge changes
+    np.testing.assert_array_equal(new[:, :, :-1], corrupted[:, :, :-1])
+    np.testing.assert_array_equal(new_err[:, :, :-1], errors[:, :, :-1])
+
+    # Errors of the edge, weighted (default) and unweighted fits: propagated from the middle slices, compared with the
+    # covariance of np.polyfit for one parameter
+    middle = np.arange(1, n_wv - 1)
+    slice_totals = np.array([np.nansum(corrupted[:, :, k]) for k in range(n_wv)])
+    edge_total = slice_totals[-1]
+    values = corrupted[0, 0, middle, 2, 3] / slice_totals[middle]
+    sigmas = errors[0, 0, middle, 2, 3] / slice_totals[middle]
+    _, weighted_cov = np.polyfit(wv[middle], values, 1, w=1 / sigmas, cov="unscaled")
+    at_edge = np.array([wv[-1], 1.0])
+    expected_err = np.sqrt(at_edge @ weighted_cov @ at_edge) * edge_total
+    np.testing.assert_allclose(new_err[0, 0, -1, 2, 3], expected_err, rtol=1e-8)
+    unweighted, unweighted_err, _ = extrapolate_3dspline_edge_paras(wv, corrupted, errors, None, [-1],
+                                                                    edge_flux="fitted", weighted=False)
+    np.testing.assert_allclose(unweighted[:, :, -1], new[:, :, -1], rtol=1e-10, equal_nan=True)  # exact data
+    line_weights = polynomial_fit_weights(wv[middle], wv[-1], 1)
+    expected_err = np.sqrt(np.sum(line_weights ** 2 * sigmas ** 2)) * edge_total
+    np.testing.assert_allclose(unweighted_err[0, 0, -1, 2, 3], expected_err, rtol=1e-8)
+    # The weighted fit has the smallest error (best linear unbiased estimate)
+    assert np.all(new_err[:, :, -1][np.isfinite(new_err[:, :, -1])]
+                  <= unweighted_err[:, :, -1][np.isfinite(unweighted_err[:, :, -1])] * (1 + 1e-10))
+
+    # Each edge only depends on the middle slices: replacing one or both gives the same edge
+    both, _, _ = extrapolate_3dspline_edge_paras(wv, corrupted, errors, None, [0, -1], edge_flux="fitted")
+    first, _, _ = extrapolate_3dspline_edge_paras(wv, corrupted, errors, None, [0], edge_flux="fitted")
+    np.testing.assert_allclose(both[:, :, 0], first[:, :, 0], equal_nan=True)
+    np.testing.assert_allclose(both[:, :, -1], new[:, :, -1], equal_nan=True)
+
+
+def test_extrapolate_3dspline_edge_paras_errors():
+    wv = np.linspace(2.9, 4.1, 3)
+    paras = _separable_paras(wv)
+    with pytest.raises(ValueError):
+        extrapolate_3dspline_edge_paras(wv, paras, paras, None, [0])  # only 1 middle slice
+    wv = np.linspace(2.9, 4.1, 5)
+    paras = _separable_paras(wv)
+    with pytest.raises(ValueError):
+        extrapolate_3dspline_edge_paras(wv, paras, paras, None, [0], edge_flux="linear")
+    with pytest.raises(ValueError):
+        extrapolate_3dspline_edge_paras(wv, paras, paras, None, [2])
+
+
+def test_weighted_polynomial_fit_weights():
+    wv = np.array([3.17, 3.49, 3.80, 4.38, 4.69, 4.99])
+    rng = np.random.default_rng(0)
+    values = rng.normal(size=(wv.size, 3, 4))
+    errors = rng.uniform(0.1, 2.0, size=(wv.size, 3, 4))
+    errors[:, 0, 0] = 1.0  # equal errors: same as the unweighted fit
+    errors[2, 2, 3] = np.nan  # invalid error: NaN weights
+    weights = weighted_polynomial_fit_weights(wv, errors, 4.1, 2)
+    assert weights.shape == errors.shape
+    np.testing.assert_allclose(weights[:, 0, 0], polynomial_fit_weights(wv, 4.1, 2), rtol=1e-10)
+    assert np.all(np.isnan(weights[:, 2, 3]))
+    # Same value and error as np.polyfit with weights 1/sigma
+    for i, j in [(1, 1), (2, 0), (0, 3)]:
+        coefficients, covariance = np.polyfit(wv, values[:, i, j], 2, w=1 / errors[:, i, j], cov="unscaled")
+        at_eval = np.array([4.1 ** 2, 4.1, 1.0])
+        np.testing.assert_allclose(np.sum(weights[:, i, j] * values[:, i, j]), at_eval @ coefficients, rtol=1e-10)
+        np.testing.assert_allclose(np.sqrt(np.sum(weights[:, i, j] ** 2 * errors[:, i, j] ** 2)),
+                                   np.sqrt(at_eval @ covariance @ at_eval), rtol=1e-10)
+    with pytest.raises(ValueError):
+        weighted_polynomial_fit_weights(wv, errors[:4], 4.1, 2)
+
+
+def test_polynomial_fit_weights():
+    # Line through 3 evenly spaced points, one spacing beyond the last one
+    np.testing.assert_allclose(polynomial_fit_weights([1.0, 2.0, 3.0], 4.0, 1), np.array([-2, 1, 4]) / 3, atol=1e-12)
+    # Same as np.polyfit + np.polyval, for any values
+    wv = np.array([3.17, 3.49, 3.80, 4.38, 4.69, 4.99])
+    values = np.random.default_rng(0).normal(size=wv.size)
+    for degree in [1, 2, 3]:
+        expected = np.polyval(np.polyfit(wv, values, degree), 4.1)
+        np.testing.assert_allclose(polynomial_fit_weights(wv, 4.1, degree) @ values, expected, rtol=1e-10)
+    with pytest.raises(ValueError):
+        polynomial_fit_weights([1.0, 2.0], 3.0, 2)
+
+
+def _two_detector_paras(wv, quadratic, scale, nan_position=None):
+    """Parameters (2, 2, n_wv, 6, 7) = PSF shape (quadratic in wavelength, same for both detectors) x power law x
+    scale. The gradients have a total of 0 so the total of the shape is the same at every wavelength."""
+    rng = np.random.default_rng(1)
+    base = rng.uniform(0.5, 1.5, (6, 7))
+    base = base / np.sum(base)
+    gradients = []
+    for seed in [2, 3]:
+        gradient = np.random.default_rng(seed).uniform(-1, 1, (6, 7)) / 42
+        gradient[1, 1] = 0  # constant shape at this position (see the fallback test)
+        gradient[gradient != 0] = gradient[gradient != 0] - np.mean(gradient[gradient != 0])
+        gradients.append(gradient)
+    paras = np.zeros((2, 2, wv.size, 6, 7))
+    for k in range(wv.size):
+        dwv = wv[k] - 4.1
+        shape = base + 0.05 * gradients[0] * dwv + quadratic * gradients[1] * dwv ** 2
+        paras[:, :, k] = shape * scale * wv[k] ** -2.0
+    if nan_position is not None:
+        paras[:, :, :, nan_position[0], nan_position[1]] = np.nan
+    return paras
+
+
+def test_extrapolate_3dspline_edge_paras_two_detectors():
+    wv1 = np.linspace(2.85, 4.12, 5)
+    wv2 = np.linspace(4.07, 5.30, 5)
+    # Same PSF shape seen by the two detectors, different flux scales
+    paras1 = _two_detector_paras(wv1, quadratic=0.05, scale=100.0)
+    paras2 = _two_detector_paras(wv2, quadratic=0.05, scale=30.0)
+    errors1 = np.abs(paras1) * 0.01
+    errors2 = np.abs(paras2) * 0.01
+    corrupted1 = paras1.copy()
+    corrupted2 = paras2.copy()
+    for corrupted, seed in [(corrupted1, 4), (corrupted2, 5)]:
+        rng = np.random.default_rng(seed)
+        corrupted[:, :, 0] = corrupted[:, :, 0] * rng.uniform(0.5, 1.5, corrupted.shape[3:])
+        corrupted[:, :, -1] = corrupted[:, :, -1] * rng.uniform(0.5, 1.5, corrupted.shape[3:])
+
+    # Inner edges: a quadratic through the 3 + 3 middle nodes recovers the quadratic shape exactly, a single line not
+    new1, _, _ = extrapolate_3dspline_edge_paras(wv1, corrupted1, errors1, None, [-1], edge_flux="powerlaw",
+                                                 other_wv_positions=wv2, other_paras=corrupted2,
+                                                 other_paras_err=errors2, joint_degree=2)
+    new2, _, _ = extrapolate_3dspline_edge_paras(wv2, corrupted2, errors2, None, [0], edge_flux="powerlaw",
+                                                 other_wv_positions=wv1, other_paras=corrupted1,
+                                                 other_paras_err=errors1, joint_degree=2)
+    np.testing.assert_allclose(new1[:, :, -1], paras1[:, :, -1], rtol=1e-10)
+    np.testing.assert_allclose(new2[:, :, 0], paras2[:, :, 0], rtol=1e-10)
+
+    # Error of the joint fit (weighted, default): compared with the covariance of np.polyfit for one parameter;
+    # the model error is propagated the same way (here from the same errors)
+    joint1, joint1_err, joint1_merr = extrapolate_3dspline_edge_paras(wv1, corrupted1, errors1, errors1, [-1],
+                                                                      other_wv_positions=wv2, other_paras=corrupted2,
+                                                                      other_paras_err=errors2)
+    totals1 = np.array([np.sum(corrupted1[:, :, k]) for k in range(5)])
+    totals2 = np.array([np.sum(corrupted2[:, :, k]) for k in range(5)])
+    joint_wvs = np.concatenate([wv1[1:-1], wv2[1:-1]])
+    values = np.concatenate([corrupted1[1, 0, 1:-1, 3, 2] / totals1[1:-1],
+                             corrupted2[1, 0, 1:-1, 3, 2] / totals2[1:-1]])
+    sigmas = np.concatenate([errors1[1, 0, 1:-1, 3, 2] / totals1[1:-1],
+                             errors2[1, 0, 1:-1, 3, 2] / totals2[1:-1]])
+    coefficients, covariance = np.polyfit(joint_wvs, values, 2, w=1 / sigmas, cov="unscaled")
+    at_edge = np.array([wv1[-1] ** 2, wv1[-1], 1.0])
+    np.testing.assert_allclose(joint1[1, 0, -1, 3, 2], at_edge @ coefficients * totals1[-1], rtol=1e-8)
+    np.testing.assert_allclose(joint1_err[1, 0, -1, 3, 2], np.sqrt(at_edge @ covariance @ at_edge) * totals1[-1],
+                               rtol=1e-8)
+    np.testing.assert_allclose(joint1_merr[:, :, -1], joint1_err[:, :, -1], rtol=1e-12)
+    single1, _, _ = extrapolate_3dspline_edge_paras(wv1, corrupted1, errors1, None, [-1], edge_flux="powerlaw")
+    assert np.max(np.abs(single1[:, :, -1] - paras1[:, :, -1]) / paras1[:, :, -1]) > 1e-4
+
+    # The outer edge is still the line through the middle nodes of this detector
+    both1, _, _ = extrapolate_3dspline_edge_paras(wv1, corrupted1, errors1, None, [0, -1], edge_flux="powerlaw",
+                                                  other_wv_positions=wv2, other_paras=corrupted2,
+                                                  other_paras_err=errors2)
+    np.testing.assert_allclose(both1[:, :, -1], new1[:, :, -1], rtol=1e-12)
+    single_both1, _, _ = extrapolate_3dspline_edge_paras(wv1, corrupted1, errors1, None, [0, -1],
+                                                         edge_flux="powerlaw")
+    np.testing.assert_allclose(both1[:, :, 0], single_both1[:, :, 0], rtol=1e-12)
+
+    # Position not fitted in the other detector: the line through this detector is used (exact here, constant shape)
+    paras2_nan = _two_detector_paras(wv2, quadratic=0.05, scale=30.0, nan_position=(1, 1))
+    new1, _, _ = extrapolate_3dspline_edge_paras(wv1, corrupted1, errors1, None, [-1], edge_flux="powerlaw",
+                                                 other_wv_positions=wv2, other_paras=paras2_nan,
+                                                 other_paras_err=np.abs(paras2_nan) * 0.01)
+    np.testing.assert_allclose(new1[:, :, -1], paras1[:, :, -1], rtol=1e-10)
+
+    # Overlapping middle wavelengths or different spatial shapes are refused
+    with pytest.raises(ValueError):
+        extrapolate_3dspline_edge_paras(wv1, corrupted1, errors1, None, [-1], other_wv_positions=wv1 + 0.1,
+                                        other_paras=corrupted1, other_paras_err=errors1)
+    with pytest.raises(ValueError):
+        extrapolate_3dspline_edge_paras(wv1, corrupted1, errors1, None, [-1], other_wv_positions=wv2,
+                                        other_paras=corrupted2[:, :, :, :5], other_paras_err=errors2[:, :, :, :5])
+    with pytest.raises(ValueError):  # errors of the other detector missing
+        extrapolate_3dspline_edge_paras(wv1, corrupted1, errors1, None, [-1], other_wv_positions=wv2,
+                                        other_paras=corrupted2)

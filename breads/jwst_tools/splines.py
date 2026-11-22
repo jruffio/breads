@@ -795,6 +795,313 @@ def _task_evaluate_3dspline(paras):
     return
 
 
+def polynomial_fit_weights(wv_fit, wv_eval, degree):
+    """
+    Weights w such that the least-squares polynomial of the given degree through the points (wv_fit[k], v[k]),
+    evaluated at wv_eval, is sum_k w[k] * v[k].
+
+    The fit is linear in the values, so whatever the values, the result at wv_eval is a fixed weighted sum of them. This
+    lets extrapolate_3dspline_edge_paras fit all the spline parameters at once (and keep the NaN of a parameter local
+    to that parameter). Example: a line (degree 1) through 3 evenly spaced points, evaluated one spacing beyond the
+    last one, gives w = (-2, 1, 4) / 3.
+
+    Parameters
+    ----------
+    wv_fit : 1d array
+        Wavelengths of the fitted points (at least degree + 1).
+    wv_eval : float
+        Wavelength where the polynomial is evaluated.
+    degree : int
+        Degree of the polynomial.
+
+    Returns
+    -------
+    weights : 1d array, same size as wv_fit.
+    """
+    wv_fit = np.asarray(wv_fit, dtype=float)
+    if wv_fit.size < degree + 1:
+        raise ValueError(f"A polynomial of degree {degree} needs at least {degree + 1} points, not {wv_fit.size}.")
+    # Centered and scaled wavelengths, for a well conditioned matrix
+    wv_center = np.mean(wv_fit)
+    wv_scale = np.ptp(wv_fit)
+    x_fit = (wv_fit - wv_center) / wv_scale
+    x_eval = (wv_eval - wv_center) / wv_scale
+    design_matrix = np.vander(x_fit, degree + 1)  # (n_points, degree + 1)
+    polynomial_at_eval = np.vander(np.array([x_eval]), degree + 1)[0]  # (degree + 1,)
+    # coefficients = pinv(design_matrix) @ values, so value at eval = polynomial_at_eval @ pinv(design_matrix) @ values
+    weights = polynomial_at_eval @ np.linalg.pinv(design_matrix)
+    return weights
+
+
+def weighted_polynomial_fit_weights(wv_fit, errors, wv_eval, degree):
+    """
+    Weights w[k, ...] such that the least-squares polynomial of the given degree through the points
+    (wv_fit[k], v[k, ...]), weighted by 1/errors[k, ...]^2, evaluated at wv_eval, is sum_k w[k, ...] * v[k, ...].
+
+    Same as polynomial_fit_weights, but each column (all the axes after the first) has its own errors, so its own
+    weights. The weights also give the propagated error of the fitted value: sqrt(sum_k w[k, ...]^2 errors[k, ...]^2)
+    for independent points (for the weighted fit, this is the error of the polynomial at wv_eval).
+
+    Parameters
+    ----------
+    wv_fit : 1d array (n_points,)
+        Wavelengths of the fitted points (at least degree + 1).
+    errors : array (n_points, ...)
+        1 sigma errors of the points. Columns with an error that is not finite or not positive get NaN weights.
+    wv_eval : float
+        Wavelength where the polynomial is evaluated.
+    degree : int
+        Degree of the polynomial.
+
+    Returns
+    -------
+    weights : array with the shape of errors.
+    """
+    wv_fit = np.asarray(wv_fit, dtype=float)
+    errors = np.asarray(errors, dtype=float)
+    if wv_fit.size < degree + 1:
+        raise ValueError(f"A polynomial of degree {degree} needs at least {degree + 1} points, not {wv_fit.size}.")
+    if errors.shape[0] != wv_fit.size:
+        raise ValueError(f"errors must have {wv_fit.size} rows (one per point), not {errors.shape[0]}.")
+    column_shape = errors.shape[1:]
+    flat_errors = errors.reshape(wv_fit.size, -1)  # (n_points, n_columns)
+    valid = np.all(np.isfinite(flat_errors) & (flat_errors > 0), axis=0)
+
+    # Centered and scaled wavelengths, as in polynomial_fit_weights
+    wv_center = np.mean(wv_fit)
+    wv_scale = np.ptp(wv_fit)
+    design_matrix = np.vander((wv_fit - wv_center) / wv_scale, degree + 1)  # (n_points, n_coefs)
+    polynomial_at_eval = np.vander(np.array([(wv_eval - wv_center) / wv_scale]), degree + 1)[0]  # (n_coefs,)
+
+    # For each column p: coefficients = (V^T W V)^-1 V^T W v with W = diag(1/errors^2), so the value at wv_eval is
+    # polynomial_at_eval @ (V^T W V)^-1 @ V^T W @ v, i.e. weights[k] = (polynomial_at_eval @ (V^T W V)^-1 @ V^T)[k] W[k]
+    inverse_variance = 1.0 / flat_errors[:, valid] ** 2  # (n_points, n_valid)
+    normal_matrices = np.einsum("kp,ki,kj->pij", inverse_variance, design_matrix, design_matrix)
+    # (V^T W V)^-1 @ polynomial_at_eval for each column (the matrices are symmetric)
+    solved = np.linalg.solve(normal_matrices, np.broadcast_to(polynomial_at_eval, (normal_matrices.shape[0],
+                                                                                     degree + 1))[:, :, None])[:, :, 0]
+    weights_valid = (design_matrix @ solved.T) * inverse_variance  # (n_points, n_valid)
+
+    flat_weights = np.full(flat_errors.shape, np.nan)
+    flat_weights[:, valid] = weights_valid
+    return flat_weights.reshape((wv_fit.size,) + column_shape)
+
+
+def _slice_totals(paras, fitted_everywhere):
+    """Total of each wavelength slice of 3D spline parameters (2, 2, n_wv, n_y, n_x): sum over the 4 parity copies, at
+    the positions where fitted_everywhere (2, 2, n_y, n_x) is True."""
+    n_wv = paras.shape[2]
+    totals = np.zeros(n_wv)
+    for k in range(n_wv):
+        totals[k] = np.sum(paras[:, :, k][fitted_everywhere])
+    return totals
+
+
+def _fit_weights(wv_fit, shape_errors, wv_eval, degree, weighted):
+    """Weights (n_points, 2, 2, n_y, n_x) of the fit of the shapes vs wavelength at wv_eval (see
+    extrapolate_3dspline_edge_paras): weighted by the errors of the shapes, or the same for every parameter."""
+    if weighted:
+        return weighted_polynomial_fit_weights(wv_fit, np.moveaxis(shape_errors, 2, 0), wv_eval, degree)
+    weights = polynomial_fit_weights(wv_fit, wv_eval, degree)
+    column_shape = shape_errors.shape[:2] + shape_errors.shape[3:]
+    return np.broadcast_to(weights.reshape((weights.size,) + (1,) * len(column_shape)),
+                           (weights.size,) + column_shape)
+
+
+def _apply_fit_weights(weights, shapes, shape_errors, shape_merrs):
+    """Fitted shape, its propagated error and model error (2, 2, n_y, n_x), from the weights (n_points, 2, 2, n_y, n_x)
+    and the shapes, errors and model errors of the points (2, 2, n_points, n_y, n_x). The points are assumed
+    independent."""
+    shapes = np.moveaxis(shapes, 2, 0)
+    shape_errors = np.moveaxis(shape_errors, 2, 0)
+    fitted = np.sum(weights * shapes, axis=0)
+    fitted_err = np.sqrt(np.sum(weights ** 2 * shape_errors ** 2, axis=0))
+    fitted_merr = None
+    if shape_merrs is not None:
+        fitted_merr = np.sqrt(np.sum(weights ** 2 * np.moveaxis(shape_merrs, 2, 0) ** 2, axis=0))
+    return fitted, fitted_err, fitted_merr
+
+
+def extrapolate_3dspline_edge_paras(wv_positions, paras, paras_err, paras_merr, edge_indices, edge_flux="fitted",
+                                    other_wv_positions=None, other_paras=None, other_paras_err=None,
+                                    other_paras_merr=None, joint_degree=2, weighted=True):
+    """
+    Replace the first and/or last wavelength slice of 3D spline parameters by a fit of the middle slices: a linear
+    extrapolation of the middle slices, or, if the 3D spline of a second detector covering the other side of the gap
+    is given, a polynomial interpolation through the middle slices of both detectors.
+
+    Use it when an edge wavelength node is outside the data (e.g. the last node of NIRSpec nrs1 or the first node of
+    nrs2), so its parameters are poorly constrained and make the model (e.g. a BreadsPSF) noisy near the edge of the
+    band. The middle slices are all the slices except the first and the last one, whatever the number of nodes, so
+    replacing one edge or both gives the same result for each edge.
+
+    Method:
+    1. The spline parameters include the spectrum of the star, which is far from linear over the band. So each slice
+       is divided by its total (sum of the parameters over the field), which leaves the shape of the PSF. The totals
+       are sums over the 4 parity copies of the parameters (first two axes), so that all the copies are scaled the
+       same way, and over the positions fitted in every slice (of both detectors if two are given), so that all the
+       shapes are normalized over the same field. The errors are divided by the same totals.
+    2. Each parameter of the shape is fitted independently, by least squares, as a function of wavelength, weighted by
+       1/error^2 (default) or unweighted:
+       - edge facing the other detector (only if other_paras is given): polynomial of degree joint_degree through the
+         middle slices of both detectors (interpolation across the gap, e.g. 3 + 3 nodes for NIRSpec G395H), at the
+         positions fitted in both detectors;
+       - otherwise (and at the positions not fitted in the other detector): line through the middle slices of this
+         detector (extrapolation).
+       The fit is evaluated at the wavelength of the edge node: a weighted sum of the middle shapes (see
+       weighted_polynomial_fit_weights and polynomial_fit_weights).
+    3. The shape is multiplied by the total of the edge slice given by edge_flux.
+
+    Why weighted: the spatial coordinates are scaled to a reference wavelength, but the field of view is fixed in
+    arcsec, so in the outer part of the scaled grid the long wavelength nodes are near the edge of (or outside) the
+    field and poorly constrained; their errors are larger and the weighted fit relies on the nodes that are well
+    constrained there. In the core, the errors of the parameters are smaller than the scatter of the nodes around a
+    smooth curve, but their ratios between nodes are fine (the weighted fit is as good as the unweighted one there).
+
+    Errors: the error (and model error) of a new edge parameter is propagated from the errors (and model errors) of
+    the fitted middle parameters through the weights of the fit, sqrt(sum_k w_k^2 sigma_k^2), multiplied by the edge
+    total. The middle parameters are assumed independent and the totals exact.
+
+    Parameters
+    ----------
+    wv_positions : 1d array
+        Wavelength of each parameter slice (Spline3D.wv.param_positions, the nodes for the cardinal and catmull_rom
+        bases).
+    paras, paras_err, paras_merr : arrays of shape (2, 2, n_wv, n_y, n_x)
+        Parameters, their errors and the parameters of the model error (SPLINE_PARAS0, SPLINE_PARAS0_ERR,
+        SPLINE_PARAS0_MERR). paras_merr can be None. Not modified.
+    edge_indices : list of int
+        Slices to replace: 0 (first) and/or -1 (last).
+    edge_flux : str
+        Total of the new edge slice.
+        "fitted" (default): the total of the original edge slice. The detailed shape of a poorly constrained node is
+            noisy, but its total is constrained by the data over the neighbouring wavelengths; no assumption on the
+            spectrum.
+        "powerlaw": a power law (line in log-log) fitted to the totals of the middle slices of this detector. Assumes
+            a smooth stellar continuum.
+    other_wv_positions, other_paras, other_paras_err : 1d array and arrays (2, 2, n_wv_other, n_y, n_x), or None
+        Wavelengths, parameters and errors of the 3D spline of another detector seeing the same PSF (same spatial nodes,
+        stamps and reference wavelength), whose wavelengths are all on one side of this one (e.g. nrs2 for nrs1). Only
+        its middle slices are used, so its own edge slices can be bad. Not modified. Default None: single detector.
+    other_paras_merr : array (2, 2, n_wv_other, n_y, n_x) or None
+        Model error parameters of the other detector, for the propagation of paras_merr. None: other_paras_err is used.
+    joint_degree : int
+        Degree of the polynomial through the middle slices of both detectors (default 2). Ignored without other_paras.
+    weighted : bool
+        Weight the fits by 1/error^2 of the parameters (default True), or not.
+
+    Returns
+    -------
+    new_paras, new_paras_err, new_paras_merr : copies of the inputs with the edge slices replaced (new_paras_merr is
+        None if paras_merr is None).
+    """
+    wv_positions = np.asarray(wv_positions, dtype=float)
+    n_wv = wv_positions.size
+    if n_wv < 4:
+        raise ValueError(f"At least 4 wavelength parameter slices are needed (2 middle slices), not {n_wv}.")
+    if edge_flux not in ("fitted", "powerlaw"):
+        raise ValueError(f"Unknown edge_flux '{edge_flux}'. Use 'fitted' or 'powerlaw'.")
+    edges = []
+    for edge in edge_indices:
+        if edge % n_wv not in (0, n_wv - 1):
+            raise ValueError(f"edge_indices must be 0 and/or -1, not {edge}.")
+        edges.append(edge % n_wv)
+    paras = np.asarray(paras, dtype=float)
+    paras_err = np.asarray(paras_err, dtype=float)
+    if paras_merr is not None:
+        paras_merr = np.asarray(paras_merr, dtype=float)
+    middle = np.arange(1, n_wv - 1)
+
+    # Positions fitted in every slice (of both detectors if two are given)
+    fitted_everywhere = np.all(np.isfinite(paras), axis=2)  # (2, 2, n_y, n_x)
+    joint_edge = None
+    if other_paras is not None:
+        if other_paras_err is None:
+            raise ValueError("other_paras_err is needed with other_paras.")
+        other_wv_positions = np.asarray(other_wv_positions, dtype=float)
+        other_paras = np.asarray(other_paras, dtype=float)
+        other_paras_err = np.asarray(other_paras_err, dtype=float)
+        if other_paras_merr is None:
+            other_paras_merr = other_paras_err
+        other_paras_merr = np.asarray(other_paras_merr, dtype=float)
+        if other_wv_positions.size < 3:
+            raise ValueError(f"The other detector needs at least 3 wavelength parameter slices (1 middle slice), not "
+                             f"{other_wv_positions.size}.")
+        if other_paras.shape[:2] != paras.shape[:2] or other_paras.shape[3:] != paras.shape[3:]:
+            raise ValueError(f"The parameters of the two detectors must have the same spatial shape, not "
+                             f"{paras.shape} and {other_paras.shape}.")
+        other_middle_wvs = other_wv_positions[1:-1]
+        # The edge facing the other detector is interpolated across the gap
+        if np.min(other_middle_wvs) > np.max(wv_positions[middle]):
+            joint_edge = n_wv - 1
+        elif np.max(other_middle_wvs) < np.min(wv_positions[middle]):
+            joint_edge = 0
+        else:
+            raise ValueError("The middle wavelengths of the other detector must all be on one side of the middle "
+                             "wavelengths of this one.")
+        fitted_everywhere = fitted_everywhere & np.all(np.isfinite(other_paras), axis=2)
+
+    # Total of each slice. One total per slice for all the copies, so that they are all scaled the same way.
+    totals = _slice_totals(paras, fitted_everywhere)
+    if np.any(totals[middle] <= 0):
+        raise ValueError(f"The totals of the middle wavelength slices must be positive (got {totals[middle]}).")
+
+    # Shapes of the PSF in the middle slices and their errors: (2, 2, n_middle, n_y, n_x)
+    middle_totals = totals[middle][None, None, :, None, None]
+    shapes = paras[:, :, middle] / middle_totals
+    shape_errors = paras_err[:, :, middle] / middle_totals
+    shape_merrs = None if paras_merr is None else paras_merr[:, :, middle] / middle_totals
+    shapes_wvs = wv_positions[middle]
+    if joint_edge is not None:
+        other_totals = _slice_totals(other_paras, fitted_everywhere)
+        other_middle = np.arange(1, other_wv_positions.size - 1)
+        if np.any(other_totals[other_middle] <= 0):
+            raise ValueError(f"The totals of the middle wavelength slices of the other detector must be positive (got "
+                             f"{other_totals[other_middle]}).")
+        other_middle_totals = other_totals[other_middle][None, None, :, None, None]
+        joint_shapes = np.concatenate([shapes, other_paras[:, :, other_middle] / other_middle_totals], axis=2)
+        joint_errors = np.concatenate([shape_errors, other_paras_err[:, :, other_middle] / other_middle_totals], axis=2)
+        joint_merrs = None
+        if shape_merrs is not None:
+            joint_merrs = np.concatenate([shape_merrs, other_paras_merr[:, :, other_middle] / other_middle_totals],
+                                         axis=2)
+        joint_wvs = np.concatenate([shapes_wvs, other_wv_positions[other_middle]])
+
+    new_paras = paras.copy()
+    new_paras_err = paras_err.copy()
+    new_paras_merr = None if paras_merr is None else paras_merr.copy()
+    for edge in edges:
+        if edge_flux == "fitted":
+            edge_total = totals[edge]
+        else:
+            log_line = np.polyfit(np.log(wv_positions[middle]), np.log(totals[middle]), 1)
+            edge_total = np.exp(np.polyval(log_line, np.log(wv_positions[edge])))
+
+        # Line through the middle slices of this detector
+        weights = _fit_weights(shapes_wvs, shape_errors, wv_positions[edge], 1, weighted)
+        edge_shape, edge_err, edge_merr = _apply_fit_weights(weights, shapes, shape_errors, shape_merrs)
+        if edge == joint_edge:
+            # Polynomial through the middle slices of both detectors, where both are fitted (elsewhere, e.g. outside
+            # the field of the other detector, the line above is kept)
+            joint_weights = _fit_weights(joint_wvs, joint_errors, wv_positions[edge], joint_degree, weighted)
+            joint_shape, joint_err, joint_merr = _apply_fit_weights(joint_weights, joint_shapes, joint_errors,
+                                                                    joint_merrs)
+            both_fitted = np.isfinite(joint_shape) & np.isfinite(joint_err)
+            edge_shape[both_fitted] = joint_shape[both_fitted]
+            edge_err[both_fitted] = joint_err[both_fitted]
+            if edge_merr is not None:
+                edge_merr[both_fitted] = joint_merr[both_fitted]
+
+        # Positions that could not be fitted (NaN parameters or errors in a middle slice) keep their original values
+        replaced = np.isfinite(edge_shape) & np.isfinite(edge_err)
+        new_paras[:, :, edge][replaced] = edge_shape[replaced] * edge_total
+        new_paras_err[:, :, edge][replaced] = edge_err[replaced] * edge_total
+        if new_paras_merr is not None:
+            new_paras_merr[:, :, edge][replaced] = edge_merr[replaced] * edge_total
+
+    return new_paras, new_paras_err, new_paras_merr
+
+
 def evaluate_3dspline_grid(x_vec,y_vec,wv_sampling,spline3d_filename,max_cores = 1):
     """Evaluate a 3D spline file (see evaluate_3dspline) on a regular (wv, y, x) grid. Returns (model, error) cubes."""
     wv_grid,y_grid,x_grid = np.meshgrid(wv_sampling,y_vec,x_vec,indexing='ij' )
